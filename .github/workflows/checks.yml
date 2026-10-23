@@ -1,0 +1,29 @@
+name: Checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  access:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - run: npm test
+      - run: npm run test:emulator
+      - run: npm audit --omit=dev --audit-level=moderate
+      - run: npm exec playwright install --with-deps chromium
+      - name: Browser flow with local services
+        shell: bash
+        run: |
+          npm run local > /tmp/blackout-local.log 2>&1 &
+          local_pid=$!
+          trap 'kill "$local_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:3000/api/health > /dev/null; then break; fi
+            sleep 1
+          done
+          npm run test:browser

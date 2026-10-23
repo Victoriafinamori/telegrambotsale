@@ -1,0 +1,17 @@
+node_modules/
+dist/
+dist-server/
+.env
+.env.*
+!.env.example
+.local/
+coverage/
+*-debug.log
+firebase-debug.log
+ui-debug.log
+*.tsbuildinfo
+service-account*.json
+*-firebase-adminsdk-*.json
+credentials*.json
+*.pem
+*.key

@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": false,
+    "rootDir": ".",
+    "outDir": "dist-server",
+    "sourceMap": false
+  },
+  "include": ["server", "scripts/migrate.ts", "scripts/grant-admin.ts"]
+}
