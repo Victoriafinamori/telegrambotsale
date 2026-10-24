@@ -14,6 +14,8 @@ import {
   type BotVerifier,
 } from './bot-onboarding.js';
 import { HttpError, type Identity, type IdentityProvider } from './types.js';
+import type { AccountService, OnboardingService } from './platform-contract.js';
+import type { AdminMfa } from './admin-mfa.js';
 type AuthedRequest = Request & { identity: Identity; requestId: string };
 const tokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   idSchema = z.uuid();
@@ -29,17 +31,23 @@ const registration = z
   .strict();
 export function createApp(
   config: Config,
-  accounts: Accounts,
+  accounts: AccountService,
   auth: IdentityProvider,
   verifyBot?: BotVerifier,
+  services?: { onboarding?: OnboardingService; adminMfa?: AdminMfa },
 ) {
   const app = express(),
     sessions = new SessionTransport(config),
-    onboarding = new BotOnboarding(
-      accounts,
-      config.BOT_TOKEN_ENCRYPTION_KEY,
-      verifyBot ?? (config.FIREBASE_AUTH_EMULATOR_HOST ? verifyDemoBot : undefined),
-    );
+    onboarding =
+      services?.onboarding ??
+      (accounts instanceof Accounts
+        ? new BotOnboarding(
+            accounts,
+            config.BOT_TOKEN_ENCRYPTION_KEY,
+            verifyBot ?? (config.FIREBASE_AUTH_EMULATOR_HOST ? verifyDemoBot : undefined),
+          )
+        : null);
+  if (!onboarding) throw new Error('Configure o serviço de onboarding para o banco selecionado.');
   app.disable('x-powered-by');
   app.set('trust proxy', config.TRUST_PROXY_HOPS);
   app.use((req, res, next) => {
@@ -83,6 +91,40 @@ export function createApp(
     res.set('Cache-Control', 'no-store');
     next();
   });
+  app.use('/api', (req, res, next) => {
+    const origin = req.get('origin');
+    if (origin === config.APP_ORIGIN) {
+      res.set('Access-Control-Allow-Origin', origin);
+      res.vary('Origin');
+      if (config.API_AUTH_MODE === 'cookie') res.set('Access-Control-Allow-Credentials', 'true');
+    }
+    if (req.method !== 'OPTIONS') {
+      next();
+      return;
+    }
+    const requested = (req.get('access-control-request-headers') || '')
+      .toLowerCase()
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean);
+    if (
+      origin !== config.APP_ORIGIN ||
+      !['GET', 'POST'].includes(req.get('access-control-request-method') || '') ||
+      requested.some(
+        (v) => !['content-type', 'authorization', 'x-csrf-token', 'x-admin-mfa'].includes(v),
+      )
+    ) {
+      res.sendStatus(403);
+      return;
+    }
+    res.set('Access-Control-Allow-Methods', 'GET, POST');
+    res.set(
+      'Access-Control-Allow-Headers',
+      'Content-Type, Authorization, X-CSRF-Token, X-Admin-MFA',
+    );
+    res.set('Access-Control-Max-Age', '600');
+    res.sendStatus(204);
+  });
   const rate =
     (scope: string, limit: number, ms: number) =>
     async (req: Request, _res: Response, next: NextFunction) => {
@@ -115,6 +157,7 @@ export function createApp(
     res.json({
       firebase: publicFirebaseOptions(config),
       emulatorHost: config.FIREBASE_AUTH_EMULATOR_HOST || null,
+      authMode: config.API_AUTH_MODE,
     }),
   );
   app.get('/api/security/csrf', (req, res) => {
@@ -123,6 +166,10 @@ export function createApp(
     res.json({ token });
   });
   app.use('/api', (req, _res, next) => {
+    if (config.API_AUTH_MODE === 'bearer') {
+      next();
+      return;
+    }
     if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       next();
       return;
@@ -142,9 +189,12 @@ export function createApp(
   });
   async function identity(req: Request, _res: Response, next: NextFunction) {
     try {
-      const value = sessions.session(req);
+      const value = binding(req);
       if (!value) throw new Error('missing');
-      const user = await auth.verifySession(value);
+      const user =
+        config.API_AUTH_MODE === 'bearer'
+          ? await auth.verifyIdToken(value)
+          : await auth.verifySession(value);
       if (!user.emailVerified || !user.email)
         throw new HttpError(403, 'EMAIL_UNVERIFIED', 'Confirme seu e-mail para continuar.');
       (req as unknown as AuthedRequest).identity = user;
@@ -157,11 +207,29 @@ export function createApp(
       );
     }
   }
+  function binding(req: Request) {
+    const header = req.get('authorization') || '';
+    return config.API_AUTH_MODE === 'bearer'
+      ? header.startsWith('Bearer ') && header.length <= 12007
+        ? header.slice(7)
+        : ''
+      : sessions.session(req);
+  }
+  async function hasMfa(req: Request, user: Identity) {
+    return Boolean(
+      user.secondFactor ||
+        (await services?.adminMfa?.verified(user.uid, binding(req), req.get('x-admin-mfa') || '')),
+    );
+  }
   async function admin(req: Request, _res: Response, next: NextFunction) {
     try {
       if (!(await accounts.isAdmin((req as unknown as AuthedRequest).identity.uid)))
         throw new HttpError(403, 'ADMIN_REQUIRED', 'Ação exclusiva da Blackout Create.');
-      enforceAdminSecondFactor(config, (req as unknown as AuthedRequest).identity);
+      const user = (req as unknown as AuthedRequest).identity;
+      enforceAdminSecondFactor(
+        { secure: config.secure || config.ADMIN_MFA_REQUIRED },
+        { ...user, secondFactor: await hasMfa(req, user) },
+      );
       next();
     } catch (e) {
       next(e);
@@ -191,6 +259,10 @@ export function createApp(
         'RECENT_LOGIN_REQUIRED',
         'Faça login novamente para confirmar sua identidade.',
       );
+    if (config.API_AUTH_MODE === 'bearer') {
+      res.json({ ok: true });
+      return;
+    }
     let session: string;
     try {
       session = await auth.createSession(idToken, config.sessionMs);
@@ -211,10 +283,13 @@ export function createApp(
   app.get('/api/me', identity, async (req, res) => {
     const user = (req as unknown as AuthedRequest).identity,
       account = await accounts.own(user.uid);
+    const platform = await accounts.isAdmin(user.uid);
     res.json({
       user: { email: user.email, uid: user.uid },
-      role: (await accounts.isAdmin(user.uid)) ? 'platform' : account ? 'merchant' : 'unassigned',
+      role: platform ? 'platform' : account ? 'merchant' : 'unassigned',
       account,
+      adminMfaRequired:
+        platform && (config.secure || config.ADMIN_MFA_REQUIRED) && !(await hasMfa(req, user)),
     });
   });
   app.get('/api/store', identity, async (req, res) => {
@@ -261,6 +336,50 @@ export function createApp(
       });
     },
   );
+  const mfaOwner = async (req: Request, _res: Response, next: NextFunction) => {
+    try {
+      if (!(await accounts.isAdmin((req as unknown as AuthedRequest).identity.uid)))
+        throw new HttpError(403, 'ADMIN_REQUIRED', 'Ação exclusiva da Blackout Create.');
+      next();
+    } catch (e) {
+      next(e);
+    }
+  };
+  app.get('/api/security/admin-mfa/status', identity, mfaOwner, async (req, res) =>
+    res.json({
+      available: Boolean(services?.adminMfa),
+      ...(services?.adminMfa
+        ? await services.adminMfa.status((req as unknown as AuthedRequest).identity.uid)
+        : { enabled: false }),
+    }),
+  );
+  app.post('/api/security/admin-mfa/enroll', identity, mfaOwner, async (req, res) => {
+    z.object({}).strict().parse(req.body);
+    if (!services?.adminMfa)
+      throw new HttpError(
+        503,
+        'MFA_UNAVAILABLE',
+        'Configure o segredo de autenticação do administrador no servidor.',
+      );
+    const user = (req as unknown as AuthedRequest).identity;
+    await accounts.consumeRate('mfa-enroll:' + tokenHash(user.uid), 5, 15 * 60000);
+    res.json(await services.adminMfa.enroll(user));
+  });
+  app.post('/api/security/admin-mfa/verify', identity, mfaOwner, async (req, res) => {
+    const { code } = z
+      .object({ code: z.string().regex(/^\d{6}$/) })
+      .strict()
+      .parse(req.body);
+    if (!services?.adminMfa)
+      throw new HttpError(
+        503,
+        'MFA_UNAVAILABLE',
+        'Configure o segredo de autenticação do administrador no servidor.',
+      );
+    const user = (req as unknown as AuthedRequest).identity;
+    await accounts.consumeRate('mfa-verify:' + tokenHash(user.uid), 10, 15 * 60000);
+    res.json(await services.adminMfa.verify(user, binding(req), code));
+  });
   app.use('/api/admin', identity, admin);
   app.get('/api/admin/accounts', async (req, res) => {
     const offset = z.coerce.number().int().min(0).max(100000).default(0).parse(req.query.offset);

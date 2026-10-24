@@ -25,11 +25,11 @@ Abra `http://127.0.0.1:3000`. O comando prepara Firebase Authentication emulado 
 
 ## Estado e limites
 
-A aplicação foi validada localmente com compilação, 14 testes de API e testes de navegador (incluindo convite, correção, ativação e layouts de 320 a 1440 pixels). Não está publicada nem conectada a um bot real. Configuração pública do Firebase está em `config/firebase.web.json`; ela não autoriza o servidor.
+A aplicação foi validada localmente com compilação, 19 testes automatizados e testes de navegador (incluindo convite, correção, ativação, modo cookie, modo bearer, matrícula TOTP e layouts de 320 a 1440 pixels). Não está publicada nem conectada a um bot real. Configuração pública do Firebase está em `config/firebase.web.json`; ela não autoriza o servidor.
 
-A migração dos dados da plataforma para Firestore foi discutida, mas ainda não foi implementada: o código atual usa PostgreSQL. O login/área reservada ainda depende da API na mesma origem. Publicar a parte restrita no Firebase Hosting exige concluir essa conexão, sem pressupor que o Spark hospede a API.
+A base central agora tem adaptador Firestore (`PLATFORM_DATABASE=firestore`) e o caminho Hosting → API externa foi implementado com `VITE_API_ORIGIN`, `API_AUTH_MODE=bearer` e CORS exato. PostgreSQL fica disponível para compatibilidade e demonstração local. Os registros antigos não são migrados automaticamente. O segundo fator TOTP do dono também foi implementado sem Blaze. Leia `docs/PUBLICAR-FIREBASE-SPARK.md` para autorização, configuração e publicação.
 
-Faltam identidade Firebase Admin real, banco hospedado, segredos privados, segundo fator administrativo compatível com Spark e integração do runtime do bot. O controle de produção recusa administrador sem segundo fator; não remover essa proteção para publicar. Renovação e desligamento por vencimento ainda não foram integrados.
+Faltam autorização Google do proprietário, identidade Firebase Admin real, configuração do Firestore real, segredos privados na hospedagem, origem HTTPS da API e integração do runtime do bot. O TOTP tem implementação local, mas precisa de validação na implantação real. O controle de produção recusa administrador sem segundo fator; não remover essa proteção para publicar. Renovação e desligamento por vencimento ainda não foram integrados.
 
 `VITE_CONTACT_URL` aguarda o link público oficial de atendimento. Não inventar preço comercial, depoimentos ou métricas. O contato, se configurado, é público; tokens, chaves privadas e senhas devem permanecer fora do Git e do chat.
 

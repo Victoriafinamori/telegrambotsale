@@ -21,7 +21,7 @@ Sem a chave, a aplicação permite login e mostra o guia, mas recusa receber/abr
 
 `npm run local` gera sua própria chave em `.local/bot-token.key`, com permissão restrita, e a preserva entre execuções. Não usa nem aceita credenciais reais de Telegram. O botão **Preencher exemplo fictício** fornece um token de demonstração; tokens desse ambiente não criam bots reais. Os testes de API cobrem isolamento, cifragem, adulteração, consulta auditada, unicidade, suspensão e ausência de cobrança antecipada. O roteiro de navegador percorre as quatro etapas, recarrega para verificar persistência e consulta administrativa.
 
-Antes da operação real: configurar Firebase Admin, banco e segredos na hospedagem; implementar MFA administrativo compatível com Spark; ligar esses dados ao código corrigido do bot; verificar responsável e migração; testar ativação efetiva na Square Cloud e iniciar o ciclo mensal somente após o bot funcionar. O botão de confirmação manual já existe, exige atestar que o responsável foi conferido e que o bot foi instalado/testado. Ainda não existe verificação automática do processo nem deploy/start/stop remoto.
+Antes da operação real: configurar Firebase Admin, banco e segredos na hospedagem; validar o segundo fator TOTP administrativo já implementado para Spark; ligar esses dados ao código corrigido do bot; verificar responsável e migração; testar ativação efetiva na Square Cloud e iniciar o ciclo mensal somente após o bot funcionar. O botão de confirmação manual já existe, exige atestar que o responsável foi conferido e que o bot foi instalado/testado. Ainda não existe verificação automática do processo nem deploy/start/stop remoto.
 
 ## Controles do dono da plataforma
 

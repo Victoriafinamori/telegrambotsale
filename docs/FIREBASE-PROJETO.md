@@ -19,10 +19,10 @@ O servidor fornece ao navegador apenas apiKey, authDomain, projectId e appId por
 
 ## Para concluir a conexão online
 
-1. Manter o plano Spark. O proprietário já possui Square Cloud para o servidor; validar suporte HTTP, origem HTTPS e capacidade do plano, definir a hospedagem do PostgreSQL e cadastrar somente os domínios de acesso necessários no Firebase. Ver `SQUARE-CLOUD.md`.
+1. Manter Spark. Validar Authentication/Firestore/Hosting, suporte HTTP/HTTPS da Square Cloud e os domínios autorizados. A base central agora tem adaptador Firestore; não exige PostgreSQL em produção. Siga `PUBLICAR-FIREBASE-SPARK.md`.
 2. Autorizar o Firebase Admin no projeto `blackout-create`. Em infraestrutura Google, preferir identidade do serviço com permissões mínimas. Em outro provedor, usar federação de identidade quando disponível ou um segredo de servidor protegido. Senhas Google, tokens de login e chaves privadas não devem ser enviados no chat ou incluídos no frontend.
-3. Configurar o banco, executar as migrações e conceder a permissão inicial do administrador pelo comando de servidor, após a confirmação do e-mail.
-4. Implementar segundo fator administrativo compatível com Spark, sem exigir upgrade. A API atual exige um segundo fator confirmado pelo Firebase e precisa ser adaptada a uma solução independente com verificação no servidor, mantendo o bloqueio até sua conclusão.
+3. Criar/conferir Firestore padrão, publicar regras/índices e conceder o acesso inicial do dono pelo comando privado `admin:grant` após confirmação do e-mail. O adaptador PostgreSQL legado ainda usa suas migrações SQL.
+4. Configurar `ADMIN_MFA_ENCRYPTION_KEY` privada no servidor. O segundo fator TOTP independente já foi implementado com matrícula na tela, bloqueio de repetição e reset privado. Validar a configuração no ambiente real antes da operação.
 5. Validar uma sessão completa no projeto real: autenticação, confirmação de e-mail, cookie HTTPS, permissões, saída e revogação. Os testes do emulador não substituem essa validação.
 
-Ainda não há publicação da aplicação nem conexão real com Telegram nesta etapa. O token do bot será recebido por um caminho separado de segredos, quando sua integração estiver implementada.
+Ainda não há publicação da aplicação nem conexão real com Telegram nesta etapa. O assistente já recebe o token por formulário autenticado e o cifra no servidor; a execução do bot ainda não está integrada.

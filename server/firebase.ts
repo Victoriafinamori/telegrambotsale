@@ -2,8 +2,8 @@ import { initializeApp, applicationDefault, getApps } from 'firebase-admin/app';
 import { getAuth, type DecodedIdToken } from 'firebase-admin/auth';
 import type { Config } from './config.js';
 import type { Identity, IdentityProvider } from './types.js';
-export function firebaseIdentity(config: Config): IdentityProvider {
-  const app =
+export function firebaseApp(config: Config) {
+  return (
     getApps().find((a) => a.name === config.FIREBASE_PROJECT_ID) ||
     initializeApp(
       {
@@ -11,7 +11,11 @@ export function firebaseIdentity(config: Config): IdentityProvider {
         ...(!config.FIREBASE_AUTH_EMULATOR_HOST ? { credential: applicationDefault() } : {}),
       },
       config.FIREBASE_PROJECT_ID,
-    );
+    )
+  );
+}
+export function firebaseIdentity(config: Config): IdentityProvider {
+  const app = firebaseApp(config);
   const auth = getAuth(app),
     identity = (v: DecodedIdToken): Identity => ({
       uid: v.uid,

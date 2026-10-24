@@ -8,5 +8,10 @@
     "outDir": "dist-server",
     "sourceMap": false
   },
-  "include": ["server", "scripts/migrate.ts", "scripts/grant-admin.ts"]
+  "include": [
+    "server",
+    "scripts/migrate.ts",
+    "scripts/grant-admin.ts",
+    "scripts/reset-admin-mfa.ts"
+  ]
 }

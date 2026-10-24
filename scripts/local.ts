@@ -28,6 +28,10 @@ const config = loadConfig({
   FIREBASE_APP_ID: undefined,
   FIREBASE_HOSTING: 'false',
   SESSION_COOKIE_SIGNING_KEY: undefined,
+  PLATFORM_DATABASE: 'postgres',
+  FIRESTORE_EMULATOR_HOST: undefined,
+  API_AUTH_MODE: process.env.LOCAL_API_AUTH_MODE === 'bearer' ? 'bearer' : 'cookie',
+  ADMIN_MFA_REQUIRED: 'false',
   BOT_TOKEN_ENCRYPTION_KEY: (await readFile(localKeyFile, 'utf8')).trim(),
 });
 // Ignore ambient Google credentials: this program can address the local emulator only.
@@ -42,11 +46,15 @@ const emulatorArgs = [
     ? ['--import=.local/firebase']
     : []),
 ];
-const child = spawn('./node_modules/.bin/firebase', emulatorArgs, {
-  stdio: 'inherit',
-  env: emulatorEnv(),
-  detached: process.platform !== 'win32',
-});
+const child = spawn(
+  process.execPath,
+  [resolve('node_modules/firebase-tools/lib/bin/firebase.js'), ...emulatorArgs],
+  {
+    stdio: 'inherit',
+    env: emulatorEnv(),
+    detached: process.platform !== 'win32',
+  },
+);
 let stopping = false;
 async function waitForEmulator() {
   for (let i = 0; i < 100; i++) {

@@ -27,3 +27,4 @@ jobs:
             sleep 1
           done
           npm run test:browser
+          npm run test:admin-browser

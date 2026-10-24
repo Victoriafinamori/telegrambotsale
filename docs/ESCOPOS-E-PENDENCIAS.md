@@ -12,7 +12,7 @@ Os testes cobrem autorização indevida, outro e-mail, convite revogado/vencido/
 
 ## Escopo definido para o site
 
-O site terá divulgação pública, login, primeiros passos, ativação e assinatura. A landing page já foi implementada e abre sem depender da API. Configuração operacional da loja será pelo Telegram. A proposta de configurar catálogo/estoque/banners pelo site foi retirada desta primeira versão; ver `ESCOPO-DO-SITE.md`. A migração dos cadastros da plataforma para Firestore foi discutida, mas ainda não foi implementada: o código continua usando PostgreSQL.
+O site terá divulgação pública, login, primeiros passos, ativação e assinatura. A landing page já foi implementada e abre sem depender da API. Configuração operacional da loja será pelo Telegram. A proposta de configurar catálogo/estoque/banners pelo site foi retirada desta primeira versão; ver `ESCOPO-DO-SITE.md`. A base central agora tem adaptador Firestore, além do PostgreSQL de compatibilidade/demonstração. A transferência de registros existentes não é automática. Foram implementados transporte bearer entre Hosting e API, configuração de CORS/CSP e segundo fator TOTP do dono sem Blaze. A implantação real ainda depende de autorização e da configuração da hospedagem.
 
 ## Próximo bloco: bot e loja
 
@@ -26,4 +26,4 @@ O site terá divulgação pública, login, primeiros passos, ativação e assina
 
 ## Publicação e início de vendas
 
-Manter Firebase Spark, validar a aplicação web/API na Square Cloud já existente, definir PostgreSQL, domínio, HTTPS e identidade de servidor; concluir MFA administrativo compatível com Spark e os requisitos de SECURITY.md; testar backup/restauração e monitoramento; validar o fluxo completo com lojas piloto. Ainda não há URL pública publicada, cobrança real ou Telegram conectado nesta entrega.
+Manter Firebase Spark, validar a aplicação web/API na Square Cloud já existente, configurar Firestore real, domínio, HTTPS e identidade de servidor; validar o TOTP administrativo já implementado e os requisitos de SECURITY.md; testar backup/restauração e monitoramento; validar o fluxo completo com lojas piloto. Ainda não há URL pública publicada, cobrança real ou Telegram conectado nesta entrega.

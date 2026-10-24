@@ -1,6 +1,6 @@
 # Blackout Create
 
-Primeira etapa real da plataforma: acesso com **Firebase Authentication**, contratação manual por **WhatsApp, Telegram, Discord, site ou outro canal**, convites e aprovação administrativa. Os registros ficam no PostgreSQL, com autorização conferida no servidor. Não utiliza o código `DEMO` dos antigos mockups.
+Primeira etapa real da plataforma: acesso com **Firebase Authentication**, contratação manual por **WhatsApp, Telegram, Discord, site ou outro canal**, convites e aprovação administrativa. A base central pode usar Firestore (`PLATFORM_DATABASE=firestore`), com autorização conferida no servidor. PostgreSQL permanece disponível para compatibilidade e para a demonstração local. Não utiliza o código `DEMO` dos antigos mockups.
 
 Esta entrega implementa entrada/aprovação do lojista e um assistente para criar o bot, validar e enviar token cifrado e ID pessoal para ativação pela equipe. O dono pode revisar os dados, solicitar correções e confirmar manualmente a ativação de um aplicativo Square Cloud exclusivo por cliente, iniciando o período mensal. Catálogo, Pix, execução dos bots e renovação/suspensão automática **ainda não estão integrados**. Aprovar o acesso ou enviar os dados não inicia o período mensal nem coloca um bot em operação.
 
@@ -66,29 +66,29 @@ npm run test:browser
 
 Pode usar um Chromium já instalado definindo `CHROMIUM_PATH`. Os testes de navegador criam registros identificados como teste no banco local e capturam telas em `.local/screenshots/`. Nunca são executados contra Firebase real.
 
-## Configurar Firebase e PostgreSQL reais
+## Configurar Firebase e a hospedagem real
 
 O aplicativo Web do projeto **blackout-create** já está registrado no código em `config/firebase.web.json`, incluindo o appId fornecido. Esse é o padrão para a execução real. `npm run local` continua usando apenas `demo-blackout-create`. O estado da conexão e os próximos requisitos estão em [docs/FIREBASE-PROJETO.md](docs/FIREBASE-PROJETO.md).
 
-A estrutura escolhida é **Firebase Spark para Authentication e Square Cloud, já contratada pelo proprietário, para o servidor**. O painel e a API devem compartilhar a mesma origem HTTPS na Square Cloud. Não há dependência de Blaze, Cloud Run ou Cloud SQL. Veja [docs/SQUARE-CLOUD.md](docs/SQUARE-CLOUD.md) para os requisitos e as verificações pendentes; a hospedagem do PostgreSQL ainda precisa ser definida.
+A estrutura preparada agora é **Firebase Spark para Authentication, Firestore e Hosting**, com API na Square Cloud existente. O frontend usa `VITE_API_ORIGIN` e o servidor usa `API_AUTH_MODE=bearer` com CORS de origem exata. Não depende de cookies de terceiros nem exige Blaze, Cloud Run ou Cloud SQL. Siga [docs/PUBLICAR-FIREBASE-SPARK.md](docs/PUBLICAR-FIREBASE-SPARK.md); o acesso real ao projeto e o suporte HTTPS da Square Cloud ainda precisam de confirmação.
 
 1. Criar um projeto Firebase e registrar o aplicativo web. Habilitar Email/Password no Authentication e cadastrar apenas os domínios de acesso necessários.
 2. Configurar política de senha, proteção contra enumeração de e-mails, modelos de confirmação/recuperação e proteção contra abuso. Não usar domínios locais em produção.
-3. Copiar `.env.example` para `.env` apenas no ambiente privado. Em produção, usar variáveis/segredos da hospedagem, `NODE_ENV=production`, `APP_ORIGIN=https://seu-dominio`, PostgreSQL com `DATABASE_SSL=true`, sem variáveis de emulador.
+3. Copiar `.env.example` para `.env` apenas no ambiente privado. Em produção, usar variáveis/segredos da hospedagem, `NODE_ENV=production`, `APP_ORIGIN=https://seu-dominio`, `PLATFORM_DATABASE=firestore`, `API_AUTH_MODE=bearer`, sem variáveis de emulador. Para o adaptador PostgreSQL legado, usar `DATABASE_SSL=true`.
 4. Para o SDK Admin, preferir identidade da carga de trabalho/ADC. Se uma chave de serviço for inevitável, montar o arquivo como segredo fora da imagem/repositório. Nunca usar a chave privada no navegador.
-5. Executar `npm run build` e `npm run db:migrate` com a credencial de migração. Em operação, usar uma conta de banco com privilégios mínimos; há um exemplo em `ops/application-grants.sql`.
+5. Executar `npm run build`. Firestore não usa migrações SQL: criar o banco pelo console, preparar/publicar regras e índices e autorizar uma identidade dedicada de servidor. Para PostgreSQL legado, executar `db:migrate` com credencial separada e aplicar os privilégios de `ops/application-grants.sql`.
 6. Criar e confirmar a conta do administrador. Com acesso restrito ao servidor, conceder a permissão pelo UID do Firebase:
 
 ```sh
 npm run admin:grant -- --uid UID_DO_FIREBASE
 ```
 
-Não há botão público nem rota HTTP para alguém se tornar administrador. Remoção: `npm run admin:grant -- --uid UID_DO_FIREBASE --revoke`. O comando de bootstrap exige uma credencial de banco que possa administrar essa tabela.
+Não há botão público nem rota HTTP para alguém se tornar administrador. Remoção: `npm run admin:grant -- --uid UID_DO_FIREBASE --revoke`. O comando de bootstrap exige a credencial privada do servidor com autorização para o banco selecionado. Depois, o dono configura seu aplicativo autenticador na própria tela. Recuperação com acesso restrito: `npm run admin:mfa-reset -- --uid UID`.
 
 7. Executar `npm start` atrás de um proxy HTTPS confiável. Configurar `HOST` e `TRUST_PROXY_HOPS` conforme a hospedagem; não confiar em headers de proxy sem essa necessidade. O Dockerfile fornece um runtime sem ferramentas de desenvolvimento e sem credenciais embutidas.
 
-O Firebase identifica o usuário. As permissões e vínculos ficam no PostgreSQL; um papel ou ID de loja enviado pelo navegador não libera acesso. O schema usa tabelas `platform_*` e `merchant_*` separadas das entidades do bot original. A ligação com o `Tenant` do bot será feita na etapa de conexão/provisionamento; o código original enviado no ZIP não é iniciado por este servidor.
+O Firebase identifica o usuário. As permissões e vínculos ficam no banco central selecionado; um papel ou ID de loja enviado pelo navegador não libera acesso. O schema usa tabelas `platform_*` e `merchant_*` separadas das entidades do bot original. A ligação com o `Tenant` do bot será feita na etapa de conexão/provisionamento; o código original enviado no ZIP não é iniciado por este servidor.
 
 ## Segurança e limites
 
-Leia [SECURITY.md](SECURITY.md) e [docs/ESCOPOS-E-PENDENCIAS.md](docs/ESCOPOS-E-PENDENCIAS.md). Esta etapa foi validada localmente; não equivale a auditoria externa nem a liberação para produção. A autenticação multifator do administrador compatível com Spark, a hospedagem real e a integração dos bots ainda precisam ser concluídas antes da venda como serviço operacional.
+Leia [SECURITY.md](SECURITY.md) e [docs/ESCOPOS-E-PENDENCIAS.md](docs/ESCOPOS-E-PENDENCIAS.md). Esta etapa foi validada localmente; não equivale a auditoria externa nem a liberação para produção. A autenticação multifator compatível com Spark já tem implementação local; a validação real, hospedagem e integração dos bots ainda precisam ser concluídas antes da venda como serviço operacional.

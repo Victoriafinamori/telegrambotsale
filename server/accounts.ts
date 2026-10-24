@@ -34,7 +34,7 @@ export class Accounts {
         .rows.length === 1
     );
   }
-  async own(uid: string) {
+  async own(uid: string): Promise<MerchantAccount | null> {
     return (
       (
         await this.db.query<MerchantAccount>(

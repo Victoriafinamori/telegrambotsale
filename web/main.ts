@@ -5,6 +5,7 @@ import { initializeApp, type FirebaseOptions } from 'firebase/app';
 import {
   initializeAuth,
   inMemoryPersistence,
+  browserSessionPersistence,
   connectAuthEmulator,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
@@ -38,10 +39,12 @@ type Me = {
   user: { uid: string; email: string };
   role: 'platform' | 'merchant' | 'unassigned';
   account: MerchantAccount | null;
+  adminMfaRequired?: boolean;
 };
 type PublicConfig = {
   firebase: FirebaseOptions;
   emulatorHost: string | null;
+  authMode?: 'cookie' | 'bearer';
 };
 class ApiError extends Error {
   constructor(
@@ -66,23 +69,48 @@ let csrf = '',
 let botSetup: BotSetup | null = null,
   adminBotSetup: BotSetup | null = null,
   guideStep = 1;
+let adminProof = '',
+  mfaSecret = '';
+function serviceUrl(path: string) {
+  const raw = import.meta.env.VITE_API_ORIGIN;
+  if (!raw) return path;
+  const url = new URL(raw);
+  if (
+    url.origin !== raw ||
+    url.username ||
+    url.password ||
+    (url.protocol !== 'https:' &&
+      !(import.meta.env.DEV && ['localhost', '127.0.0.1'].includes(url.hostname)))
+  )
+    throw Error('Invalid API origin');
+  return url.origin + path;
+}
 const inviteToken = () => new URLSearchParams(location.hash.split('?')[1] || '').get('token');
 async function api<T = Record<string, unknown>>(
   path: string,
   body?: unknown,
   retry = true,
 ): Promise<T> {
-  if (body !== undefined && !csrf)
+  const bearer = config?.authMode === 'bearer';
+  if (!bearer && body !== undefined && !csrf)
     csrf = (
-      await fetch('/api/security/csrf', { credentials: 'same-origin', cache: 'no-store' }).then(
-        (r) => r.json(),
-      )
+      await fetch(serviceUrl('/api/security/csrf'), {
+        credentials: 'same-origin',
+        cache: 'no-store',
+      }).then((r) => r.json())
     ).token;
-  const response = await fetch('/api' + path, {
+  const idToken = bearer && auth.currentUser ? await auth.currentUser.getIdToken() : '';
+  const response = await fetch(serviceUrl('/api' + path), {
     method: body === undefined ? 'GET' : 'POST',
-    credentials: 'same-origin',
+    credentials: bearer ? 'omit' : 'same-origin',
     cache: 'no-store',
-    headers: body === undefined ? {} : { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+    headers: {
+      ...(body === undefined
+        ? {}
+        : { 'Content-Type': 'application/json', ...(!bearer ? { 'X-CSRF-Token': csrf } : {}) }),
+      ...(idToken ? { Authorization: 'Bearer ' + idToken } : {}),
+      ...(adminProof ? { 'X-Admin-MFA': adminProof } : {}),
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const value = await response.json();
@@ -100,12 +128,15 @@ let auth: Auth;
 let servicesReady = false;
 async function ensureServices() {
   if (servicesReady) return;
-  const response = await fetch('/api/config', { cache: 'no-store' });
+  const response = await fetch(serviceUrl('/api/config'), { cache: 'no-store' });
   if (!response.ok) throw new Error('Server unavailable');
   config = (await response.json()) as PublicConfig;
-  auth = initializeAuth(initializeApp(config.firebase), { persistence: inMemoryPersistence });
+  auth = initializeAuth(initializeApp(config.firebase), {
+    persistence: config.authMode === 'bearer' ? browserSessionPersistence : inMemoryPersistence,
+  });
   if (config.emulatorHost)
     connectAuthEmulator(auth, 'http://' + config.emulatorHost, { disableWarnings: true });
+  await auth.authStateReady();
   servicesReady = true;
 }
 function renderLanding() {
@@ -213,6 +244,10 @@ async function load() {
     return;
   }
   if (me.role === 'platform') {
+    if (me.adminMfaRequired) {
+      await renderAdminMfa();
+      return;
+    }
     accounts = (
       await api<{ accounts: AdminMerchantAccount[] }>(
         '/admin/accounts?offset=' +
@@ -250,6 +285,12 @@ async function load() {
             : 1;
     merchantView();
   }
+}
+async function renderAdminMfa() {
+  const status = await api<{ enabled: boolean; available: boolean }>('/security/admin-mfa/status');
+  shell(
+    `<main class="auth-shell"><section class="card"><span class="eyebrow">Proteção do administrador</span><h1>Confirme seu acesso</h1>${!status.available ? '<p>O segundo fator ainda precisa ser configurado no servidor. Fale com o responsável pela implantação.</p>' : status.enabled || mfaSecret ? `<p>${mfaSecret ? 'Adicione uma conta no Google Authenticator, Microsoft Authenticator ou outro app compatível. Escolha inserir uma chave e use os dados abaixo.' : 'Digite o código atual do seu aplicativo autenticador.'}</p>${mfaSecret ? `<label for="mfa-secret">Chave do autenticador · guarde com segurança</label><input id="mfa-secret" value="${esc(mfaSecret)}" readonly autocomplete="off"><small>Nome: Blackout Create · ${esc(me!.user.email)}. Código baseado em tempo, 6 dígitos.</small>` : ''}<form id="mfa-form"><label for="mfa-code">Código de 6 dígitos</label><input id="mfa-code" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required><button type="submit">Confirmar acesso</button></form>` : '<p>Configure um aplicativo autenticador para proteger os dados e as ações dos seus clientes. Você só precisa fazer essa configuração uma vez.</p><button id="enroll-admin-mfa">Configurar autenticador</button>'}</section></main>`,
+  );
 }
 function dialog(title: string, content: string) {
   document.querySelector('dialog')?.remove();
@@ -315,7 +356,7 @@ async function exchange() {
   }
   const idToken = await user.getIdToken(true);
   await api('/auth/session', { idToken });
-  await signOut(auth);
+  if (config?.authMode !== 'bearer') await signOut(auth);
   authMode = 'login';
   const check = await api<Me>('/me');
   me = check;
@@ -333,13 +374,21 @@ document.addEventListener('submit', (event) => {
       'bot-setup-form',
       'bot-activation-form',
       'bot-changes-form',
+      'mfa-form',
     ].includes(form.id)
   )
     return;
   event.preventDefault();
   void task(async () => {
     const fields = new FormData(form);
-    if (form.id === 'bot-activation-form' || form.id === 'bot-changes-form') {
+    if (form.id === 'mfa-form') {
+      const code = String(fields.get('code') || '');
+      (form.querySelector('[name=code]') as HTMLInputElement).value = '';
+      const result = await api<{ proof: string }>('/security/admin-mfa/verify', { code });
+      adminProof = result.proof;
+      mfaSecret = '';
+      await load();
+    } else if (form.id === 'bot-activation-form' || form.id === 'bot-changes-form') {
       if (!adminBotSetup || !selected) throw new Error('Missing bot');
       const base = '/admin/accounts/' + selected + '/bot-setup/';
       if (form.id === 'bot-activation-form') {
@@ -523,7 +572,11 @@ document.addEventListener('click', (event) => {
     return;
   }
   void task(async () => {
-    if (button.id === 'retry-services') {
+    if (button.id === 'enroll-admin-mfa') {
+      const result = await api<{ secret: string }>('/security/admin-mfa/enroll', {});
+      mfaSecret = result.secret;
+      await renderAdminMfa();
+    } else if (button.id === 'retry-services') {
       await load();
     } else if (button.id === 'start-bot-configuration' && adminBotSetup) {
       await api('/admin/accounts/' + selected + '/bot-setup/review', {
@@ -557,6 +610,8 @@ document.addEventListener('click', (event) => {
       await signOut(auth);
       csrf = '';
       me = null;
+      adminProof = '';
+      mfaSecret = '';
       botSetup = adminBotSetup = null;
       guideStep = 1;
       inviteLink = '';

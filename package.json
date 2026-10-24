@@ -12,13 +12,21 @@
     "build": "npm run check && vite build && tsc -p tsconfig.server.json",
     "start": "node dist-server/server/main.js",
     "check": "tsc --noEmit",
-    "test": "tsx --test tests/*.test.ts",
+    "test": "node --import tsx --test tests/*.test.ts",
     "test:emulator": "node --import tsx scripts/emulator.ts --test",
     "emulators": "node --import tsx scripts/emulator.ts",
     "db:migrate": "node dist-server/scripts/migrate.js",
     "admin:grant": "node dist-server/scripts/grant-admin.js",
     "local": "node --import tsx scripts/local.ts",
-    "test:browser": "tsx tests/browser.ts"
+    "test:browser": "node --import tsx tests/browser.ts",
+    "admin:mfa-reset": "node dist-server/scripts/reset-admin-mfa.js",
+    "firebase:prepare": "node --import tsx scripts/prepare-hosting.ts",
+    "firebase:login": "node --import tsx scripts/firebase-cli.ts login",
+    "firebase:status": "node --import tsx scripts/firebase-cli.ts status",
+    "deploy:hosting": "npm run build && npm run firebase:prepare && node --import tsx scripts/firebase-cli.ts hosting",
+    "deploy:rules": "node --import tsx scripts/firebase-cli.ts rules",
+    "secrets:generate": "node --import tsx scripts/generate-server-secrets.ts",
+    "test:admin-browser": "node --import tsx tests/admin-browser.ts"
   },
   "dependencies": {
     "dotenv": "^16.6.1",

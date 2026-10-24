@@ -128,7 +128,7 @@ export class BotOnboarding {
         'A configuração não pode ser alterada agora. Fale com a Blackout Create.',
       );
   }
-  async read(accountId: string, db: Connection = this.accounts.db) {
+  async read(accountId: string, db: Connection = this.accounts.db): Promise<BotSetup | null> {
     return (
       (
         await db.query<BotSetup>(
