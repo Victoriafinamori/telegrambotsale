@@ -51,6 +51,8 @@ try {
   await page.getByRole('heading', { name: 'Confirme seu acesso' }).waitFor();
   assert.equal(await page.locator('#new-account').count(), 0);
   await page.locator('#enroll-admin-mfa').click();
+  await page.locator('#admin-mfa-qr').waitFor();
+  await page.getByText('Não consigo escanear', { exact: true }).click();
   await page.locator('#mfa-secret').waitFor();
   const seed = await page.locator('#mfa-secret').inputValue();
   let bits = 0,

@@ -4,7 +4,7 @@
 
 Landing pública e área do cliente no Firebase Hosting; Firebase Authentication por e-mail/senha; Firestore como base central de contas, convites, assinatura e auditoria; API Node na Square Cloud; segundo fator TOTP do dono, sem Identity Platform ou Blaze. A configuração operacional das lojas continua no Telegram. Cada bot terá um aplicativo Square Cloud exclusivo; a API central do site é um serviço separado dos bots.
 
-Não há autorização Google cadastrada no perfil CLI desta sessão. Não houve deploy, criação de banco, mudança de faturamento, envio de credencial ou acesso à conta Square Cloud. As etapas a seguir precisam de uma conta do proprietário autorizada e de um endereço real de API. A configuração Web pública já existente não concede essa autorização.
+Em 24/10/2026, o frontend foi publicado em `https://blackout-create.web.app` e a API em `https://blackout-create-api.squareweb.app`, com identidade dedicada e segredos privados. O plano Firebase permanece Spark. O estado e as pendências do acesso do dono estão em [IMPLANTACAO-2026-10-24.md](IMPLANTACAO-2026-10-24.md). As etapas abaixo servem como referência para manutenção e novas publicações; a configuração Web pública não concede autorização administrativa.
 
 ## 1. Autorizar a conta Google
 

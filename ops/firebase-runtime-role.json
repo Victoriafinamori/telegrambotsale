@@ -1,0 +1,17 @@
+{
+  "roleId": "blackoutApiRuntime",
+  "role": {
+    "title": "Blackout API Runtime",
+    "description": "Apenas dados Firestore e leitura de usuarios Authentication para a API central.",
+    "stage": "GA",
+    "includedPermissions": [
+      "datastore.databases.get",
+      "datastore.entities.create",
+      "datastore.entities.delete",
+      "datastore.entities.get",
+      "datastore.entities.list",
+      "datastore.entities.update",
+      "firebaseauth.users.get"
+    ]
+  }
+}

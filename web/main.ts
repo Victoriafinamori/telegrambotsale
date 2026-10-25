@@ -288,8 +288,19 @@ async function load() {
 }
 async function renderAdminMfa() {
   const status = await api<{ enabled: boolean; available: boolean }>('/security/admin-mfa/status');
+  let enrollment = '';
+  if (mfaSecret) {
+    let qr = '';
+    try {
+      const { authenticatorQr } = await import('./authenticator-qr.js');
+      qr = await authenticatorQr(mfaSecret, me!.user.email);
+    } catch {
+      // Keep manual enrollment available if this browser cannot render a QR.
+    }
+    enrollment = `${qr ? `<ol class="mfa-steps"><li>No celular, abra o <b>Google Authenticator</b>.</li><li>Toque em <b>+</b>, escolha <b>Ler QR Code</b> e aponte para a imagem abaixo.</li><li>Digite no site os <b>6 números</b> que aparecerem no aplicativo.</li></ol><img id="admin-mfa-qr" class="mfa-qr" src="${esc(qr)}" width="256" height="256" alt="QR Code para cadastrar a Blackout Create no autenticador"><p class="mfa-qr-caption">Escaneie pelo aplicativo autenticador do celular.</p>` : '<p>Adicione uma conta no seu aplicativo autenticador usando a chave abaixo.</p>'}<details class="mfa-manual"${qr ? '' : ' open'}><summary>Não consigo escanear</summary><p>No aplicativo, escolha <b>Inserir chave de configuração</b>. Nome: <b>Blackout Create</b>. Tipo: <b>Baseado no tempo</b>.</p><label for="mfa-secret">Chave do autenticador · guarde com segurança</label><input id="mfa-secret" value="${esc(mfaSecret)}" readonly autocomplete="off" spellcheck="false"><small>Conta: ${esc(me!.user.email)}. Também funciona com Microsoft Authenticator e outros aplicativos TOTP.</small></details>`;
+  }
   shell(
-    `<main class="auth-shell"><section class="card"><span class="eyebrow">Proteção do administrador</span><h1>Confirme seu acesso</h1>${!status.available ? '<p>O segundo fator ainda precisa ser configurado no servidor. Fale com o responsável pela implantação.</p>' : status.enabled || mfaSecret ? `<p>${mfaSecret ? 'Adicione uma conta no Google Authenticator, Microsoft Authenticator ou outro app compatível. Escolha inserir uma chave e use os dados abaixo.' : 'Digite o código atual do seu aplicativo autenticador.'}</p>${mfaSecret ? `<label for="mfa-secret">Chave do autenticador · guarde com segurança</label><input id="mfa-secret" value="${esc(mfaSecret)}" readonly autocomplete="off"><small>Nome: Blackout Create · ${esc(me!.user.email)}. Código baseado em tempo, 6 dígitos.</small>` : ''}<form id="mfa-form"><label for="mfa-code">Código de 6 dígitos</label><input id="mfa-code" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required><button type="submit">Confirmar acesso</button></form>` : '<p>Configure um aplicativo autenticador para proteger os dados e as ações dos seus clientes. Você só precisa fazer essa configuração uma vez.</p><button id="enroll-admin-mfa">Configurar autenticador</button>'}</section></main>`,
+    `<main class="auth-shell"><section class="card mfa-card"><span class="eyebrow">Proteção do administrador</span><h1>${mfaSecret ? 'Escaneie e confirme' : 'Confirme seu acesso'}</h1>${!status.available ? '<p>O segundo fator ainda precisa ser configurado no servidor. Fale com o responsável pela implantação.</p>' : status.enabled || mfaSecret ? `${enrollment}${mfaSecret ? '' : '<p>Abra a conta <b>Blackout Create</b> no seu aplicativo autenticador e digite o código atual.</p>'}<form id="mfa-form"><label for="mfa-code">Código de 6 dígitos</label><input id="mfa-code" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="000000" required><button type="submit">Confirmar acesso</button></form>` : '<p>Vamos conectar o Google Authenticator do seu celular. Na próxima tela, basta escanear um QR Code.</p><button id="enroll-admin-mfa">Configurar autenticador</button>'}</section></main>`,
   );
 }
 function dialog(title: string, content: string) {

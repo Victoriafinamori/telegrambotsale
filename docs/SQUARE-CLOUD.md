@@ -6,7 +6,7 @@
 - **Square Cloud existente:** um aplicativo separado para cada cliente, conforme escolha do proprietário. O ID do aplicativo fica vinculado à ativação e não pode ser reutilizado por outra loja. Para o site, a API central roda na Square Cloud com HTTPS e `API_AUTH_MODE=bearer`; o frontend pode ficar no Firebase Hosting. `VITE_API_ORIGIN` e CORS de origem exata ligam os dois sem cookies de terceiros.
 - **Firestore no Spark:** base central de clientes, convites, permissões, ativação, assinatura, auditoria e segundo fator. PostgreSQL permanece como adaptador legado e banco local de demonstração. O banco operacional dos bots é uma etapa separada; não presumir que esteja incluído no plano Square.
 
-Não foram consultados conta ou limites da Square Cloud. Antes do envio, verificar se o plano comporta API HTTP, bots e recursos necessários sem upgrade. Se atender somente bots, painel/API ainda precisará de outra solução.
+Em 24/10/2026, a conta e o plano existentes foram conferidos e a proprietária liberou memória para uma API separada com 512 MB. A API foi publicada com Node.js 24.22.1 e HTTPS em `https://blackout-create-api.squareweb.app`, sem upgrade. Veja [IMPLANTACAO-2026-10-24.md](IMPLANTACAO-2026-10-24.md).
 
 ## Preparar a aplicação
 
@@ -20,7 +20,7 @@ npm start
 
 Esses são comandos da aplicação, não um deploy validado da Square Cloud. Ajustar build e inicialização ao mecanismo suportado pela hospedagem. Não enviar `node_modules`, `.local`, `.env`, credenciais ou usuários do emulador no pacote de código.
 
-`ops/square-cloud.env.example` referencia as variáveis públicas. Substituir a origem pelo endereço HTTPS real, confirmar a porta HTTP e manter `FIREBASE_HOSTING=false`. Validar a cadeia de proxy antes de mudar `TRUST_PROXY_HOPS`.
+`ops/firebase-square.env.example` referencia a configuração usada: porta 80, `HOST=0.0.0.0`, `API_AUTH_MODE=bearer`, `FIREBASE_HOSTING=false` e `FIRESTORE_PREFER_REST=true`. Validar a cadeia de proxy antes de mudar `TRUST_PROXY_HOPS`. As credenciais continuam separadas do código e do ZIP.
 
 O formato Firebase Hosting com API em outro domínio já tem implementação bearer/CORS. Seguir `PUBLICAR-FIREBASE-SPARK.md` e usar `ops/firebase-square.env.example`; as instruções PostgreSQL abaixo se aplicam somente ao adaptador legado.
 
@@ -40,4 +40,4 @@ No console Firebase, cadastrar o domínio real e validar política de senha, e-m
 4. Ligar o registro de ativação manual à verificação operacional. Hoje o administrador instala/testa o bot fora do painel e confirma a ativação para iniciar o período mensal. Não há chamadas à API Square Cloud, monitoramento, renovação ou desligamento automático. O código original compartilhava vários tenants por processo e precisa ser adaptado à execução de um cliente por aplicativo.
 5. Validar login, convites, isolamento entre lojas, cookies HTTPS, revogação, CSRF, rate limit, logs e recuperação na hospedagem real.
 
-Esta preparação não realizou deploy, acessou a conta Square Cloud ou alterou serviços ativos. Testes locais não comprovam funcionamento na hospedagem real.
+A implantação e os testes online da API central estão registrados em `IMPLANTACAO-2026-10-24.md`. A operação e o deploy dos bots dos clientes continuam separados; os testes da API não comprovam execução de bot ou pagamento.

@@ -10,19 +10,12 @@ O servidor fornece ao navegador apenas apiKey, authDomain, projectId e appId por
 
 `npm run local`, `npm run emulators` e `npm run test:emulator` selecionam explicitamente `demo-blackout-create`. A aplicação recusa emulador com um ID de projeto real e não herda o appId real nos testes. Use esses comandos para testes; a seleção padrão do CLI é o projeto real.
 
-## Verificação nesta etapa
+## Estado online em 25/10/2026
 
-- Compilação e testes locais da configuração, da API e das permissões passaram.
-- Os artefatos compilados do servidor incluem o JSON público necessário ao runtime.
-- A consulta somente de leitura ao endpoint público do Firebase Authentication foi bloqueada pela rede do ambiente: `CONNECT tunnel failed, response 403`. Isso não permite concluir se os provedores e domínios estão corretamente habilitados no projeto remoto.
-- O perfil Firebase CLI desta aplicação ainda não possui conta Google autorizada. A configuração pública não substitui essa autorização.
+O frontend foi publicado em `https://blackout-create.web.app` e a API central em `https://blackout-create-api.squareweb.app`. O Firebase permanece no plano Spark, com regras privadas, índice ativo e banco padrão em São Paulo. A API usa uma identidade dedicada com sete permissões de dados/consulta de usuários e duas chaves privadas separadas; o login do CLI permanece somente no perfil administrativo local.
 
-## Para concluir a conexão online
+Os 36 testes online de login, autorização, TOTP, convites, isolamento, suspensão e revogação passaram usando contas e registros descartáveis, removidos ao final. Outras 9 verificações de confirmação de e-mail e recuperação também passaram. O e-mail pessoal da dona foi confirmado, o papel administrativo concedido pelo bootstrap privado e a matrícula pessoal do autenticador concluída. O painel de lojistas e o segundo fator ativo foram conferidos em 25/10/2026.
 
-1. Manter Spark. Validar Authentication/Firestore/Hosting, suporte HTTP/HTTPS da Square Cloud e os domínios autorizados. A base central agora tem adaptador Firestore; não exige PostgreSQL em produção. Siga `PUBLICAR-FIREBASE-SPARK.md`.
-2. Autorizar o Firebase Admin no projeto `blackout-create`. Em infraestrutura Google, preferir identidade do serviço com permissões mínimas. Em outro provedor, usar federação de identidade quando disponível ou um segredo de servidor protegido. Senhas Google, tokens de login e chaves privadas não devem ser enviados no chat ou incluídos no frontend.
-3. Criar/conferir Firestore padrão, publicar regras/índices e conceder o acesso inicial do dono pelo comando privado `admin:grant` após confirmação do e-mail. O adaptador PostgreSQL legado ainda usa suas migrações SQL.
-4. Configurar `ADMIN_MFA_ENCRYPTION_KEY` privada no servidor. O segundo fator TOTP independente já foi implementado com matrícula na tela, bloqueio de repetição e reset privado. Validar a configuração no ambiente real antes da operação.
-5. Validar uma sessão completa no projeto real: autenticação, confirmação de e-mail, cookie HTTPS, permissões, saída e revogação. Os testes do emulador não substituem essa validação.
+Consulte [IMPLANTACAO-2026-10-24.md](IMPLANTACAO-2026-10-24.md) para configuração e validação. Na Square Cloud, manter `FIRESTORE_PREFER_REST=true`; o transporte HTTPS/REST resolveu os erros de conexão observados no gRPC. A API usa bearer/CORS de origem exata, sem cookies de terceiros.
 
-Ainda não há publicação da aplicação nem conexão real com Telegram nesta etapa. O assistente já recebe o token por formulário autenticado e o cifra no servidor; a execução do bot ainda não está integrada.
+A execução dos bots, pagamentos e suspensão automática por vencimento continuam fora desta etapa. O assistente recebe dados cifrados, mas publicar o site não coloca os bots dos clientes em operação.

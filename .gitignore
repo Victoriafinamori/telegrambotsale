@@ -5,6 +5,7 @@ dist-server/
 .env.*
 !.env.example
 .local/
+.secrets/
 coverage/
 *-debug.log
 firebase-debug.log

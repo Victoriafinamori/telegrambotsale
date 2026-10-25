@@ -716,6 +716,43 @@ code {
     font-size: 11px;
   }
 }
+.mfa-card {
+  width: min(100%, 500px);
+}
+.mfa-steps {
+  padding-left: 22px;
+  margin: 0 0 20px;
+  color: var(--muted);
+}
+.mfa-steps li + li {
+  margin-top: 8px;
+}
+.mfa-qr {
+  display: block;
+  width: 256px;
+  height: auto;
+  max-width: 100%;
+  margin: 0 auto;
+  border-radius: 12px;
+  background: white;
+}
+.mfa-qr-caption {
+  margin: 8px 0 18px;
+  text-align: center;
+  font-size: 12px;
+}
+.mfa-manual {
+  margin: 18px 0;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.mfa-manual summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+.mfa-manual p {
+  margin-top: 12px;
+}
 @media (max-width: 360px) {
   header {
     padding: 16px 12px;
