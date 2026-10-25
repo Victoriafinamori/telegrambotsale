@@ -67,6 +67,29 @@ const navigation = [
   ['coupons', 'Cupons'],
   ['notices', 'Avisos'],
 ] as const;
+const icon = (name: string) => {
+  const paths: Record<string, string> = {
+    overview:
+      '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+    products: '<path d="m12 3 9 5-9 5-9-5 9-5Zm-9 5v9l9 5 9-5V8M12 13v9M7.5 5.5l9 5"/>',
+    stock: '<path d="M3 7h18v4H3zM5 11v10h14V11M9 15h6M5 7l2-4h10l2 4"/>',
+    orders: '<path d="M6 3h12v19l-3-2-3 2-3-2-3 2V3ZM9 8h6M9 12h6M9 16h3"/>',
+    appearance: '<path d="m14 5 5 5M4 20l4-1L21 6a2.1 2.1 0 0 0-3-3L5 16l-1 4Z"/>',
+    support:
+      '<path d="M4 13V11a8 8 0 0 1 16 0v2M4 12H3v6h4v-6H4Zm16 0h1v6h-4v-6h3ZM20 18v1a2 2 0 0 1-2 2h-4"/>',
+    payments: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M7 15h3"/>',
+    coupons: '<path d="M3 7h18v4a2 2 0 0 0 0 4v4H3v-4a2 2 0 0 0 0-4V7ZM13 7v2m0 3v2m0 3v2"/>',
+    notices: '<path d="m4 10 15-6v16L4 14v-4ZM4 10H2v4h2m3 1 2 6h4l-2-5"/>',
+    menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+    close: '<path d="m6 6 12 12M6 18 18 6"/>',
+    collapse: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16m7-12-4 4 4 4"/>',
+    expand: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16m4-12 4 4-4 4"/>',
+    external:
+      '<path d="M14 3h7v7m0-7L10 14M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5"/>',
+    back: '<path d="m12 5-7 7 7 7M5 12h15"/>',
+  };
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] ?? paths.menu}</svg>`;
+};
 const input = (name: string, label: string, value: unknown = '', attributes = '') =>
   `<label>${label}<input name="${name}" value="${esc(value)}" ${attributes}></label>`;
 const area = (name: string, label: string, value: unknown, max: number) =>
@@ -88,6 +111,88 @@ export async function mountMerchantConsole(
     pendingOnly = false,
     busy = false;
   const blobs = new Set<string>();
+  let collapsed = false,
+    mobileOpen = false;
+  try {
+    collapsed = localStorage.getItem('blackout.sidebar.collapsed') === 'true';
+  } catch {
+    /* Optional preference. */
+  }
+  const mobile = window.matchMedia('(max-width: 760px)');
+  const lifecycle = new AbortController();
+  const syncNavigation = () => {
+    host.querySelector('.mc-layout')?.classList.toggle('mc-collapsed', collapsed);
+    host
+      .querySelector('.mc-layout')
+      ?.classList.toggle('mc-mobile-open', mobile.matches && mobileOpen);
+    const sidebar = host.querySelector<HTMLElement>('#mc-sidebar');
+    if (sidebar) {
+      sidebar.inert = mobile.matches && !mobileOpen;
+      if (mobile.matches && mobileOpen) {
+        sidebar.setAttribute('role', 'dialog');
+        sidebar.setAttribute('aria-modal', 'true');
+      } else {
+        sidebar.removeAttribute('role');
+        sidebar.removeAttribute('aria-modal');
+      }
+    }
+    const main = host.querySelector<HTMLElement>('.mc-main');
+    if (main) main.inert = mobile.matches && mobileOpen;
+    const toggle = host.querySelector<HTMLButtonElement>('[data-action="toggle-navigation"]');
+    if (toggle) {
+      const label = mobile.matches
+        ? 'Abrir menu da loja'
+        : collapsed
+          ? 'Expandir menu lateral'
+          : 'Recolher menu lateral';
+      toggle.setAttribute('aria-label', label);
+      toggle.title = label;
+      toggle.setAttribute('aria-expanded', String(mobile.matches ? mobileOpen : !collapsed));
+      toggle.innerHTML = icon(mobile.matches ? 'menu' : collapsed ? 'expand' : 'collapse');
+    }
+  };
+  const closeNavigation = (restoreFocus = true) => {
+    mobileOpen = false;
+    syncNavigation();
+    if (restoreFocus)
+      host.querySelector<HTMLButtonElement>('[data-action="toggle-navigation"]')?.focus();
+  };
+  mobile.addEventListener(
+    'change',
+    () => {
+      closeNavigation(false);
+    },
+    { signal: lifecycle.signal },
+  );
+  window.addEventListener(
+    'hashchange',
+    () => {
+      closeNavigation(false);
+      lifecycle.abort();
+    },
+    { once: true, signal: lifecycle.signal },
+  );
+  host.addEventListener('keydown', (event) => {
+    if (!mobile.matches || !mobileOpen) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeNavigation();
+    }
+    if (event.key === 'Tab') {
+      const items = Array.from(
+        host.querySelectorAll<HTMLElement>('#mc-sidebar a, #mc-sidebar button:not(:disabled)'),
+      ).filter((el) => el.getClientRects().length > 0);
+      const first = items[0],
+        last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    }
+  });
   const revoke = () => {
     for (const url of blobs) URL.revokeObjectURL(url);
     blobs.clear();
@@ -141,7 +246,15 @@ export async function mountMerchantConsole(
       }<form data-form="coupon"><div class="mc-form-row">${input('code', 'Código', '', 'required pattern="[A-Za-z0-9_-]{3,20}" maxlength="20"')}${input('percent', 'Desconto · %', '', 'type="number" required min="1" max="90"')}${input('limit', 'Limite de usos', '', 'type="number" required min="1" max="99999"')}</div><button type="submit">Criar cupom</button></form></section>`;
     if (section === 'notices')
       body = `<section class="mc-panel"><div class="mc-panel-head"><div><h2>Avisos</h2><p>${data.noticeSubscribers} inscritos no recebimento</p></div></div><form data-form="notice"><input type="hidden" name="requestId" value="${crypto.randomUUID()}">${area('text', 'Texto do aviso', '', 900)}${picture('photo', '', 'Foto do aviso · opcional')}<button type="submit">Salvar rascunho e prévia</button><small>Salvar não envia. Você confirma o envio na prévia do rascunho.</small></form></section><section class="mc-panel"><h2>Histórico de avisos</h2>${notices.map((n) => `<article class="mc-order"><div class="mc-panel-head"><b>${{ draft: 'Rascunho', queued: 'Na fila', sending: 'Enviando', completed: 'Concluído', cancelled: 'Cancelado' }[n.status]}</b><small>${new Date(n.created_at).toLocaleString('pt-BR')}</small></div><p class="mc-notice-text">${esc(n.text)}</p>${n.photo ? `<div class="mc-product-image" data-asset="${esc(n.photo)}">Foto</div>` : ''}<small>Enviados: ${n.sent} · Falhas: ${n.failed} · Incertos: ${n.uncertain} · Ignorados: ${n.skipped}</small>${n.status === 'draft' ? `<button data-send-notice="${n.id}">Revisar e confirmar envio</button>` : ['sending', 'queued'].includes(n.status) ? `<button class="quiet" data-cancel-notice="${n.id}">Cancelar próximos envios</button>` : ''}</article>`).join('') || '<p>Nenhum aviso criado.</p>'}</section>`;
-    host.innerHTML = `<div class="mc-layout"><aside class="mc-sidebar"><a href="#/configuracao" class="mc-back">← Ativação e conexão</a><span class="eyebrow">Sua loja no Telegram</span><h1>${esc(data.title)}</h1><a href="https://t.me/${esc(data.botUsername)}" target="_blank" rel="noopener noreferrer">Abrir meu bot ↗</a><nav aria-label="Gestão da loja">${navigation.map(([id, title]) => `<button class="${section === id || (section === 'product-edit' && id === 'products') ? 'active' : ''}" data-section="${id}" ${section === id ? 'aria-current="page"' : ''}>${title}</button>`).join('')}</nav></aside><div class="mc-main"><div class="mc-title"><div><span class="eyebrow">Gestão da loja</span><h2>${navigation.find(([id]) => id === section)?.[1] ?? 'Editar produto'}</h2></div><button class="quiet" data-action="refresh">Atualizar</button></div><p id="mc-feedback" class="feedback" role="status" hidden></p>${body}</div></div>`;
+    host.innerHTML = `<div class="mc-layout"><button class="mc-backdrop" data-action="close-navigation" tabindex="-1" aria-label="Fechar menu da loja"></button><aside id="mc-sidebar" class="mc-sidebar" aria-label="Menu da loja"><div class="mc-store"><span class="mc-store-mark" aria-hidden="true">${esc(data.title.trim().slice(0, 1).toUpperCase() || 'B')}</span><div class="mc-store-info"><h1>${esc(data.title)}</h1><span>@${esc(data.botUsername)}</span></div><button class="mc-icon-button mc-mobile-close" data-action="close-navigation" aria-label="Fechar menu da loja">${icon('close')}</button></div><nav aria-label="Gestão da loja">${navigation
+      .map(([id, title], index) => {
+        const active = section === id || (section === 'product-edit' && id === 'products');
+        return `${index === 0 ? '<span class="mc-nav-group">Operação</span>' : index === 4 ? '<span class="mc-nav-group">Personalização</span>' : ''}<button class="mc-nav-item ${active ? 'active' : ''}" data-section="${id}" aria-label="${title}" title="${title}" ${active ? 'aria-current="page"' : ''}>${icon(id)}<span class="mc-nav-label">${title}</span></button>`;
+      })
+      .join(
+        '',
+      )}</nav><div class="mc-sidebar-footer"><a href="https://t.me/${esc(data.botUsername)}" target="_blank" rel="noopener noreferrer" aria-label="Abrir meu bot no Telegram" title="Abrir meu bot no Telegram">${icon('external')}<span class="mc-nav-label">Abrir meu bot</span></a><a href="#/configuracao" class="mc-back" aria-label="Ativação e conexão" title="Ativação e conexão">${icon('back')}<span class="mc-nav-label">Ativação e conexão</span></a></div></aside><div class="mc-main"><div class="mc-title"><div class="mc-page-heading"><button class="mc-icon-button" data-action="toggle-navigation" aria-controls="mc-sidebar">${icon('menu')}</button><h2 tabindex="-1">${navigation.find(([id]) => id === section)?.[1] ?? 'Editar produto'}</h2></div><button class="quiet" data-action="refresh">Atualizar</button></div><p id="mc-feedback" class="feedback" role="status" hidden></p>${body}</div></div>`;
+    syncNavigation();
     void loadImages();
   };
   const loadImages = async () => {
@@ -239,11 +352,35 @@ export async function mountMerchantConsole(
     const button = (event.target as Element).closest<HTMLButtonElement>('button');
     if (!button || button.closest('dialog')) return;
     event.stopPropagation();
+    if (button.dataset.action === 'toggle-navigation') {
+      if (mobile.matches) {
+        mobileOpen = true;
+        syncNavigation();
+        host.querySelector<HTMLButtonElement>('.mc-mobile-close')?.focus();
+      } else {
+        collapsed = !collapsed;
+        try {
+          localStorage.setItem('blackout.sidebar.collapsed', String(collapsed));
+        } catch {
+          /* Optional preference. */
+        }
+        syncNavigation();
+      }
+      return;
+    }
+    if (button.dataset.action === 'close-navigation') {
+      closeNavigation();
+      return;
+    }
     if (button.dataset.section) {
+      closeNavigation(false);
       section = button.dataset.section;
       selected = undefined;
       cursor = '';
-      void run(refreshSection);
+      void run(async () => {
+        await refreshSection();
+        host.querySelector<HTMLElement>('.mc-title h2')?.focus();
+      });
       return;
     }
     if (button.dataset.edit) {
