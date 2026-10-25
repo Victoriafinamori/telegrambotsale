@@ -1,4 +1,4 @@
-import type { Firestore, Transaction } from 'firebase-admin/firestore';
+import { FieldPath, type Firestore, type Transaction } from 'firebase-admin/firestore';
 export type Doc = Record<string, any>;
 export interface DocumentTransaction {
   get(path: string): Promise<Doc | null>;
@@ -10,7 +10,13 @@ export interface DocumentStore {
   transaction<T>(work: (tx: DocumentTransaction) => Promise<T>): Promise<T>;
   list(
     collection: string,
-    options: { offset?: number; limit: number; orderBy?: string; equals?: [string, unknown] },
+    options: {
+      offset?: number;
+      limit: number;
+      orderBy?: string;
+      equals?: [string, unknown];
+      afterId?: string;
+    },
   ): Promise<Doc[]>;
 }
 // Timestamp objects stay on the server; the domain works with Date like PostgreSQL.
@@ -45,11 +51,22 @@ export class FirestoreDocumentStore implements DocumentStore {
   }
   async list(
     collection: string,
-    options: { offset?: number; limit: number; orderBy?: string; equals?: [string, unknown] },
+    options: {
+      offset?: number;
+      limit: number;
+      orderBy?: string;
+      equals?: [string, unknown];
+      afterId?: string;
+    },
   ) {
     let query: FirebaseFirestore.Query = this.firestore.collection(collection);
     if (options.equals) query = query.where(options.equals[0], '==', options.equals[1]);
     if (options.orderBy) query = query.orderBy(options.orderBy, 'desc');
+    if (options.afterId !== undefined) {
+      if (options.orderBy) throw Error('Document cursor cannot be combined with field ordering');
+      query = query.orderBy(FieldPath.documentId());
+      if (options.afterId) query = query.startAfter(options.afterId);
+    }
     const values = await query
       .offset(options.offset ?? 0)
       .limit(options.limit)

@@ -69,7 +69,7 @@ let csrf = '',
 let botSetup: BotSetup | null = null,
   adminBotSetup: BotSetup | null = null,
   guideStep = 1;
-type RuntimeStatus={provisioned:boolean;online:boolean;ownerVerified:boolean};
+type RuntimeStatus = { provisioned: boolean; online: boolean; ownerVerified: boolean };
 let botRuntime: RuntimeStatus | null = null;
 let adminRuntime: RuntimeStatus | null = null;
 let adminProof = '',
@@ -207,6 +207,7 @@ function adminView() {
         '<button class="quiet" id="renew-subscription">Registrar renovação mensal</button>',
       );
   }
+  if(me?.account)document.querySelector('.workspace .page-heading')?.insertAdjacentHTML('beforeend','<a class="button-link" href="#/minha-loja">Abrir minha loja</a>');
 }
 function merchantView() {
   const a = me?.account;
@@ -218,20 +219,21 @@ function merchantView() {
   }
   const approved = a.access_status === 'approved';
   shell(
-    `<main class="merchant-shell"><div class="page-heading"><div><span class="eyebrow">${esc(a.store_name)}</span><h1>${botSetup?.activation_status === 'active' ? 'Sua loja' : 'Primeiros passos'}</h1></div><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div>${approved ? `<p class="welcome-note">${botSetup?.activation_status === 'active' ? 'Acompanhe sua ativação e os dados da contratação.' : 'Seu acesso foi liberado. Siga as etapas para preparar seu bot.'}</p>${botGuide(botSetup, guideStep, Boolean(config?.emulatorHost))}` : `<section class="card"><h2>${a.access_status === 'suspended' ? 'Acesso suspenso' : 'Sua loja está em análise'}</h2><p>${a.access_status === 'suspended' ? esc(a.suspension_reason || 'Fale com a Blackout Create pelo canal da contratação.') : 'Sua conta já está vinculada. Após a aprovação, você terá um assistente para criar o bot, informar seu token e ID do Telegram e solicitar a ativação na Square Cloud.'}</p><p class="note">A mensalidade começa somente após a ativação efetiva do bot.</p><button class="quiet" id="refresh">Atualizar situação</button></section>`}<details class="card contract-details"><summary>Sua contratação · ${money(a.price_cents)}</summary><dl><div><dt>Início do ciclo</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div><div><dt>Contato da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Conta</dt><dd>${esc(me!.user.email)}</dd></div></dl></details></main>`,
+    `<main class="merchant-shell"><div class="page-heading"><div><span class="eyebrow">${esc(a.store_name)}</span><h1>${botSetup?.activation_status === 'active' ? 'Sua loja' : 'Primeiros passos'}</h1></div><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div>${approved ? `<p class="welcome-note">${botSetup?.activation_status === 'active' ? 'Acompanhe sua ativação e os dados da contratação.' : 'Seu acesso foi liberado. Siga as etapas para preparar seu bot.'}</p>${botGuide(botSetup, guideStep, Boolean(config?.emulatorHost))}` : `<section class="card"><h2>${a.access_status === 'suspended' ? 'Acesso suspenso' : 'Sua loja está em análise'}</h2><p>${a.access_status === 'suspended' ? esc(a.suspension_reason || 'Fale com a Blackout Create pelo canal da contratação.') : 'Sua conta já está vinculada. Após a aprovação, você terá um assistente para criar o bot, informar seu token e ID do Telegram e solicitar a ativação na Square Cloud.'}</p><p class="note">A mensalidade começa somente após a ativação efetiva do bot.</p><button class="quiet" id="refresh">Atualizar situação</button></section>`}<details class="card contract-details"><summary>Sua contratação · ${a.reference === 'PILOTO INTERNO BLACKOUT / SEM COBRANCA REAL' ? 'Piloto interno sem cobrança' : money(a.price_cents)}</summary><dl><div><dt>Início do ciclo</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div><div><dt>Contato da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Conta</dt><dd>${esc(me!.user.email)}</dd></div></dl></details></main>`,
   );
+  if(me?.role==='platform')document.querySelector('.header-actions')?.insertAdjacentHTML('afterbegin','<a class="button-link quiet" href="#/conta">Administração</a>');
   if (approved && botRuntime?.provisioned) {
     document
       .querySelector('main.merchant-shell')
       ?.insertAdjacentHTML(
         'beforeend',
-        `<section class="card"><span class="eyebrow">Conexão com o Telegram</span><h2>${botRuntime.ownerVerified ? 'Responsável confirmado' : 'Confirme que este bot é seu'}</h2><p>Aplicativo do bot: <b>${botRuntime.online ? 'conectado' : 'aguardando conexão'}</b>.</p>${botRuntime.ownerVerified ? '<p>Abra seu bot e envie <code>/admin</code> para configurar produtos, estoque, banner, cupons e atendimento. Produtos digitais são pagos em Telegram Stars.</p>' : '<p>Confirme sua conta pessoal no bot para liberar o menu administrativo da sua loja.</p><button id="connect-telegram-owner">Confirmar minha conta no Telegram</button>'}</section>`,
+        `<section class="card"><span class="eyebrow">Conexão com o Telegram</span><h2>${botRuntime.ownerVerified ? 'Responsável confirmado' : 'Confirme que este bot é seu'}</h2><p>Aplicativo do bot: <b>${botRuntime.online ? 'conectado' : 'aguardando conexão'}</b>.</p>${botRuntime.ownerVerified ? '<p>Abra seu bot e envie <code>/admin</code> para configurar produtos, estoque, fotos, cupons, suporte, pagamentos e avisos. No bot, você também acompanha pedidos, comprovantes e estatísticas.</p>' : '<p>Confirme sua conta pessoal no bot para liberar o menu administrativo da sua loja.</p><button id="connect-telegram-owner">Confirmar minha conta no Telegram</button>'}</section>`,
       );
   }
 }
 async function load() {
   const route = location.hash.split('?')[0];
-  if (!inviteToken() && !['#/entrar', '#/conta', '#/convite'].includes(route)) {
+  if (!inviteToken() && !['#/entrar', '#/conta', '#/convite','#/minha-loja'].includes(route)) {
     renderLanding();
     return;
   }
@@ -267,7 +269,7 @@ async function load() {
     renderAuth();
     return;
   }
-  if (me.role === 'platform') {
+  if (me.role === 'platform' && route!=='#/minha-loja') {
     if (me.adminMfaRequired) {
       await renderAdminMfa();
       return;

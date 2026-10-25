@@ -1,5 +1,7 @@
 # Estado da implementação — 25/10/2026
 
+Atualização mais recente: personalização de produto/suporte, central de avisos, histórico completo, estatísticas e comprovantes com aprovação/recusa manual foram implementados conforme o pedido posterior da proprietária. Consulte `COMPROVANTES-E-AVISOS.md` para o comportamento atual de Pix/transferência e a limitação de compatibilidade Telegram. A proprietária liberou memória; o aplicativo piloto de 256 MB foi iniciado, a identidade pessoal foi confirmada e o menu `/admin` real foi observado pela proprietária. A suíte tem 34 testes aprovados; a compra/entrega real ainda precisa do roteiro de teste com catálogo e pagamento de demonstração.
+
 ## Infraestrutura e acesso concluídos
 
 Site publicado em https://blackout-create.web.app e API em https://blackout-create-api.squareweb.app. Firebase Spark, Authentication, Firestore privado, identidade mínima do servidor, segredos separados e TOTP da dona foram configurados e verificados. Foram aprovadas 36 verificações online de autorização/convites/isolamento/revogação e nove de confirmação/recuperação de e-mail. Consulte `IMPLANTACAO-2026-10-24.md`.
@@ -16,13 +18,14 @@ A ativação confere runtime provisionado/online, identidade vinculada e aplicat
 
 API e frontend com essa ligação foram publicados. Os 28 testes locais passaram, incluindo nove testes do bot com transporte Telegram simulado. O pacote mínimo do aplicativo foi compilado e sua instalação de dependências validada. Isso ainda não comprova execução com bot e pagamento reais. Leia `BOT-TELEGRAM.md`.
 
-## Necessário para o piloto real
+## Situação do piloto real
 
-1. Deixar pelo menos 256 MB disponíveis na Square Cloud para o aplicativo do lojista. A última consulta mostrou 88 MB livres; faltam 168 MB. Não reduzir aplicativos existentes sem decisão da proprietária.
-2. Cadastrar uma loja piloto e concluir o convite com uma conta de lojista. A dona da plataforma mantém seu papel administrativo.
-3. Criar/escolher o bot no BotFather e informar o token somente no formulário protegido do site. Não enviar segredos pelo chat.
-4. Publicar o pacote do runtime em aplicativo exclusivo e instalar somente sua credencial privada. O upload/provisionamento é uma operação da equipe, ainda sem botão automático no painel.
-5. Confirmar o responsável no Telegram, configurar catálogo/estoque/atendimento e executar o fluxo completo da web até pagamento e entrega no ambiente de teste oficial do Telegram. Não realizar cobrança real para provar o funcionamento.
+1. Aplicativo exclusivo de 256 MB criado após a liberação de memória pela proprietária. Nenhum outro aplicativo foi reduzido pelo assistente.
+2. Loja piloto interna criada na conta já confirmada da dona, identificada como sem cobrança real. Ela mantém seu papel administrativo e acessa a própria loja pela rota `#/minha-loja`.
+3. Bot fornecido pela proprietária validado e iniciado; segredo guardado apenas no armazenamento privado e cifrado no banco. Nenhum token foi enviado ao Git.
+4. Credencial limitada da loja instalada no novo aplicativo. Heartbeat online conferido usando o relógio da API, para evitar falso offline pelo desvio local de horário.
+5. A proprietária confirmou a identidade no Telegram e informou que o `/admin` apareceu. A identidade foi reconferida no Firestore e o piloto liberado para testar pedidos, sem cobrança real.
+6. Próxima validação: configurar produto/estoque, atendimento e instruções de pagamento de teste; simular compra, envio de comprovante, aprovação/recusa, entrega e histórico. Não realizar pagamento real para provar o funcionamento. As funções simuladas já têm cobertura automatizada; o fluxo inteiro com pessoas no Telegram ainda precisa ser observado.
 
 ## Operação ainda necessária antes de atender clientes
 

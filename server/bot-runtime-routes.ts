@@ -32,8 +32,11 @@ export function botRuntimeRouter(bots: BotStore, accounts: AccountService) {
     res.json(await bots.process(accesses.get(req)!, req.body)),
   );
   router.post('/heartbeat', async (req, res) => {
-    z.object({}).strict().parse(req.body);
-    res.json(await bots.tick(accesses.get(req)!));
+    const body = z
+      .object({ botName: z.string().trim().min(1).max(128).optional() })
+      .strict()
+      .parse(req.body);
+    res.json(await bots.tick(accesses.get(req)!, body.botName));
   });
   router.get('/effects', async (req, res) =>
     res.json({ ids: await bots.pending(accesses.get(req)!) }),
@@ -47,7 +50,9 @@ export function botRuntimeRouter(bots: BotStore, accounts: AccountService) {
     const body = z
       .object({
         lease: z.string().regex(/^[A-Za-z0-9_-]{32}$/),
-        result: z.enum(['sent', 'uncertain']),
+        result: z.enum(['sent', 'uncertain', 'failed', 'retry']),
+        errorCode: z.number().int().min(0).max(599).optional(),
+        retryAfter: z.number().int().min(1).max(86400).optional(),
       })
       .strict()
       .parse(req.body);
@@ -56,6 +61,8 @@ export function botRuntimeRouter(bots: BotStore, accounts: AccountService) {
       effectId.parse(req.params.id),
       body.lease,
       body.result,
+      body.errorCode,
+      body.retryAfter,
     );
     res.json({ ok: true });
   });

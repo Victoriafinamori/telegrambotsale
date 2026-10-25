@@ -1,5 +1,7 @@
 # Operação do bot de produtos digitais
 
+Atualização: a proprietária acrescentou foto opcional por produto, suporte completo, avisos, histórico detalhado, estatísticas e comprovantes Pix/transferência com análise manual. Leia [COMPROVANTES-E-AVISOS.md](COMPROVANTES-E-AVISOS.md), que descreve o modo atual e a diferença em relação à regra de Stars para produtos digitais. As seções Stars abaixo continuam como referência do modo automático disponível.
+
 ## Arquitetura
 
 Cada lojista tem um processo Node.js exclusivo na Square Cloud. Ele consulta atualizações diretamente no Telegram por long polling e encaminha os eventos à API central através de uma credencial aleatória exclusiva da loja. Não recebe Firebase Admin, senha Google, chave de criptografia ou acesso a outras lojas. A API confere a credencial e sua geração em cada operação, lê a situação da contratação e persiste os dados no Firestore privado.

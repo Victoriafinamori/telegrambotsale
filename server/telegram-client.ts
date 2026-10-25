@@ -41,7 +41,7 @@ export class TelegramClient {
     if (!response.ok || !data?.ok)
       throw new TelegramError(
         Number(data?.error_code ?? response.status),
-        Math.min(60, Number(data?.parameters?.retry_after ?? 0)),
+        Math.min(86400, Math.max(0, Number(data?.parameters?.retry_after ?? 0))),
       );
     return data.result as T;
   }

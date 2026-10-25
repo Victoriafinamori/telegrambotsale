@@ -1,5 +1,7 @@
 # Blackout Create
 
+Estado atual do bot: [produtos, suporte, comprovantes, aprovação manual, histórico, estatísticas e avisos](docs/COMPROVANTES-E-AVISOS.md). A proprietária escolheu Pix/transferência manual; o modo Stars anterior continua disponível. A documentação registra explicitamente a incompatibilidade do Pix manual com a regra do Telegram para venda digital dentro do aplicativo. Nenhum pagamento ou recebimento bancário é confirmado automaticamente por uma foto.
+
 Primeira etapa real da plataforma: acesso com **Firebase Authentication**, contratação manual por **WhatsApp, Telegram, Discord, site ou outro canal**, convites e aprovação administrativa. A base central pode usar Firestore (`PLATFORM_DATABASE=firestore`), com autorização conferida no servidor. PostgreSQL permanece disponível para compatibilidade e para a demonstração local. Não utiliza o código `DEMO` dos antigos mockups.
 
 Além do acesso e onboarding, o repositório implementa o bot de produtos digitais: catálogo, categorias, carrinho, cupons, estoque cifrado, pagamento em Telegram Stars, entrega, reentrega, reembolso explícito, histórico, lembretes e bloqueio de novas vendas no vencimento/suspensão. Cada lojista usa um processo exclusivo na Square Cloud com credencial limitada à sua loja. A contratação da plataforma continua sendo confirmada manualmente. Aprovar o acesso ou enviar o token não inicia o período mensal nem provisiona sozinho um aplicativo.

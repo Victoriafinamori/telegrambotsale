@@ -54,15 +54,30 @@ export async function dispatchEffects(api: BotRuntimeApi, telegram: TelegramClie
       {},
     );
     if (!effect) continue;
-    let result: 'sent' | 'uncertain' = 'sent';
+    let result: 'sent' | 'uncertain' | 'failed' | 'retry' = 'sent',
+      errorCode: number | undefined,
+      retryAfter: number | undefined;
     try {
       await telegram.call(effect.method, effect.payload);
-    } catch {
-      result = 'uncertain';
+    } catch (e) {
+      if (e instanceof TelegramError) {
+        errorCode = e.code;
+        if (e.code === 429) {
+          result = 'retry';
+          retryAfter = Math.max(1, e.retryAfter);
+        } else result = e.code >= 400 && e.code < 500 ? 'failed' : 'uncertain';
+      } else result = 'uncertain';
     }
     // If this ack cannot reach the API, the persisted sending lease stays blocked.
     // Restart never blindly resends a delivery with an ambiguous result.
-    await api.call(`/effects/${id}/ack`, { lease: effect.lease, result });
+    await api.call(`/effects/${id}/ack`, {
+      lease: effect.lease,
+      result,
+      ...(errorCode !== undefined ? { errorCode } : {}),
+      ...(retryAfter ? { retryAfter } : {}),
+    });
+    if (result === 'retry') break;
+    if (effect.announcement_id) await delay(60);
   }
 }
 export async function processTelegramUpdate(
@@ -72,8 +87,20 @@ export async function processTelegramUpdate(
 ) {
   // Telegram entities, thumbnail metadata and other unused fields can be large.
   // Forward only the fields consumed by the shop, never arbitrary raw metadata.
-  const from = (user: { id: number; is_bot?: boolean } | undefined) =>
-    user ? { id: user.id, is_bot: user.is_bot } : undefined;
+  const from = (
+    user:
+      | { id: number; is_bot?: boolean; first_name?: string; last_name?: string; username?: string }
+      | undefined,
+  ) =>
+    user
+      ? {
+          id: user.id,
+          is_bot: user.is_bot,
+          first_name: user.first_name,
+          last_name: user.last_name,
+          username: user.username,
+        }
+      : undefined;
   const payment = update.message?.successful_payment;
   const refund = update.message?.refunded_payment;
   const pre = update.pre_checkout_query,
@@ -145,7 +172,7 @@ export async function runBot() {
   const cfg = await api.call<{ botId: string; botToken: string; offset: number }>('/config');
   const telegram = new TelegramClient(cfg.botToken);
   cfg.botToken = '';
-  const me = await telegram.call<{ id: number; is_bot: boolean }>('getMe');
+  const me = await telegram.call<{ id: number; is_bot: boolean; first_name?: string }>('getMe');
   if (!me.is_bot || String(me.id) !== cfg.botId)
     throw Error('Bot identity does not match the registered shop');
   const webhook = await telegram.call<{ url: string }>('getWebhookInfo');
@@ -153,31 +180,74 @@ export async function runBot() {
   let running = true,
     offset = cfg.offset,
     lastHealthy = Date.now(),
-    lastHeartbeat = 0;
+    lastMaintenance = Date.now(),
+    lastIdentityCheck = Date.now(),
+    botName = me.first_name,
+    maintenanceFailed = false;
+  const workerAbort = new AbortController();
+  const fatal = (e: unknown) =>
+    (e instanceof RuntimeApiError && [401, 403].includes(e.status)) ||
+    (e instanceof TelegramError && [401, 409].includes(e.code));
   const port = Number(process.env.PORT ?? 80);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error('Invalid HTTP health port');
   const health = createServer((req, res) => {
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Cache-Control', 'no-store');
-    const ok = running && Date.now() - lastHealthy < 90000;
+    const ok = running && Date.now() - lastHealthy < 90000 && Date.now() - lastMaintenance < 120000;
     res.statusCode = req.url === '/health' ? (ok ? 200 : 503) : 404;
     res.end(JSON.stringify(req.url === '/health' ? { ok } : { error: 'not_found' }));
   }).listen(port, '0.0.0.0');
   for (const signal of ['SIGTERM', 'SIGINT'] as const)
     process.once(signal, () => {
       running = false;
+      workerAbort.abort();
       health.close();
     });
   console.log('Blackout bot runtime started.');
+  // Fan-out runs independently: broadcasts must not delay the ten-second
+  // pre-checkout deadline on the incoming Telegram updates loop.
+  const maintenance = (async () => {
+    while (running) {
+      try {
+        if (Date.now() - lastIdentityCheck >= 300000) {
+          const current = await telegram.call<{ id: number; is_bot: boolean; first_name?: string }>(
+            'getMe',
+          );
+          if (!current.is_bot || String(current.id) !== cfg.botId) {
+            maintenanceFailed = true;
+            running = false;
+            break;
+          }
+          botName = current.first_name;
+          lastIdentityCheck = Date.now();
+        }
+        await api.call('/heartbeat', botName ? { botName } : {});
+        const pending = await api.call<{ ids: string[] }>('/effects');
+        await dispatchEffects(api, telegram, pending.ids);
+        lastMaintenance = Date.now();
+      } catch (e) {
+        if (fatal(e)) {
+          maintenanceFailed = true;
+          running = false;
+          break;
+        }
+        console.error(
+          JSON.stringify({
+            event: 'bot_runtime.maintenance_retry',
+            category: e instanceof TelegramError ? 'telegram' : 'api',
+          }),
+        );
+      }
+      try {
+        await delay(45000, undefined, { signal: workerAbort.signal });
+      } catch {
+        break;
+      }
+    }
+  })();
   try {
     while (running) {
       try {
-        if (Date.now() - lastHeartbeat > 45000) {
-          await api.call('/heartbeat', {});
-          const pending = await api.call<{ ids: string[] }>('/effects');
-          await dispatchEffects(api, telegram, pending.ids);
-          lastHeartbeat = Date.now();
-        }
         const updates = await telegram.call<TelegramUpdate[]>('getUpdates', {
           offset,
           limit: 20,
@@ -185,15 +255,13 @@ export async function runBot() {
           allowed_updates: ['message', 'callback_query', 'pre_checkout_query'],
         });
         for (const update of updates) {
+          if (!running) break;
           await processTelegramUpdate(api, telegram, update);
           offset = update.update_id + 1;
         }
         lastHealthy = Date.now();
       } catch (e) {
-        if (
-          (e instanceof RuntimeApiError && [401, 403].includes(e.status)) ||
-          (e instanceof TelegramError && [401, 409].includes(e.code))
-        )
+        if (fatal(e))
           throw Error('Runtime authorization or bot ownership changed; operation stopped');
         console.error(
           JSON.stringify({
@@ -205,8 +273,12 @@ export async function runBot() {
       }
     }
   } finally {
+    running = false;
+    workerAbort.abort();
+    await maintenance;
     health.close();
   }
+  if (maintenanceFailed) throw Error('Runtime authorization or identity changed');
 }
 // Importing the runner for integration tests must never start a bot or open a port.
 if (process.argv[1]?.replaceAll('\\', '/').match(/\/bot-runner\.(?:js|ts)$/)) {

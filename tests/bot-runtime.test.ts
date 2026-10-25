@@ -22,6 +22,7 @@ async function fixture(
   existing?: MemoryDocuments,
   name = 'merchant',
   botId = '123456789',
+  paymentMode: 'manual' | 'stars' = 'stars',
 ) {
   let now = new Date('2026-10-25T12:00:00Z'),
     seq = 1;
@@ -65,6 +66,15 @@ async function fixture(
   const bots = new BotStore(store, key, () => now),
     runtimeKey = await bots.provision(a.id, 'square-app-' + name),
     auth = await bots.authenticate(runtimeKey);
+  await store.transaction(async (tx) => {
+    const shop = (await tx.get('bot_shops/' + a.id))!;
+    tx.set('bot_shops/' + a.id, {
+      ...shop,
+      payment_mode: paymentMode,
+      payment_instructions:
+        paymentMode === 'manual' ? 'Dados de teste — não realizar pagamento real' : '',
+    });
+  });
   const message = (user: number, text: string): TelegramUpdate => ({
     update_id: seq++,
     message: { message_id: seq, from: { id: user }, chat: { id: user, type: 'private' }, text },
@@ -347,7 +357,8 @@ test('HTTP integration: web merchant ownership -> scoped runtime -> Telegram tra
   };
   const provider = {
     verifyIdToken: async (token: string) => {
-      if(token==='test-admin')return {...f.identity,uid:'admin',email:'admin@example.test'};
+      if (token === 'test-admin')
+        return { ...f.identity, uid: 'admin', email: 'admin@example.test' };
       if (token !== 'test-merchant') throw Error();
       return f.identity;
     },
@@ -363,9 +374,23 @@ test('HTTP integration: web merchant ownership -> scoped runtime -> Telegram tra
   await once(server, 'listening');
   const origin = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
   try {
-    const initialSetup=(await f.p.onboarding.read(f.a.id))!;
-    const activate=()=>fetch(origin+'/api/admin/accounts/'+f.a.id+'/bot-setup/activate',{method:'POST',headers:{Authorization:'Bearer test-admin',Origin:config.APP_ORIGIN,'Content-Type':'application/json'},body:JSON.stringify({revision:initialSetup.revision,deploymentReference:'square-app-merchant',botTested:true,ownerIdConfirmed:true})});
-    assert.equal((await activate()).status,409);
+    const initialSetup = (await f.p.onboarding.read(f.a.id))!;
+    const activate = () =>
+      fetch(origin + '/api/admin/accounts/' + f.a.id + '/bot-setup/activate', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer test-admin',
+          Origin: config.APP_ORIGIN,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          revision: initialSetup.revision,
+          deploymentReference: 'square-app-merchant',
+          botTested: true,
+          ownerIdConfirmed: true,
+        }),
+      });
+    assert.equal((await activate()).status, 409);
     const api = new BotRuntimeApi(origin, f.runtimeKey, fetch, true),
       captured: { method: string; payload: any }[] = [];
     const telegram = new TelegramClient('123456789:' + 'A'.repeat(35), (async (url, opts) => {
@@ -400,7 +425,7 @@ test('HTTP integration: web merchant ownership -> scoped runtime -> Telegram tra
       telegram,
       f.message(111111111, '/start ' + new URL(link.url).searchParams.get('start')),
     );
-    assert.equal((await activate()).status,200);
+    assert.equal((await activate()).status, 200);
     const pid = await f.product(),
       oid = (await f.order(222222222, pid))!;
     await processTelegramUpdate(api, telegram, f.payment(222222222, oid));
@@ -476,12 +501,295 @@ test('File inventory is encrypted, delivered as a document, and refund cancels p
   const result = await f.bots.process(f.auth, f.payment(222222222, oid));
   const raw = await f.store.list(`bot_shops/${f.a.id}/effects`, { limit: 100 });
   assert(!JSON.stringify(raw).includes('PRIVATE-FILE-ID'));
-  const fileDelivery=await f.effects(result.effectIds);
-  assert(fileDelivery.some(e=>e.method==='sendDocument'&&e.payload.document==='PRIVATE-FILE-ID'));
-  const second=(await f.order(222222222,pid))!;
-  const secondResult=await f.bots.process(f.auth,f.payment(222222222,second));
+  const fileDelivery = await f.effects(result.effectIds);
+  assert(
+    fileDelivery.some(
+      (e) => e.method === 'sendDocument' && e.payload.document === 'PRIVATE-FILE-ID',
+    ),
+  );
+  const second = (await f.order(222222222, pid))!;
+  const secondResult = await f.bots.process(f.auth, f.payment(222222222, second));
   await f.click(111111111, 'admin:refund:' + second);
   await f.click(111111111, 'admin:dorefund:' + second);
   const delivered = await f.effects(secondResult.effectIds);
   assert(!delivered.some((e) => e.delivery));
+});
+
+type BotFixture = Awaited<ReturnType<typeof fixture>>;
+async function photo(f: BotFixture, user: number, fileId: string) {
+  const update = f.message(user, '');
+  delete update.message!.text;
+  update.message!.photo = [{ file_id: fileId }];
+  return f.effects((await f.bots.process(f.auth, update)).effectIds);
+}
+async function manualCheckout(f: BotFixture, user: number, pid: string, name = 'Ana Compradora') {
+  await f.click(user, 'add:' + pid);
+  const update = f.callback(user, 'checkout');
+  update.callback_query!.from.first_name = name;
+  update.callback_query!.from.username = 'ana_cliente';
+  await f.effects((await f.bots.process(f.auth, update)).effectIds);
+  return (await f.store.get(`bot_shops/${f.a.id}/customers/${user}`))!.orders[0] as string;
+}
+async function notice(f: BotFixture, text = 'Novidades da loja') {
+  await f.click(111111111, 'admin:notice-new');
+  await f.send(111111111, text);
+  await f.click(111111111, 'admin:notice-no-photo');
+  return (await f.store.get('bot_shops/' + f.a.id))!.notice_recent[0] as string;
+}
+
+test('Product photo is optional, editable and removable; support has independent name, phone and HTTPS link; BotFather name is synchronized', async () => {
+  const f = await fixture(),
+    pid = await f.product();
+  let view = await f.click(222222222, 'p:' + pid);
+  assert(
+    view.some(
+      (e) => e.method === 'sendMessage' && String(e.payload.text).includes('Arquivo de teste'),
+    ),
+  );
+  await f.click(111111111, 'admin:productbanner:' + pid);
+  await photo(f, 111111111, 'PRODUCT-BANNER');
+  view = await f.click(222222222, 'p:' + pid);
+  assert(
+    view.some(
+      (e) =>
+        e.method === 'sendPhoto' &&
+        e.payload.photo === 'PRODUCT-BANNER' &&
+        String(e.payload.caption).includes('10 ⭐') &&
+        Boolean(e.payload.reply_markup),
+    ),
+  );
+  await f.click(111111111, 'admin:productbanner:' + pid);
+  await f.send(111111111, 'remover');
+  view = await f.click(222222222, 'p:' + pid);
+  assert(!view.some((e) => e.method === 'sendPhoto'));
+  for (const [field, value] of [
+    ['name', 'Atendimento Blackout'],
+    ['phone', '+55 (11) 99999-0000'],
+    ['url', 'https://wa.me/5511999990000'],
+  ]) {
+    await f.click(111111111, 'admin:support-' + field);
+    await f.send(111111111, value);
+  }
+  const support = await f.click(222222222, 'support'),
+    response = support.find((e) => e.method === 'sendMessage')!;
+  assert.match(String(response.payload.text), /Atendimento Blackout/);
+  assert.match(String(response.payload.text), /99999-0000/);
+  assert(JSON.stringify(response.payload.reply_markup).includes('https://wa.me/5511999990000'));
+  await f.click(111111111, 'admin:support-url');
+  await f.send(111111111, 'javascript:alert(1)');
+  assert.equal(
+    (await f.store.get('bot_shops/' + f.a.id))!.support_url,
+    'https://wa.me/5511999990000',
+  );
+  await f.bots.tick(f.auth, 'Nome configurado no BotFather');
+  const home = await f.send(222222222, '/start');
+  assert(home.some((e) => String(e.payload.text).includes('Nome configurado no BotFather')));
+});
+
+test('Manual receipt is encrypted, reaches the owner with customer and items, and approval delivers once with correct buyer statistics', async () => {
+  const f = await fixture(true, undefined, 'merchant', '123456789', 'manual'),
+    pid = await f.product(['CODE-A', 'CODE-B']);
+  const oid = await manualCheckout(f, 222222222, pid),
+    orderPath = `bot_shops/${f.a.id}/orders/${oid}`;
+  const before = await f.click(222222222, 'order:' + oid);
+  assert(
+    before.some(
+      (e) =>
+        String(e.payload.text).includes('Arquivo de teste') &&
+        String(e.payload.text).includes('Aguardando pagamento') &&
+        String(e.payload.text).includes('10,00'),
+    ),
+  );
+  assert(!before.some((e) => e.delivery));
+  await f.click(222222222, 'receipt:' + oid);
+  const forwarded = await photo(f, 222222222, 'SECRET-RECEIPT');
+  assert(
+    forwarded.some(
+      (e) =>
+        e.method === 'sendPhoto' &&
+        e.payload.chat_id === '111111111' &&
+        e.payload.photo === 'SECRET-RECEIPT',
+    ),
+  );
+  assert(
+    forwarded.some(
+      (e) =>
+        e.payload.chat_id === '111111111' &&
+        String(e.payload.text).includes('Ana Compradora') &&
+        String(e.payload.text).includes('Arquivo de teste'),
+    ),
+  );
+  assert.equal((await f.store.get(orderPath))!.status, 'awaiting_review');
+  assert(!JSON.stringify(await f.store.get(orderPath)).includes('SECRET-RECEIPT'));
+  const unauthorized = await f.click(333333333, `admin:review-approve:${oid}:1`);
+  assert(!unauthorized.some((e) => e.delivery));
+  assert.equal((await f.store.get(orderPath))!.status, 'awaiting_review');
+  const approved = await f.click(111111111, `admin:review-approve:${oid}:1`);
+  assert(approved.some((e) => e.delivery && String(e.payload.text).includes('CODE-A')));
+  assert.equal((await f.store.get(orderPath))!.status, 'delivered');
+  assert(!(await f.click(111111111, `admin:review-approve:${oid}:1`)).some((e) => e.delivery));
+  const shop = (await f.store.get('bot_shops/' + f.a.id))!;
+  assert.equal(shop.stats.buyers, 1);
+  assert.equal(shop.stats.paid_orders, 1);
+  assert.equal(shop.stats.delivered_orders, 1);
+  assert.equal(shop.stats.gross_brl, 1000);
+  assert.deepEqual(shop.review_orders, []);
+  const buyer = await f.click(111111111, 'admin:buyer:222222222');
+  assert(
+    buyer.some(
+      (e) =>
+        String(e.payload.text).includes('Ana Compradora') &&
+        String(e.payload.text).includes('Compras aprovadas: 1'),
+    ),
+  );
+});
+
+test('Replaced receipts reject stale approvals; owner denial requires a reason and releases inventory without delivery', async () => {
+  const f = await fixture(true, undefined, 'merchant', '123456789', 'manual'),
+    pid = await f.product(['ONLY-CODE']),
+    oid = await manualCheckout(f, 222222222, pid);
+  await f.click(333333333, 'receipt:' + oid);
+  assert.equal((await f.store.get(`bot_shops/${f.a.id}/customers/333333333`))!.session, null);
+  await f.click(222222222, 'receipt:' + oid);
+  await photo(f, 222222222, 'OLD-RECEIPT');
+  await f.click(222222222, 'receipt:' + oid);
+  await photo(f, 222222222, 'NEW-RECEIPT');
+  assert(!(await f.click(111111111, `admin:review-approve:${oid}:1`)).some((e) => e.delivery));
+  await f.click(111111111, `admin:review-reject:${oid}:2`);
+  const denied = await f.send(111111111, 'Pagamento não localizado no extrato');
+  assert(
+    denied.some(
+      (e) =>
+        e.payload.chat_id === '222222222' &&
+        String(e.payload.text).includes('Pagamento não localizado'),
+    ),
+  );
+  assert(!denied.some((e) => e.delivery));
+  const order = (await f.store.get(`bot_shops/${f.a.id}/orders/${oid}`))!;
+  assert.equal(order.status, 'rejected');
+  assert.equal(order.reviewed_by, '111111111');
+  assert.equal((await f.store.get(`bot_shops/${f.a.id}/products/${pid}`))!.units.length, 1);
+  const summary = await f.click(111111111, 'admin:stats');
+  assert(summary.some((e) => String(e.payload.text).includes('Recusados: 1')));
+  const buyerView = await f.click(222222222, 'order:' + oid);
+  assert(
+    buyerView.some(
+      (e) =>
+        String(e.payload.text).includes('Pagamento recusado') &&
+        String(e.payload.text).includes('Arquivo de teste'),
+    ),
+  );
+});
+
+test('Full purchase history paginates beyond recent orders and stays private to each buyer', async () => {
+  const f = await fixture();
+  await f.store.transaction(async (tx) => {
+    await tx.get('bot_shops/' + f.a.id);
+    for (let i = 1; i <= 32; i++) {
+      const id = i.toString(16).padStart(16, '0');
+      tx.set(`bot_shops/${f.a.id}/orders/${id}`, {
+        id,
+        buyer_id: '222222222',
+        items: [{ title: 'Produto histórico ' + i, quantity: 1, product_id: 'history', units: [] }],
+        total: 100,
+        currency: 'BRL',
+        status: 'delivered',
+        coupon: '',
+        created_at: new Date(),
+        expires_at: new Date(),
+      });
+    }
+    tx.set(`bot_shops/${f.a.id}/orders/ffffffffffffffff`, {
+      id: 'ffffffffffffffff',
+      buyer_id: '333333333',
+      items: [],
+      total: 100,
+      status: 'delivered',
+      created_at: new Date(),
+    });
+  });
+  const seen = new Set<string>();
+  let cursor = '';
+  for (let page = 0; page < 3; page++) {
+    const result = await f.click(222222222, 'history:' + cursor);
+    for (const effect of result) {
+      const markup = effect.payload.reply_markup as
+        | { inline_keyboard?: { callback_data?: string }[][] }
+        | undefined;
+      for (const row of markup?.inline_keyboard ?? [])
+        for (const button of row) {
+          if (button.callback_data?.startsWith('order:')) seen.add(button.callback_data.slice(6));
+          if (button.callback_data?.startsWith('history:')) cursor = button.callback_data.slice(8);
+        }
+    }
+  }
+  assert.equal(seen.size, 32);
+  assert(!seen.has('ffffffffffffffff'));
+  const invalid = await f.click(222222222, 'history:../../private');
+  assert(invalid.some((e) => String(e.payload.text).includes('Página inválida')));
+});
+
+test('Announcements require owner confirmation, page through subscribers exactly once, persist across restart and stay within the store', async () => {
+  const f = await fixture();
+  for (let i = 0; i < 25; i++) await f.click(200000000 + i, 'notices:subscribe');
+  await f.store.transaction(async (tx) => {
+    await tx.get('bot_shops/other');
+    tx.set('bot_shops/other/subscribers/999999999', {
+      id: '999999999',
+      enabled: true,
+      subscribed_at: new Date(0),
+    });
+  });
+  const nid = await notice(f, 'Novidade privada da loja');
+  assert.equal((await f.store.get(`bot_shops/${f.a.id}/announcements/${nid}`))!.status, 'draft');
+  await f.click(222222222, 'admin:notice-send:' + nid);
+  assert.equal((await f.store.get(`bot_shops/${f.a.id}/announcements/${nid}`))!.status, 'draft');
+  await f.click(111111111, 'admin:notice-send:' + nid);
+  await f.click(111111111, 'admin:notice-send:' + nid);
+  const first = await Promise.all([f.bots.pending(f.auth), f.bots.pending(f.auth)]);
+  const deliveries = await f.effects([...new Set(first.flat())]);
+  const restarted = new BotStore(f.store, f.key);
+  const second = await restarted.pending(f.auth);
+  deliveries.push(...(await f.effects(second)));
+  const sent = deliveries.filter((e) => e.announcement_id === nid);
+  assert.equal(sent.length, 25);
+  assert.equal(new Set(sent.map((e) => e.payload.chat_id)).size, 25);
+  assert(!sent.some((e) => e.payload.chat_id === '999999999'));
+  const record = (await f.store.get(`bot_shops/${f.a.id}/announcements/${nid}`))!;
+  assert.equal(record.status, 'completed');
+  assert.equal(record.sent, 25);
+  const raw = await f.store.list(`bot_shops/${f.a.id}/effects`, { limit: 500 });
+  assert(!JSON.stringify(raw).includes('Novidade privada da loja'));
+});
+
+test('Announcement unsubscribe and cancellation stop queued messages; 429 can retry and blocked recipients are disabled', async () => {
+  const f = await fixture();
+  await f.click(222222222, 'notices:subscribe');
+  await f.click(333333333, 'notices:subscribe');
+  const nid = await notice(f);
+  await f.click(111111111, 'admin:notice-send:' + nid);
+  await f.bots.pending(f.auth);
+  await f.click(222222222, 'notices:unsubscribe');
+  assert.equal(await f.bots.claim(f.auth, `n${nid}_222222222`), null);
+  const id = `n${nid}_333333333`,
+    effect = await f.bots.claim(f.auth, id);
+  assert(effect);
+  await f.bots.acknowledge(f.auth, id, effect.lease, 'retry', 429, 30);
+  assert.equal(await f.bots.claim(f.auth, id), null);
+  f.advance(31000);
+  const retry = await f.bots.claim(f.auth, id);
+  assert(retry);
+  await f.bots.acknowledge(f.auth, id, retry.lease, 'failed', 403);
+  const record = (await f.store.get(`bot_shops/${f.a.id}/announcements/${nid}`))!;
+  assert.equal(record.failed, 1);
+  assert.equal(record.skipped, 1);
+  assert.equal(record.uncertain, 0);
+  assert.equal(record.status, 'completed');
+  assert.equal((await f.store.get(`bot_shops/${f.a.id}/subscribers/333333333`))!.enabled, false);
+  await f.click(444444444, 'notices:subscribe');
+  const cancelled = await notice(f, 'Aviso cancelado');
+  await f.click(111111111, 'admin:notice-send:' + cancelled);
+  await f.bots.pending(f.auth);
+  await f.click(111111111, 'admin:notice-cancel:' + cancelled);
+  assert.equal(await f.bots.claim(f.auth, `n${cancelled}_444444444`), null);
 });

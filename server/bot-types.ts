@@ -4,6 +4,8 @@ const telegramUser = z.object({
   id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   is_bot: z.boolean().optional(),
   first_name: z.string().max(128).optional(),
+  last_name: z.string().max(128).optional(),
+  username: z.string().max(64).optional(),
 });
 const file = z.object({ file_id: z.string().min(1).max(512) });
 export const telegramUpdate = z.object({
@@ -65,10 +67,12 @@ export interface BotEffect {
   id: string;
   method: TelegramMethod;
   payload: Record<string, unknown>;
-  status: 'pending' | 'sending' | 'sent' | 'uncertain';
+  status: 'pending' | 'sending' | 'sent' | 'uncertain' | 'failed' | 'skipped';
   order_id?: string;
   delivery?: boolean;
   lease?: string;
+  announcement_id?: string;
+  recipient_id?: string;
 }
 export interface StockUnit {
   id: string;
@@ -82,11 +86,15 @@ export interface Product {
   price: number;
   enabled: boolean;
   stock: number;
+  banner?: string;
 }
 export interface Shop {
   title: string;
   welcome: string;
   support: string;
+  support_name?: string;
+  support_phone?: string;
+  support_url?: string;
   banner: string;
   owner_id: string | null;
   owner_bot_id: string | null;
@@ -94,10 +102,45 @@ export interface Shop {
   coupons: Record<string, { percent: number; limit: number; used: number }>;
   recent_orders: string[];
   open_orders: string[];
+  notice_subscribers?: number;
+  notice_recent?: string[];
+  notice_active?: string | null;
+  payment_mode?: 'manual' | 'stars';
+  payment_instructions?: string;
+  review_orders?: string[];
+  stats?: ShopStats;
+}
+export interface ShopStats {
+  orders: number;
+  paid_orders: number;
+  delivered_orders: number;
+  rejected_orders: number;
+  buyers: number;
+  gross_brl: number;
+  gross_stars: number;
+}
+export interface Announcement {
+  id: string;
+  text: string;
+  photo: string;
+  status: 'draft' | 'queued' | 'sending' | 'completed' | 'cancelled';
+  created_at: Date;
+  audience_at: Date | null;
+  cursor: string;
+  scan_complete: boolean;
+  queued: number;
+  sent: number;
+  failed: number;
+  uncertain: number;
+  skipped: number;
 }
 export interface Order {
   id: string;
   buyer_id: string;
+  buyer_name?: string;
+  buyer_username?: string;
+  currency?: 'BRL' | 'XTR';
+  payment_method?: 'manual' | 'stars';
   items: { product_id: string; title: string; quantity: number; units: StockUnit[] }[];
   total: number;
   coupon: string;
@@ -106,6 +149,8 @@ export interface Order {
   status:
     | 'awaiting_payment'
     | 'precheckout'
+    | 'awaiting_review'
+    | 'rejected'
     | 'paid'
     | 'delivered'
     | 'cancelled'
@@ -115,6 +160,12 @@ export interface Order {
     | 'refunded';
   charge_id?: string;
   delivery_effects?: string[];
+  receipt_ciphertext?: string;
+  receipt_revision?: number;
+  reviewed_at?: Date;
+  reviewed_by?: string;
+  rejection_reason?: string;
+  fulfilled_at?: Date;
 }
 export interface RuntimeAccess {
   accountId: string;

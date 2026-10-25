@@ -32,7 +32,13 @@ export class MemoryDocuments implements DocumentStore {
   }
   async list(
     collection: string,
-    options: { offset?: number; limit: number; orderBy?: string; equals?: [string, unknown] },
+    options: {
+      offset?: number;
+      limit: number;
+      orderBy?: string;
+      equals?: [string, unknown];
+      afterId?: string;
+    },
   ) {
     let values = [...this.records]
       .filter(
@@ -44,6 +50,10 @@ export class MemoryDocuments implements DocumentStore {
     if (options.equals) values = values.filter((d) => d[options.equals![0]] === options.equals![1]);
     if (options.orderBy)
       values.sort((a, b) => Number(b[options.orderBy!]) - Number(a[options.orderBy!]));
+    if (options.afterId !== undefined) {
+      values.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      values = values.filter((v) => v.id > options.afterId!);
+    }
     return values.slice(options.offset || 0, (options.offset || 0) + options.limit);
   }
 }

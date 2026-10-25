@@ -5,6 +5,23 @@ import { SecretVault } from './secret-vault.js';
 import { HttpError } from './types.js';
 import { nextBillingMonth } from './billing-period.js';
 import {
+  botRoot as root,
+  botPath as path,
+  botButtons as buttons,
+  botTransaction as buffered,
+} from './bot-data.js';
+import { BotAnnouncements } from './bot-announcements.js';
+import {
+  productText,
+  supportDetails,
+  supportUrl,
+  hasSupport,
+  money,
+  parsePrice,
+} from './bot-appearance.js';
+import { BotReceipts } from './bot-receipts.js';
+import { stats, orderSummary, orderLabels, recordPaid, buyerSummary } from './bot-orders.js';
+import {
   telegramUpdate,
   type TelegramUpdate,
   type RuntimeAccess,
@@ -16,48 +33,26 @@ import {
   type TelegramMethod,
 } from './bot-types.js';
 
-const root = (id: string) => 'bot_shops/' + id;
-const path = (id: string, kind: string, key: string) =>
-  root(id) +
-  '/' +
-  kind +
-  '/' +
-  (/^[A-Za-z0-9_-]{1,128}$/.test(key) ? key : 'invalid_' + tokenHash(key));
 const unavailable = () =>
   new HttpError(403, 'BOT_RUNTIME_UNAVAILABLE', 'A operação deste bot está indisponível.');
-const isoMoney = (amount: number) => `${amount} ⭐`;
-const buttons = (rows: [string, string][][]) => ({
-  inline_keyboard: rows.map((row) => row.map(([text, callback_data]) => ({ text, callback_data }))),
-});
-const isOpen = (order: Order) => ['awaiting_payment', 'precheckout'].includes(order.status);
-
-// Writes are deferred until every read finishes: Firestore does not allow reads after writes.
-async function buffered<T>(store: DocumentStore, work: (tx: DocumentTransaction) => Promise<T>) {
-  return store.transaction(async (raw) => {
-    const writes = new Map<string, Doc | null>();
-    const tx: DocumentTransaction = {
-      get: async (key) => (writes.has(key) ? structuredClone(writes.get(key)!) : raw.get(key)),
-      set: (key, value) => {
-        writes.set(key, structuredClone(value));
-      },
-      delete: (key) => {
-        writes.set(key, null);
-      },
-    };
-    const result = await work(tx);
-    for (const [key, value] of writes) value === null ? raw.delete(key) : raw.set(key, value);
-    return result;
-  });
-}
+const isoMoney = money;
+const isOpen = (order: Order) =>
+  ['awaiting_payment', 'precheckout', 'awaiting_review'].includes(order.status);
 
 export class BotStore {
   private vault: SecretVault;
+  private notices: BotAnnouncements;
+  private receipts: BotReceipts;
   constructor(
     readonly store: DocumentStore,
     key: string,
     readonly now: () => Date = () => new Date(),
   ) {
     this.vault = new SecretVault(key);
+    this.receipts = new BotReceipts(this.vault);
+    this.notices = new BotAnnouncements(store, this.vault, now, (tx, auth) =>
+      this.access(tx, auth),
+    );
   }
 
   private async lifecycle(tx: DocumentTransaction, id: string) {
@@ -79,6 +74,18 @@ export class BotStore {
       coupons: {},
       recent_orders: [],
       open_orders: [],
+      payment_mode: 'manual',
+      payment_instructions: '',
+      review_orders: [],
+      stats: {
+        orders: 0,
+        paid_orders: 0,
+        delivered_orders: 0,
+        rejected_orders: 0,
+        buyers: 0,
+        gross_brl: 0,
+        gross_stars: 0,
+      },
     };
   }
 
@@ -314,6 +321,12 @@ export class BotStore {
             ['📦 Meus pedidos', 'orders'],
             ['💬 Suporte', 'support'],
           ],
+          [
+            [
+              customer.notices ? '🔕 Parar avisos' : '🔔 Receber avisos',
+              customer.notices ? 'notices:unsubscribe' : 'notices:subscribe',
+            ],
+          ],
           ...(owner ? [[['⚙️ Administrar', 'admin']] as [string, string][]] : []),
         ]);
       const adminMenu = () =>
@@ -334,9 +347,20 @@ export class BotStore {
             ['💬 Suporte', 'admin:support'],
             ['📋 Pedidos', 'admin:orders'],
           ],
-          [['🏪 Abrir loja', 'catalog']],
+          [
+            ['🧾 Pagamentos pendentes', 'admin:pending'],
+            ['📊 Estatísticas', 'admin:stats'],
+          ],
+          [
+            ['💳 Pagamentos', 'admin:payment'],
+            ['👥 Compradores', 'admin:buyers:'],
+          ],
+          [
+            ['📣 Avisos', 'admin:notices'],
+            ['🏪 Abrir loja', 'catalog'],
+          ],
         ]);
-      const release = async (order: Order, status: 'expired' | 'cancelled') => {
+      const release = async (order: Order, status: 'expired' | 'cancelled' | 'rejected') => {
         for (const item of order.items) {
           const p = await tx.get(productDoc(item.product_id));
           if (!p) throw Error('Reserved product missing');
@@ -350,6 +374,7 @@ export class BotStore {
         order.items = order.items.map((v) => ({ ...v, units: [] }));
         tx.set(orderDoc(order.id), order);
         shop.open_orders = shop.open_orders.filter((v) => v !== order.id);
+        shop.review_orders = (shop.review_orders ?? []).filter((v) => v !== order.id);
       };
       // At most 25 simultaneous reservations per shop; expired stock is reclaimed transactionally.
       for (const oid of [...shop.open_orders]) {
@@ -392,11 +417,19 @@ export class BotStore {
           }
         order.delivery_effects = ids;
       };
-      const showProduct = (p: Product) =>
-        say(
-          `${p.title}\n${p.description}\n\nPreço: ${isoMoney(p.price)}\nDisponíveis: ${p.stock}`,
-          buttons([[['Adicionar ao carrinho', 'add:' + p.id]], [['Voltar', 'catalog']]]),
-        );
+      const showProduct = (p: Product) => {
+        const reply_markup = buttons([
+          [['Adicionar ao carrinho', 'add:' + p.id]],
+          [['Voltar', 'catalog']],
+        ]);
+        effect(p.banner ? 'sendPhoto' : 'sendMessage', {
+          chat_id: chatId,
+          ...(p.banner
+            ? { photo: p.banner, caption: productText(p, shop) }
+            : { text: productText(p, shop) }),
+          reply_markup,
+        });
+      };
       const catalog = (category?: string) => {
         const categories = [
           ...new Set(shop.products.filter((p) => p.enabled).map((p) => p.category)),
@@ -420,10 +453,12 @@ export class BotStore {
           buttons([
             ...available.map(
               (p) =>
-                [[`${p.title} · ${isoMoney(p.price)} · ${p.stock} un.`, 'p:' + p.id]] as [
-                  string,
-                  string,
-                ][],
+                [
+                  [
+                    `${p.title} · ${isoMoney(p.price, shop.payment_mode === 'manual' ? 'BRL' : 'XTR')} · ${p.stock} un.`,
+                    'p:' + p.id,
+                  ],
+                ] as [string, string][],
             ),
             [
               ['🛒 Carrinho', 'cart'],
@@ -436,7 +471,7 @@ export class BotStore {
         const lines = customer.items.map((item: any) => {
           const p = shop.products.find((v) => v.id === item.id);
           return p
-            ? `${item.quantity} × ${p.title} — ${isoMoney(p.price * item.quantity)}`
+            ? `${item.quantity} × ${p.title} — ${isoMoney(p.price * item.quantity, shop.payment_mode === 'manual' ? 'BRL' : 'XTR')}`
             : 'Produto indisponível';
         });
         say(
@@ -453,7 +488,12 @@ export class BotStore {
                   ],
                 ] as [string, string][],
             ),
-            [['Pagar com Stars', 'checkout']],
+            [
+              [
+                shop.payment_mode === 'manual' ? 'Pagar por Pix/transferência' : 'Pagar com Stars',
+                'checkout',
+              ],
+            ],
             [
               ['Inserir cupom', 'coupon'],
               ['Esvaziar', 'clear'],
@@ -462,21 +502,60 @@ export class BotStore {
           ]),
         );
       };
-      const listOrders = async (all = false) => {
+      const listOrders = async (all = false, cursor?: string, pendingOnly = false) => {
+        if (cursor !== undefined && !/^[a-f0-9]{0,16}$/.test(cursor)) {
+          say('Página inválida. Abra Meus pedidos novamente.');
+          return;
+        }
         const rows: [string, string][][] = [];
-        for (const oid of (all ? shop.recent_orders : customer.orders).slice(0, 12)) {
+        const page =
+          cursor !== undefined
+            ? await this.store.list(root(id) + '/orders', {
+                limit: 13,
+                afterId: cursor,
+                ...(!all ? { equals: ['buyer_id', userId] as [string, unknown] } : {}),
+              })
+            : null;
+        const ids = page
+          ? page.slice(0, 12).map((v) => v.id as string)
+          : (pendingOnly
+              ? (shop.review_orders ?? [])
+              : all
+                ? shop.recent_orders
+                : customer.orders
+            ).slice(0, 12);
+        for (const oid of ids) {
           const o = (await tx.get(orderDoc(oid))) as Order | null;
           if (o && (all || o.buyer_id === userId))
             rows.push([
               [
-                `${o.id} · ${o.status} · ${isoMoney(o.total)}`,
+                `${o.items[0]?.title ?? 'Pedido'} · ${orderLabels[o.status]} · ${isoMoney(o.total, o.currency)}`,
                 `${all ? 'admin:order:' : 'order:'}${o.id}`,
               ],
             ]);
         }
         say(
           rows.length ? 'Pedidos recentes:' : 'Nenhum pedido encontrado.',
-          buttons([...rows, [['Voltar', all ? 'admin' : 'home']]]),
+          buttons([
+            ...rows,
+            ...(page && page.length > 12
+              ? [
+                  [['Mais pedidos', `${all ? 'admin:history' : 'history'}:${page[11].id}`]] as [
+                    string,
+                    string,
+                  ][],
+                ]
+              : []),
+            ...(cursor === undefined && !pendingOnly
+              ? [
+                  [['Histórico completo', all ? 'admin:history:' : 'history:']] as [
+                    string,
+                    string,
+                  ][],
+                ]
+              : []),
+            [['Voltar', all ? 'admin' : 'home']],
+          ]),
         );
       };
 
@@ -496,6 +575,7 @@ export class BotStore {
           selling &&
             order &&
             isOpen(order) &&
+            order.payment_method !== 'manual' &&
             order.buyer_id === userId &&
             pre.currency === 'XTR' &&
             pre.total_amount === order.total &&
@@ -526,11 +606,14 @@ export class BotStore {
             order &&
             order.buyer_id === userId &&
             payment.currency === 'XTR' &&
+            order.currency !== 'BRL' &&
+            order.payment_method !== 'manual' &&
             payment.total_amount === order.total &&
             ['awaiting_payment', 'precheckout'].includes(order.status)
           ) {
             order.status = 'paid';
             order.charge_id = payment.telegram_payment_charge_id;
+            await recordPaid(tx, id, shop, order, this.now());
             pendingDelivery(order);
             tx.set(orderDoc(order.id), order);
             shop.open_orders = shop.open_orders.filter((v) => v !== order.id);
@@ -545,6 +628,8 @@ export class BotStore {
               order &&
               order.buyer_id === userId &&
               payment.currency === 'XTR' &&
+              order.currency !== 'BRL' &&
+              order.payment_method !== 'manual' &&
               payment.total_amount === order.total &&
               !order.charge_id
             ) {
@@ -598,7 +683,26 @@ export class BotStore {
         const text = msg?.text?.trim() ?? '',
           cmd = callback?.data ?? (text.startsWith('/') ? text.split(/\s/)[0].split('@')[0] : ''),
           argument = text.split(/\s+/).slice(1).join(' ');
-        if (cmd === '/start' && /^owner_[A-Za-z0-9_-]{32}$/.test(argument)) {
+        const receiptContext = {
+          tx,
+          id,
+          shop,
+          customer,
+          userId,
+          owner,
+          operational,
+          now: this.now(),
+          message: msg,
+          say,
+          emit: (method: TelegramMethod, payload: Record<string, unknown>) =>
+            effect(method, payload),
+          deliver: pendingDelivery,
+          release,
+          audit: (action: string) => this.audit(tx, id, action, userId),
+        };
+        if (await this.receipts.action(receiptContext, cmd)) {
+          saveCustomer();
+        } else if (cmd === '/start' && /^owner_[A-Za-z0-9_-]{32}$/.test(argument)) {
           const link = await tx.get(path(id, 'private', 'owner_link'));
           if (
             operational &&
@@ -620,23 +724,51 @@ export class BotStore {
           customer.session = null;
           saveCustomer();
           say('Operação cancelada.', owner ? adminMenu() : menu());
-        } else if (cmd === '/paysupport' || cmd === '/suporte' || cmd === 'support') {
+        } else if (
+          cmd === 'notices:subscribe' ||
+          cmd === 'notices:unsubscribe' ||
+          cmd === '/pararavisos'
+        ) {
+          const enabled = cmd === 'notices:subscribe';
+          await this.notices.subscribe(tx, id, shop, userId, enabled);
+          customer.notices = enabled;
+          saveCustomer();
           say(
-            shop.support
-              ? `Atendimento: ${shop.support}`
-              : 'Atendimento ainda não configurado pelo lojista. Guarde o número do seu pedido.',
+            enabled
+              ? 'Você ativou os avisos desta loja. Pode parar a qualquer momento pelo menu ou /pararavisos.'
+              : 'Você não receberá novos avisos desta loja. Seus pedidos e atendimento continuam disponíveis.',
+            menu(),
           );
+        } else if (cmd === '/paysupport' || cmd === '/suporte' || cmd === 'support') {
+          const details = supportDetails(shop);
+          effect('sendMessage', {
+            chat_id: chatId,
+            text: hasSupport(shop)
+              ? details.text
+              : 'Atendimento ainda não configurado pelo lojista. Guarde o número do seu pedido.',
+            ...(details.url
+              ? {
+                  reply_markup: {
+                    inline_keyboard: [
+                      [{ text: shop.support_name || 'Falar com o suporte', url: details.url }],
+                    ],
+                  },
+                }
+              : {}),
+          });
         } else if (cmd === '/help' || cmd === '/terms') {
           say(
             'Use /start para abrir a loja, /pedidos para acompanhar compras e /paysupport para ajuda com pagamentos. Produtos digitais são pagos em Telegram Stars. O estoque é reservado por 20 minutos e entregue após confirmação do Telegram. Não envie senhas ou dados de cartão ao bot.',
             menu(),
           );
-        } else if (!operational && (cmd === 'orders' || cmd === '/pedidos')) {
-          await listOrders();
+        } else if (
+          !operational &&
+          (cmd === 'orders' || cmd === '/pedidos' || cmd.startsWith('history:'))
+        ) {
+          await listOrders(false, cmd.startsWith('history:') ? cmd.slice(8) : undefined);
         } else if (!operational && cmd.startsWith('order:')) {
           const order = (await tx.get(orderDoc(cmd.slice(6)))) as Order | null;
-          if (order?.buyer_id === userId)
-            say(`Pedido ${order.id}\nEstado: ${order.status}\nTotal: ${isoMoney(order.total)}`);
+          if (order?.buyer_id === userId) say(orderSummary(order));
           else say('Pedido não encontrado.');
         } else if (!operational) {
           say(
@@ -650,7 +782,89 @@ export class BotStore {
           say('Administração da loja', adminMenu());
         } else if (owner && cmd.startsWith('admin:')) {
           const action = cmd.slice(6);
-          if (action === 'new') {
+          const noticeContext = {
+            tx,
+            accountId: id,
+            shop,
+            customer,
+            userId,
+            owner,
+            selling,
+            message: msg,
+            now: this.now(),
+            say,
+            emit: (method: TelegramMethod, payload: Record<string, unknown>) =>
+              effect(method, payload),
+            audit: (action: string) => this.audit(tx, id, action, userId),
+          };
+          if (await this.notices.action(noticeContext, action)) {
+            // Announcement prompts and drafts are managed independently of orders.
+          } else if (action === 'payment') {
+            customer.session = null;
+            say(
+              `Modo atual: ${shop.payment_mode === 'manual' ? 'Pix/transferência com aprovação manual' : 'Telegram Stars'}.\n${shop.payment_instructions || 'Dados de pagamento ainda não configurados.'}`,
+              buttons([
+                [['Dados Pix/transferência', 'admin:payment-details']],
+                [
+                  ['Usar Pix/transferência', 'admin:paymode:manual'],
+                  ['Usar Stars', 'admin:paymode:stars'],
+                ],
+                [['Voltar', 'admin']],
+              ]),
+            );
+          } else if (action === 'payment-details') {
+            customer.session = { step: 'payment_instructions' };
+            say(
+              'Envie a chave Pix/dados de transferência e as orientações ao comprador (até 1000 caracteres). Só informe dados que devem aparecer no pagamento.',
+            );
+          } else if (action.startsWith('paymode:')) {
+            const mode = action.slice(8);
+            if (!['manual', 'stars'].includes(mode)) say('Modo inválido.');
+            else if (shop.products.length || shop.recent_orders.length)
+              say(
+                'Não altere a moeda com catálogo ou pedidos existentes. Peça à equipe uma migração de preços.',
+              );
+            else {
+              shop.payment_mode = mode as 'manual' | 'stars';
+              say('Modo de pagamento atualizado.');
+            }
+          } else if (action === 'stats') {
+            const s = stats(shop);
+            say(
+              `Estatísticas da loja\nPedidos criados: ${s.orders}\nCompras aprovadas: ${s.paid_orders}\nCompradores: ${s.buyers}\nEntregues: ${s.delivered_orders}\nAguardando comprovante/pagamento: ${shop.open_orders.length - (shop.review_orders?.length ?? 0)}\nComprovantes para aprovar: ${shop.review_orders?.length ?? 0}\nRecusados: ${s.rejected_orders}\nVendas aprovadas: ${isoMoney(s.gross_brl, 'BRL')} · ${isoMoney(s.gross_stars, 'XTR')}`,
+              adminMenu(),
+            );
+          } else if (action.startsWith('buyers:') && !/^\d{0,16}$/.test(action.slice(7))) {
+            say('Página de compradores inválida.');
+          } else if (action.startsWith('buyers:')) {
+            const buyers = await this.store.list(root(id) + '/buyers', {
+              limit: 13,
+              afterId: action.slice(7),
+            });
+            say(
+              buyers.length ? 'Compradores:' : 'Ainda não há compras aprovadas.',
+              buttons([
+                ...buyers
+                  .slice(0, 12)
+                  .map(
+                    (b) =>
+                      [[`${b.name} · ${b.paid_orders} compra(s)`, `admin:buyer:${b.id}`]] as [
+                        string,
+                        string,
+                      ][],
+                  ),
+                ...(buyers.length > 12
+                  ? [[['Mais compradores', 'admin:buyers:' + buyers[11].id]] as [string, string][]]
+                  : []),
+                [['Voltar', 'admin']],
+              ]),
+            );
+          } else if (action.startsWith('buyer:')) {
+            const buyer = await tx.get(path(id, 'buyers', action.slice(6)));
+            say(buyer ? buyerSummary(buyer) : 'Comprador não encontrado.');
+          } else if (action === 'pending') await listOrders(true, undefined, true);
+          else if (action.startsWith('history:')) await listOrders(true, action.slice(8));
+          else if (action === 'new') {
             customer.session = { step: 'product_title' };
             say('Qual é o nome do produto? Envie /cancelar para sair.');
           } else if (['stock', 'edit'].includes(action))
@@ -680,13 +894,56 @@ export class BotStore {
                   ['Descrição', `admin:field:description:${pid}`],
                   ['Categoria', `admin:field:category:${pid}`],
                 ],
+                [['🖼 Foto do produto', `admin:productbanner:${pid}`]],
                 [['Ativar/desativar', `admin:toggle:${pid}`]],
               ]),
+            );
+          } else if (action.startsWith('productbanner:')) {
+            customer.session = { step: 'product_banner', product: action.slice(14) };
+            say(
+              'Envie uma foto para este produto, ou remover para exibi-lo só em texto. A imagem é opcional.',
+            );
+          } else if (action === 'support') {
+            customer.session = { step: 'support' };
+            say(
+              `${supportDetails(shop).text}\n\nVocê pode enviar seu @usuario ou escolher o campo que deseja alterar.`,
+              buttons([
+                [
+                  ['Nome', 'admin:support-name'],
+                  ['Telefone', 'admin:support-phone'],
+                ],
+                [
+                  ['Link de atendimento', 'admin:support-url'],
+                  ['Usuário Telegram', 'admin:support-handle'],
+                ],
+                [['Voltar', 'admin']],
+              ]),
+            );
+          } else if (
+            ['support-name', 'support-phone', 'support-url', 'support-handle'].includes(action)
+          ) {
+            customer.session = {
+              step: action === 'support-handle' ? 'support' : action.replace('-', '_'),
+            };
+            say(
+              action === 'support-name'
+                ? 'Envie o nome do suporte (até 80 caracteres), ou remover.'
+                : action === 'support-phone'
+                  ? 'Envie o telefone com DDD/código do país, ou remover.'
+                  : action === 'support-url'
+                    ? 'Envie o link HTTPS de atendimento (Telegram, WhatsApp ou seu site), ou remover.'
+                    : 'Envie o @usuario do suporte, ou remover.',
             );
           } else if (action.startsWith('field:')) {
             const [, field, pid] = action.split(':');
             customer.session = { step: 'edit', field, product: pid };
-            say(field === 'price' ? 'Envie o novo preço inteiro em Stars.' : 'Envie o novo valor.');
+            say(
+              field === 'price'
+                ? shop.payment_mode === 'manual'
+                  ? 'Envie o novo preço em reais, como 12,50.'
+                  : 'Envie o novo preço inteiro em Stars.'
+                : 'Envie o novo valor.',
+            );
           } else if (action.startsWith('toggle:')) {
             const p = shop.products.find((v) => v.id === action.slice(7));
             if (p) p.enabled = !p.enabled;
@@ -707,10 +964,27 @@ export class BotStore {
             const o = (await tx.get(orderDoc(action.slice(6)))) as Order | null;
             if (o)
               say(
-                `Pedido ${o.id}\nEstado: ${o.status}\nCliente: ${o.buyer_id}\nTotal: ${isoMoney(o.total)}\n${o.items.map((v) => `${v.quantity} × ${v.title}`).join('\n')}`,
+                orderSummary(o, true),
                 buttons([
-                  [['Reentregar (confirmar)', `admin:redeliver:${o.id}`]],
-                  [['Reembolsar Stars (confirmar)', `admin:refund:${o.id}`]],
+                  ...(o.receipt_ciphertext
+                    ? [[['Ver comprovante', `admin:proof:${o.id}`]] as [string, string][]]
+                    : []),
+                  ...(['paid', 'delivered'].includes(o.status)
+                    ? [
+                        [['Reentregar (confirmar)', `admin:redeliver:${o.id}`]] as [
+                          string,
+                          string,
+                        ][],
+                      ]
+                    : []),
+                  ...(o.charge_id
+                    ? [
+                        [['Reembolsar Stars (confirmar)', `admin:refund:${o.id}`]] as [
+                          string,
+                          string,
+                        ][],
+                      ]
+                    : []),
                   [['Voltar', 'admin:orders']],
                 ]),
               );
@@ -764,7 +1038,26 @@ export class BotStore {
           saveCustomer();
         } else if (customer.session && msg && !cmd) {
           const session = customer.session;
-          if (session.step === 'coupon') {
+          const noticeContext = {
+            tx,
+            accountId: id,
+            shop,
+            customer,
+            userId,
+            owner,
+            selling,
+            message: msg,
+            now: this.now(),
+            say,
+            emit: (method: TelegramMethod, payload: Record<string, unknown>) =>
+              effect(method, payload),
+            audit: (action: string) => this.audit(tx, id, action, userId),
+          };
+          if (await this.receipts.input(receiptContext, text)) {
+            // Receipt submission never approves its own payment.
+          } else if (await this.notices.input(noticeContext, text)) {
+            // Input changes a draft; sending still requires its explicit button.
+          } else if (session.step === 'coupon') {
             const code = text.toUpperCase();
             if (shop.coupons[code]) {
               customer.coupon = code;
@@ -785,12 +1078,20 @@ export class BotStore {
             if (text.length > 400 || !text) say('Use de 1 a 400 caracteres.');
             else {
               customer.session = { ...session, step: 'product_price', description: text };
-              say('Qual é o preço inteiro em Telegram Stars?');
+              say(
+                shop.payment_mode === 'manual'
+                  ? 'Qual é o preço em reais? Exemplo: 12,50.'
+                  : 'Qual é o preço inteiro em Telegram Stars?',
+              );
             }
           } else if (session.step === 'product_price') {
-            const price = Number(text);
-            if (!Number.isSafeInteger(price) || price < 1 || price > 1000000)
-              say('Envie um número inteiro de 1 a 1000000.');
+            const price = parsePrice(text, shop.payment_mode === 'manual');
+            if (price === null)
+              say(
+                shop.payment_mode === 'manual'
+                  ? 'Envie um valor válido em reais, como 12,50.'
+                  : 'Envie um número inteiro de 1 a 1000000.',
+              );
             else {
               customer.session = { ...session, step: 'product_category', price };
               say('Qual é a categoria do produto (até 40 caracteres)?');
@@ -853,6 +1154,13 @@ export class BotStore {
               customer.session = null;
               say(`${units.length} unidade(s) adicionada(s).`, adminMenu());
             }
+          } else if (session.step === 'payment_instructions') {
+            if (!text || text.length > 1000) say('Envie de 1 a 1000 caracteres.');
+            else {
+              shop.payment_instructions = text;
+              customer.session = null;
+              say('Dados de pagamento atualizados.', adminMenu());
+            }
           } else if (session.step === 'welcome') {
             if (!text || text.length > 600) say('Use de 1 a 600 caracteres.');
             else {
@@ -861,12 +1169,53 @@ export class BotStore {
               say('Mensagem atualizada.', adminMenu());
             }
           } else if (session.step === 'support') {
-            if (!/^@[A-Za-z0-9_]{5,32}$/.test(text)) say('Envie um @usuario válido.');
+            if (!/^@[A-Za-z0-9_]{5,32}$/.test(text) && text.toLowerCase() !== 'remover')
+              say('Envie um @usuario válido, ou remover.');
             else {
-              shop.support = text;
+              shop.support = text.toLowerCase() === 'remover' ? '' : text;
               customer.session = null;
               say('Atendimento atualizado.', adminMenu());
             }
+          } else if (['support_name', 'support_phone', 'support_url'].includes(session.step)) {
+            const remove = text.toLowerCase() === 'remover';
+            let value = remove ? '' : text;
+            const valid =
+              remove ||
+              (session.step === 'support_name'
+                ? Boolean(text) && text.length <= 80
+                : session.step === 'support_phone'
+                  ? /^[+\d ()-]{7,32}$/.test(text) &&
+                    text.replace(/\D/g, '').length >= 7 &&
+                    text.replace(/\D/g, '').length <= 15
+                  : Boolean(supportUrl(text)));
+            if (!valid)
+              say(
+                session.step === 'support_url'
+                  ? 'Use um endereço HTTPS válido, sem login ou senha na URL.'
+                  : session.step === 'support_phone'
+                    ? 'Envie um telefone válido, com 7 a 15 dígitos.'
+                    : 'Use de 1 a 80 caracteres.',
+              );
+            else {
+              if (session.step === 'support_url' && !remove) value = supportUrl(text)!;
+              (shop as unknown as Doc)[session.step] = value;
+              customer.session = null;
+              say('Suporte atualizado.', adminMenu());
+            }
+          } else if (session.step === 'product_banner') {
+            const product = shop.products.find((p) => p.id === session.product),
+              photo = msg.photo?.at(-1);
+            if (!product) {
+              customer.session = null;
+              say('Produto não encontrado.');
+            } else if (photo || text.toLowerCase() === 'remover') {
+              product.banner = photo?.file_id ?? '';
+              customer.session = null;
+              say(
+                photo ? 'Foto do produto atualizada.' : 'O produto será exibido só em texto.',
+                adminMenu(),
+              );
+            } else say('Envie uma foto ou remover.');
           } else if (session.step === 'banner') {
             const photo = msg.photo?.at(-1);
             if (photo || text === 'remover') {
@@ -898,8 +1247,8 @@ export class BotStore {
               customer.session = null;
               say('Produto não encontrado.');
             } else if (field === 'price') {
-              const price = Number(text);
-              if (!Number.isInteger(price) || price < 1 || price > 1000000) say('Preço inválido.');
+              const price = parsePrice(text, shop.payment_mode === 'manual');
+              if (price === null) say('Preço inválido.');
               else {
                 p.price = price;
                 customer.session = null;
@@ -967,8 +1316,10 @@ export class BotStore {
           say('Envie o código do cupom.');
         } else if (cmd === 'checkout') {
           if (!selling) say('A loja não está recebendo novos pedidos.');
-          else if (!shop.support)
+          else if (!hasSupport(shop))
             say('O lojista precisa configurar o atendimento antes de receber pagamentos.');
+          else if (shop.payment_mode === 'manual' && !shop.payment_instructions)
+            say('O lojista ainda precisa configurar os dados de pagamento.');
           else if (!customer.items.length) say('Adicione um produto ao carrinho.');
           else if (shop.open_orders.length >= 25)
             say('Há muitos pedidos em andamento. Aguarde alguns minutos.');
@@ -1000,6 +1351,10 @@ export class BotStore {
               const order: Order = {
                 id: oid,
                 buyer_id: userId,
+                buyer_name: [from?.first_name, from?.last_name].filter(Boolean).join(' ') || userId,
+                buyer_username: from?.username ?? '',
+                currency: shop.payment_mode === 'manual' ? 'BRL' : 'XTR',
+                payment_method: shop.payment_mode === 'manual' ? 'manual' : 'stars',
                 items: reservation,
                 total,
                 coupon: customer.coupon,
@@ -1017,28 +1372,41 @@ export class BotStore {
               tx.set(orderDoc(oid), order);
               shop.recent_orders = [oid, ...shop.recent_orders].slice(0, 50);
               shop.open_orders.push(oid);
+              stats(shop).orders++;
               customer.orders = [oid, ...customer.orders].slice(0, 30);
               customer.items = [];
               customer.coupon = '';
               saveCustomer();
-              effect(
-                'sendInvoice',
-                {
-                  chat_id: chatId,
-                  title: shop.title.slice(0, 32),
-                  description:
-                    `Pedido ${oid} · ${reservation.map((v) => `${v.quantity} × ${v.title}`).join(', ')}`.slice(
-                      0,
-                      255,
-                    ),
-                  payload: oid,
-                  provider_token: '',
-                  currency: 'XTR',
-                  prices: [{ label: 'Pedido ' + oid, amount: total }],
-                  start_parameter: 'order_' + oid,
-                },
-                order,
-              );
+              if (shop.payment_mode === 'manual') {
+                say(
+                  `${orderSummary(order)}\n\nPix/transferência\n${shop.payment_instructions}\n\nEnvie o comprovante pelo botão abaixo. A entrega depende da aprovação do lojista.`,
+                  buttons([
+                    [['Enviar comprovante', 'receipt:' + oid]],
+                    [
+                      ['Meus pedidos', 'orders'],
+                      ['Cancelar pedido', 'cancel:' + oid],
+                    ],
+                  ]),
+                );
+              } else
+                effect(
+                  'sendInvoice',
+                  {
+                    chat_id: chatId,
+                    title: shop.title.slice(0, 32),
+                    description:
+                      `Pedido ${oid} · ${reservation.map((v) => `${v.quantity} × ${v.title}`).join(', ')}`.slice(
+                        0,
+                        255,
+                      ),
+                    payload: oid,
+                    provider_token: '',
+                    currency: 'XTR',
+                    prices: [{ label: 'Pedido ' + oid, amount: total }],
+                    start_parameter: 'order_' + oid,
+                  },
+                  order,
+                );
               say(
                 `Pedido ${oid}. Estoque reservado por 20 minutos.`,
                 buttons([[['Cancelar pedido', 'cancel:' + oid]]]),
@@ -1046,11 +1414,21 @@ export class BotStore {
               this.audit(tx, id, 'bot_order.created', userId);
             }
           }
-        } else if (cmd === 'orders' || cmd === '/pedidos') await listOrders();
+        } else if (cmd.startsWith('history:')) await listOrders(false, cmd.slice(8));
+        else if (cmd === 'orders' || cmd === '/pedidos') await listOrders();
         else if (cmd.startsWith('order:')) {
           const o = (await tx.get(orderDoc(cmd.slice(6)))) as Order | null;
           if (o && o.buyer_id === userId)
-            say(`Pedido ${o.id}\nEstado: ${o.status}\nTotal: ${isoMoney(o.total)}`, menu());
+            say(
+              orderSummary(o),
+              buttons([
+                ...(o.payment_method === 'manual' &&
+                ['awaiting_payment', 'awaiting_review'].includes(o.status)
+                  ? [[['Enviar/atualizar comprovante', 'receipt:' + o.id]] as [string, string][]]
+                  : []),
+                [['Voltar', 'orders']],
+              ]),
+            );
           else say('Pedido não encontrado.');
         } else if (cmd.startsWith('cancel:')) {
           const o = (await tx.get(orderDoc(cmd.slice(7)))) as Order | null;
@@ -1091,9 +1469,13 @@ export class BotStore {
     });
   }
 
-  async tick(auth: RuntimeAccess) {
+  async tick(auth: RuntimeAccess, botName?: string) {
     return buffered(this.store, async (tx) => {
       const { runtime, account, setup, shop } = await this.access(tx, auth);
+      if (botName && botName !== shop.title) {
+        shop.title = botName;
+        tx.set(root(auth.accountId), shop);
+      }
       if (
         setup.activation_status === 'active' &&
         shop.owner_id &&
@@ -1146,21 +1528,48 @@ export class BotStore {
     });
   }
   async pending(auth: RuntimeAccess) {
-    const values = await this.store.list(root(auth.accountId) + '/effects', {
-      limit: 50,
-      equals: ['status', 'pending'],
-    });
-    return values.map((v) => v.id as string);
+    await this.notices.pump(auth);
+    const [pending, sending] = await Promise.all(
+      ['pending', 'sending'].map((status) =>
+        this.store.list(root(auth.accountId) + '/effects', {
+          limit: 50,
+          equals: ['status', status],
+        }),
+      ),
+    );
+    // A crashed sender's expired lease must be reconciled, without resending.
+    return [
+      ...pending.filter((v) => !v.announcement_id),
+      ...pending.filter((v) => v.announcement_id),
+      ...sending,
+    ].map((v) => v.id as string);
   }
   async claim(auth: RuntimeAccess, effectId: string) {
     return buffered(this.store, async (tx) => {
-      const { account, setup } = await this.access(tx, auth),
+      const { account, setup, shop } = await this.access(tx, auth),
         target = path(auth.accountId, 'effects', effectId),
         out = (await tx.get(target)) as (BotEffect & { lease_at?: Date }) | null;
-      if (!out || out.status === 'sent' || out.status === 'uncertain') return null;
+      if (!out || !['pending', 'sending'].includes(out.status)) return null;
       if (out.status === 'sending') {
-        if (out.lease_at && this.now().getTime() - out.lease_at.getTime() > 120000)
+        if (out.lease_at && this.now().getTime() - out.lease_at.getTime() > 120000) {
           tx.set(target, { ...out, status: 'uncertain' });
+          await this.notices.finish(tx, auth, shop, out, 'uncertain');
+        }
+        return null;
+      }
+      const raw = out as unknown as Doc;
+      if (raw.next_attempt_at && raw.next_attempt_at > this.now()) return null;
+      if (
+        out.announcement_id &&
+        (!(
+          account.access_status === 'approved' &&
+          setup.activation_status === 'active' &&
+          account.paid_through > this.now()
+        ) ||
+          !(await this.notices.canSend(tx, auth, shop, out)))
+      ) {
+        tx.set(target, { ...out, status: 'skipped', finished_at: this.now() });
+        await this.notices.finish(tx, auth, shop, out, 'skipped');
         return null;
       }
       if (out.order_id && (out.delivery || out.method === 'sendInvoice')) {
@@ -1181,7 +1590,6 @@ export class BotStore {
       }
       const lease = randomBytes(24).toString('base64url');
       tx.set(target, { ...out, status: 'sending', lease, lease_at: this.now() });
-      const raw = out as unknown as Doc;
       return {
         id: out.id,
         method: out.method,
@@ -1192,6 +1600,7 @@ export class BotStore {
         lease,
         ...(out.order_id ? { order_id: out.order_id } : {}),
         ...(out.delivery ? { delivery: true } : {}),
+        ...(out.announcement_id ? { announcement_id: out.announcement_id } : {}),
       };
     });
   }
@@ -1199,15 +1608,28 @@ export class BotStore {
     auth: RuntimeAccess,
     effectId: string,
     lease: string,
-    result: 'sent' | 'uncertain',
+    result: 'sent' | 'uncertain' | 'failed' | 'retry',
+    errorCode?: number,
+    retryAfter = 0,
   ) {
     return buffered(this.store, async (tx) => {
-      await this.access(tx, auth);
+      const { shop } = await this.access(tx, auth);
       const target = path(auth.accountId, 'effects', effectId),
         out = (await tx.get(target)) as BotEffect | null;
       if (!out || out.status !== 'sending' || out.lease !== lease)
         throw new HttpError(409, 'EFFECT_LEASE_INVALID', 'Confirmação de envio inválida.');
+      if (result === 'retry') {
+        tx.set(target, {
+          ...out,
+          status: 'pending',
+          next_attempt_at: new Date(
+            this.now().getTime() + Math.max(1, Math.min(86400, retryAfter)) * 1000,
+          ),
+        });
+        return;
+      }
       tx.set(target, { ...out, status: result, finished_at: this.now() });
+      await this.notices.finish(tx, auth, shop, out, result, errorCode);
       if (out.method === 'refundStarPayment' && out.order_id && result === 'sent') {
         const order = (await tx.get(path(auth.accountId, 'orders', out.order_id))) as Order | null;
         if (order?.status === 'refund_pending') {
@@ -1226,6 +1648,11 @@ export class BotStore {
           }
           if (complete) {
             order.status = 'delivered';
+            if (!order.fulfilled_at) {
+              order.fulfilled_at = this.now();
+              stats(shop).delivered_orders++;
+              tx.set(root(auth.accountId), shop);
+            }
             tx.set(path(auth.accountId, 'orders', order.id), order);
           }
         }
