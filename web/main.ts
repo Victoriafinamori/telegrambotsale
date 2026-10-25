@@ -254,7 +254,9 @@ async function load() {
   const route = location.hash.split('?')[0];
   if (
     !inviteToken() &&
-    !['#/entrar', '#/conta', '#/convite', '#/minha-loja', '#/gestao'].includes(route)
+    !['#/entrar', '#/conta', '#/convite', '#/minha-loja', '#/gestao', '#/configuracao'].includes(
+      route,
+    )
   ) {
     renderLanding();
     return;
@@ -291,7 +293,12 @@ async function load() {
     renderAuth();
     return;
   }
-  if (route === '#/gestao') {
+  const openManagement =
+    route === '#/gestao' ||
+    (route === '#/minha-loja' &&
+      me.account?.access_status === 'approved' &&
+      (await api<{ runtime: RuntimeStatus | null }>('/store/runtime')).runtime?.provisioned);
+  if (openManagement) {
     if (me.account?.access_status !== 'approved') {
       merchantView();
       return;
@@ -299,27 +306,33 @@ async function load() {
     shell(
       '<main id="merchant-console-host"><p class="welcome-note">Carregando sua loja…</p></main>',
     );
-    await mountMerchantConsole(
-      document.querySelector<HTMLElement>('#merchant-console-host')!,
-      api,
-      async (path) => {
-        const user = auth.currentUser,
-          token = config?.authMode === 'bearer' && user ? await user.getIdToken() : '';
-        const response = await fetch(serviceUrl('/api' + path), {
-          cache: 'no-store',
-          credentials: config?.authMode === 'bearer' ? 'omit' : 'same-origin',
-          headers: token ? { Authorization: 'Bearer ' + token } : {},
-        });
-        if (!response.ok)
-          throw new Error(
-            'Não foi possível abrir o arquivo. Confira sua sessão e tente novamente.',
-          );
-        return response.blob();
-      },
-    );
+    try {
+      await mountMerchantConsole(
+        document.querySelector<HTMLElement>('#merchant-console-host')!,
+        api,
+        async (path) => {
+          const user = auth.currentUser,
+            token = config?.authMode === 'bearer' && user ? await user.getIdToken() : '';
+          const response = await fetch(serviceUrl('/api' + path), {
+            cache: 'no-store',
+            credentials: config?.authMode === 'bearer' ? 'omit' : 'same-origin',
+            headers: token ? { Authorization: 'Bearer ' + token } : {},
+          });
+          if (!response.ok)
+            throw new Error(
+              'Não foi possível abrir o arquivo. Confira sua sessão e tente novamente.',
+            );
+          return response.blob();
+        },
+      );
+    } catch (error) {
+      shell(
+        `<main class="auth-shell"><section class="card"><h1>Não foi possível abrir sua loja</h1><p>${esc(error instanceof Error ? error.message : 'Confira sua conexão e tente novamente.')}</p><div class="inline-actions"><button id="retry-services">Tentar novamente</button><a class="button-link quiet" href="#/configuracao">Ver ativação e conexão</a></div></section></main>`,
+      );
+    }
     return;
   }
-  if (me.role === 'platform' && route !== '#/minha-loja') {
+  if (me.role === 'platform' && route !== '#/minha-loja' && route !== '#/configuracao') {
     if (me.adminMfaRequired) {
       await renderAdminMfa();
       return;

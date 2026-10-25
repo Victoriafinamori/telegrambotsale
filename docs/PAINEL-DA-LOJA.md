@@ -1,6 +1,6 @@
 # Gestão da loja pelo site
 
-A decisão atual da proprietária é configurar a loja pelo site e aperfeiçoar o menu Telegram depois. A rota publicada é `#/gestao`, acessível por **Minha loja → Gerenciar minha loja**. A dona pode operar sua loja piloto sem trocar de conta ou de papel. A administração da plataforma continua separada e protegida pelo segundo fator.
+A decisão atual da proprietária é configurar a loja pelo site e aperfeiçoar o menu Telegram depois. **Minha loja** (`#/minha-loja`) abre diretamente o painel quando a loja está aprovada e o aplicativo foi preparado. `#/gestao` permanece como acesso direto. **Ativação e conexão** (`#/configuracao`) reúne o assistente e os dados da contratação, sem obrigar o cliente a passar por essa tela para configurar produtos. A dona pode operar sua loja piloto sem trocar de conta ou de papel. A administração da plataforma continua separada e protegida pelo segundo fator.
 
 Foram localizadas referências antigas da Blackout, mas não um código completo de painel operacional conectado. A organização confirmada pela proprietária — produtos, estoque, pedidos, aparência, suporte e avisos — foi integrada à interface e API atuais. Os mockups não foram tratados como sistemas prontos nem seus dados fictícios foram importados.
 
