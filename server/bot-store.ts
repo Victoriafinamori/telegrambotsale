@@ -243,12 +243,52 @@ export class BotStore {
     });
   }
 
-  async process(auth: RuntimeAccess, input: unknown) {
+  async portalCommand(
+    accountId: string,
+    uid: string,
+    command: string,
+    requestId: string,
+    reason?: string,
+  ) {
+    if (
+      !/^admin:(?:review-(?:approve|reject):[a-f0-9]{16}:\d{1,6}|notice-(?:send|cancel):[a-f0-9]{12})$/.test(
+        command,
+      )
+    )
+      throw new HttpError(400, 'COMMAND_INVALID', 'Ação indisponível.');
+    const runtime = await this.store.get('bot_runtimes/' + accountId),
+      shop = await this.store.get(root(accountId));
+    if (!runtime || !shop?.owner_id) throw unavailable();
+    return this.process(
+      { accountId, generation: runtime.generation },
+      {
+        update_id: 0,
+        callback_query: {
+          id: 'web',
+          from: { id: Number(shop.owner_id) },
+          data: command,
+          message: { chat: { id: Number(shop.owner_id), type: 'private' } },
+        },
+      },
+      { uid, requestId, reason },
+    );
+  }
+  async process(
+    auth: RuntimeAccess,
+    input: unknown,
+    web?: { uid: string; requestId: string; reason?: string },
+  ) {
     const update = telegramUpdate.parse(input);
     return buffered(this.store, async (tx) => {
       const { runtime, account, setup, shop } = await this.access(tx, auth),
         id = auth.accountId;
-      const receiptPath = path(id, 'updates', String(update.update_id));
+      if (web && account.firebase_uid !== web.uid) throw unavailable();
+      const eventKey = web ? 'w' + tokenHash(web.requestId).slice(0, 32) : 'u' + update.update_id;
+      const receiptPath = path(
+        id,
+        web ? 'web_updates' : 'updates',
+        web ? tokenHash(web.requestId) : String(update.update_id),
+      );
       const receipt = await tx.get(receiptPath);
       if (receipt) return { effectIds: receipt.effect_ids as string[], duplicate: true };
       const effects: BotEffect[] = [];
@@ -258,7 +298,7 @@ export class BotStore {
         order?: Order,
         delivery = false,
       ) => {
-        const key = `u${update.update_id}_${effects.length}`;
+        const key = `${eventKey}_${effects.length}`;
         effects.push({
           id: key,
           method,
@@ -300,10 +340,11 @@ export class BotStore {
         shop.owner_id === userId &&
         shop.owner_id === setup.telegram_user_id &&
         shop.owner_bot_id === setup.bot_id;
-      const saveShop = () => tx.set(root(id), shop);
+      const saveShop = () =>
+        tx.set(root(id), { ...shop, portal_revision: (shop.portal_revision ?? 0) + 1 });
       const productDoc = (pid: string) => path(id, 'products', pid);
       const orderDoc = (oid: string) => path(id, 'orders', oid);
-      const cartPath = path(id, 'customers', userId || 'unknown');
+      const cartPath = path(id, web ? 'web_customers' : 'customers', userId || 'unknown');
       const customer = (await tx.get(cartPath)) ?? {
         items: [],
         coupon: '',
@@ -679,7 +720,7 @@ export class BotStore {
           this.audit(tx, id, 'bot_order.refunded', userId);
         }
       } else {
-        if (callback) effect('answerCallbackQuery', { callback_query_id: callback.id });
+        if (callback && !web) effect('answerCallbackQuery', { callback_query_id: callback.id });
         const text = msg?.text?.trim() ?? '',
           cmd = callback?.data ?? (text.startsWith('/') ? text.split(/\s/)[0].split('@')[0] : ''),
           argument = text.split(/\s+/).slice(1).join(' ');
@@ -700,7 +741,49 @@ export class BotStore {
           release,
           audit: (action: string) => this.audit(tx, id, action, userId),
         };
+        if (web) {
+          if (!owner || !operational)
+            throw new HttpError(
+              403,
+              'OWNER_UNVERIFIED',
+              'Responsável não confirmado ou loja indisponível.',
+            );
+          const review = /^admin:review-(approve|reject):([a-f0-9]{16}):(\d+)$/.exec(cmd);
+          if (review) {
+            const order = await tx.get(orderDoc(review[2]));
+            if (
+              !order ||
+              order.status !== 'awaiting_review' ||
+              order.receipt_revision !== Number(review[3]) ||
+              order.expires_at <= this.now()
+            )
+              throw new HttpError(
+                409,
+                'RECEIPT_CHANGED',
+                'Este pedido foi atualizado ou já analisado. Atualize a lista antes de continuar.',
+              );
+          }
+          const notice = /^admin:notice-send:([a-f0-9]{12})$/.exec(cmd);
+          if (notice) {
+            const draft = await tx.get(path(id, 'announcements', notice[1]));
+            if (
+              !draft ||
+              draft.status !== 'draft' ||
+              !selling ||
+              shop.notice_active ||
+              !(shop.notice_subscribers ?? 0)
+            )
+              throw new HttpError(
+                409,
+                'NOTICE_NOT_READY',
+                'Este aviso já foi enviado, há um envio em andamento ou não existem inscritos disponíveis.',
+              );
+          }
+          this.audit(tx, id, 'store.command_web', web.uid);
+        }
         if (await this.receipts.action(receiptContext, cmd)) {
+          if (web?.reason && cmd.startsWith('admin:review-reject:'))
+            await this.receipts.input(receiptContext, web.reason);
           saveCustomer();
         } else if (cmd === '/start' && /^owner_[A-Za-z0-9_-]{32}$/.test(argument)) {
           const link = await tx.get(path(id, 'private', 'owner_link'));
@@ -1459,12 +1542,13 @@ export class BotStore {
         effect_ids: effectIds,
         created_at: this.now(),
       });
-      tx.set('bot_runtimes/' + id, {
-        ...runtime,
-        offset: update.update_id + 1,
-        last_update_at: this.now(),
-        last_seen: this.now(),
-      });
+      if (!web)
+        tx.set('bot_runtimes/' + id, {
+          ...runtime,
+          offset: update.update_id + 1,
+          last_update_at: this.now(),
+          last_seen: this.now(),
+        });
       return { effectIds, duplicate: false };
     });
   }

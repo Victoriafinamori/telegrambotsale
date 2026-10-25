@@ -20,7 +20,7 @@ config.hosting = {
       headers: [
         {
           key: 'Content-Security-Policy',
-          value: `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com ${api}; frame-ancestors 'none'; form-action 'self'; object-src 'none'; upgrade-insecure-requests`,
+          value: `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com ${api}; frame-ancestors 'none'; form-action 'self'; object-src 'none'; upgrade-insecure-requests`,
         },
         { key: 'Referrer-Policy', value: 'no-referrer' },
         { key: 'X-Content-Type-Options', value: 'nosniff' },

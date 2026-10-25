@@ -2,7 +2,7 @@
 
 ## Decisão de produto
 
-A página pública divulga o bot de vendas no Telegram e leva à contratação por atendimento ou ao login. A área do cliente serve para conta, primeiros passos, envio protegido dos dados iniciais, ativação e acompanhamento da assinatura. Configurações operacionais de catálogo, produtos, estoque, banners, Pix, cupons e pedidos pertencem ao menu administrativo do Telegram, não ao site desta primeira versão.
+A página pública divulga o bot de vendas no Telegram e leva à contratação por atendimento ou ao login. A área do cliente serve para conta, primeiros passos, envio protegido dos dados iniciais, ativação e acompanhamento da assinatura. Em 25/10/2026, a proprietária alterou o escopo para priorizar a configuração pelo site: `#/gestao` reúne catálogo, preços, fotos, estoque de códigos/textos, aparência, suporte, instruções de pagamento, cupons, pedidos e avisos. O Telegram usa os mesmos dados e seu menu será aperfeiçoado depois. Consulte `PAINEL-DA-LOJA.md`.
 
 A identidade usa azul associado ao Telegram, fundo azul escuro e verde nas ações de compra, preservando a marca Blackout Create. A demonstração de conversa/pedido é ilustrativa, não uma loja funcionando nem uma prova de vendas. A página identifica o produto como pré-lançamento enquanto a integração operacional estiver pendente.
 

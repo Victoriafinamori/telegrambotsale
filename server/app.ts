@@ -18,6 +18,8 @@ import type { AccountService, OnboardingService } from './platform-contract.js';
 import type { AdminMfa } from './admin-mfa.js';
 import type { BotStore } from './bot-store.js';
 import { botRuntimeRouter } from './bot-runtime-routes.js';
+import { MerchantConsole } from './merchant-console.js';
+import { merchantConsoleRouter } from './merchant-console-routes.js';
 type AuthedRequest = Request & { identity: Identity; requestId: string };
 const tokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   idSchema = z.uuid();
@@ -64,7 +66,7 @@ export function createApp(
           defaultSrc: ["'self'"],
           scriptSrc: ["'self'"],
           styleSrc: ["'self'"],
-          imgSrc: ["'self'", 'data:'],
+          imgSrc: ["'self'", 'data:', 'blob:'],
           connectSrc: [
             "'self'",
             'https://identitytoolkit.googleapis.com',
@@ -154,7 +156,17 @@ export function createApp(
     }
     next();
   });
-  app.use(express.json({ limit: '16kb', strict: true }));
+  app.use((req, res, next) =>
+    express.json({
+      limit:
+        req.path === '/api/store/manage/media'
+          ? '5mb'
+          : req.path === '/api/store/manage/stock'
+            ? '32kb'
+            : '16kb',
+      strict: true,
+    })(req, res, next),
+  );
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
   app.get('/api/config', (_req, res) =>
     res.json({
@@ -342,6 +354,15 @@ export function createApp(
       res.json(await services.bots.ownerLink(account.id, uid));
     },
   );
+  if (services?.bots && config.BOT_TOKEN_ENCRYPTION_KEY)
+    app.use(
+      '/api/store/manage',
+      merchantConsoleRouter(
+        new MerchantConsole(services.bots.store, config.BOT_TOKEN_ENCRYPTION_KEY, services.bots),
+        accounts,
+        identity,
+      ),
+    );
   app.get('/api/onboarding', identity, async (req, res) => {
     res.json({ setup: await onboarding.own((req as unknown as AuthedRequest).identity.uid) });
   });

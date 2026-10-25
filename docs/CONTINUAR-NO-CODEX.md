@@ -17,7 +17,7 @@ Abra `http://127.0.0.1:3000`. O comando prepara Firebase Authentication emulado 
 ## Decisões do produto
 
 - Marca: Blackout Create. Landing focada no bot de vendas no Telegram, com área reservada para login, primeiros passos, ativação e assinatura.
-- A configuração operacional de produtos, categorias, estoque, banners, cupons, Pix e pedidos será pelo Telegram. Não construir um painel web de configuração operacional nesta primeira versão.
+- Decisão atual de 25/10/2026: a proprietária pediu o painel de gestão da loja no site e melhorias posteriores no Telegram. A rota `#/gestao` foi conectada à API; veja `PAINEL-DA-LOJA.md`. Essa instrução substitui a limitação anterior de configuração somente pelo Telegram.
 - O proprietário exige Firebase Spark, sem ativar faturamento, e já possui Square Cloud. Será um aplicativo de bot separado por cliente.
 - O dono cadastra contratações recebidas por WhatsApp, Telegram, Discord ou outro canal, confirma a contratação, envia convite e aprova o acesso.
 - O lojista segue o assistente BotFather/token/ID, revisa e envia os dados. O token é cifrado no servidor. O dono pode solicitar correção, iniciar a configuração e confirmar manualmente a ativação após instalar e testar o bot na Square Cloud.

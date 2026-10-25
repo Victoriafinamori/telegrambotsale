@@ -1,5 +1,7 @@
 # Estado da implementação — 25/10/2026
 
+Decisão posterior: a configuração operacional também está disponível pelo site em `#/gestao`, usando os mesmos registros do Telegram. Consulte `PAINEL-DA-LOJA.md`. A suíte passou com 37 testes. A inspeção visual final depende de reativar o navegador local no Work ou da conferência manual da proprietária.
+
 Atualização mais recente: personalização de produto/suporte, central de avisos, histórico completo, estatísticas e comprovantes com aprovação/recusa manual foram implementados conforme o pedido posterior da proprietária. Consulte `COMPROVANTES-E-AVISOS.md` para o comportamento atual de Pix/transferência e a limitação de compatibilidade Telegram. A proprietária liberou memória; o aplicativo piloto de 256 MB foi iniciado, a identidade pessoal foi confirmada e o menu `/admin` real foi observado pela proprietária. A suíte tem 34 testes aprovados; a compra/entrega real ainda precisa do roteiro de teste com catálogo e pagamento de demonstração.
 
 ## Infraestrutura e acesso concluídos

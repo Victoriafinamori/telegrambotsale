@@ -6,6 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { MemoryDocuments } from './document-memory.js';
 import { FirestorePlatform } from '../server/firestore-platform.js';
 import { BotStore } from '../server/bot-store.js';
+import { MerchantConsole } from '../server/merchant-console.js';
 import type { BotEffect, TelegramUpdate, Order, Shop } from '../server/bot-types.js';
 import { createApp } from '../server/app.js';
 import { testConfig } from './helpers.js';
@@ -792,4 +793,182 @@ test('Announcement unsubscribe and cancellation stop queued messages; 429 can re
   await f.bots.pending(f.auth);
   await f.click(111111111, 'admin:notice-cancel:' + cancelled);
   assert.equal(await f.bots.claim(f.auth, `n${cancelled}_444444444`), null);
+});
+
+test('Web console edits the same catalog and stock as Telegram, rejects stale edits and never exposes inventory secrets', async () => {
+  const f = await fixture(true, undefined, 'merchant', '123456789', 'manual'),
+    portal = new MerchantConsole(f.store, f.key, f.bots);
+  const initial = await portal.read(f.a.id, 'merchant');
+  const created = await portal.saveProduct(f.a.id, 'merchant', {
+    title: 'Produto pelo site',
+    description: 'Descrição criada pelo painel',
+    category: 'Licenças',
+    price: 1250,
+    enabled: true,
+    banner: '',
+    revision: initial.revision,
+  });
+  await assert.rejects(
+    () =>
+      portal.saveProduct(f.a.id, 'merchant', {
+        title: 'Outra tela',
+        description: 'Texto',
+        category: 'Licenças',
+        price: 1000,
+        enabled: true,
+        banner: '',
+        revision: initial.revision,
+      }),
+    { code: 'STORE_CHANGED' },
+  );
+  const request = {
+    productId: created.id,
+    units: ['WEB-STOCK-PRIVATE-ONE', 'WEB-STOCK-PRIVATE-TWO'],
+    requestId: randomBytes(16).toString('hex'),
+  };
+  request.requestId = '12345678-1234-4234-8234-123456789012';
+  await portal.addStock(f.a.id, 'merchant', request);
+  await portal.addStock(f.a.id, 'merchant', request);
+  const snapshot = await portal.read(f.a.id, 'merchant');
+  assert.equal(snapshot.products[0].stock, 2);
+  assert(!JSON.stringify(snapshot).includes('WEB-STOCK-PRIVATE'));
+  await assert.rejects(() => portal.read(f.a.id, 'other'), { code: 'STORE_NOT_APPROVED' });
+  const view = await f.click(222222222, 'p:' + created.id);
+  assert(
+    view.some(
+      (e) =>
+        String(e.payload.text).includes('Produto pelo site') &&
+        String(e.payload.text).includes('12,50'),
+    ),
+  );
+  await portal.saveSettings(f.a.id, 'merchant', {
+    welcome: 'Entrada editada pelo site',
+    banner: '',
+    support: '',
+    support_name: 'Equipe da loja',
+    support_phone: '+5511999990000',
+    support_url: 'https://example.com/atendimento',
+    payment_instructions: 'PIX DE TESTE — NÃO PAGAR',
+    revision: (await portal.read(f.a.id, 'merchant')).revision,
+  });
+  assert(
+    (await f.send(222222222, '/start')).some((e) =>
+      String(e.payload.text).includes('Entrada editada pelo site'),
+    ),
+  );
+  const support = await f.click(222222222, 'support');
+  assert(support.some((e) => String(e.payload.text).includes('Equipe da loja')));
+});
+
+test('Web approval and announcements reuse domain checks without changing Telegram offsets or duplicating deliveries', async () => {
+  const f = await fixture(true, undefined, 'merchant', '123456789', 'manual'),
+    pid = await f.product(),
+    portal = new MerchantConsole(f.store, f.key, f.bots),
+    oid = await manualCheckout(f, 222222222, pid);
+  await f.click(222222222, 'receipt:' + oid);
+  await photo(f, 222222222, 'WEB-RECEIPT');
+  const before = (await f.store.get('bot_runtimes/' + f.a.id))!.offset;
+  const command = {
+    command: `admin:review-approve:${oid}:1`,
+    requestId: '12345678-1234-4234-8234-123456789012',
+  };
+  await assert.rejects(() => portal.command(f.a.id, 'other', command), {
+    code: 'STORE_NOT_APPROVED',
+  });
+  await portal.command(f.a.id, 'merchant', command);
+  await portal.command(f.a.id, 'merchant', command);
+  assert.equal((await f.store.get('bot_runtimes/' + f.a.id))!.offset, before);
+  assert.equal((await f.store.get(`bot_shops/${f.a.id}/orders/${oid}`))!.status, 'paid');
+  const page = await portal.orders(f.a.id, 'merchant');
+  assert(!JSON.stringify(page).includes('receipt_ciphertext'));
+  assert(!JSON.stringify(page).includes('LICENSE-ONE'));
+  assert.equal(page.orders[0].hasReceipt, true);
+  await assert.rejects(
+    () =>
+      portal.command(f.a.id, 'merchant', {
+        ...command,
+        requestId: '22345678-1234-4234-8234-123456789012',
+      }),
+    { code: 'RECEIPT_CHANGED' },
+  );
+  await f.click(333333333, 'notices:subscribe');
+  const draft = await portal.draft(f.a.id, 'merchant', {
+    text: 'Aviso criado no site',
+    photo: '',
+    requestId: '32345678-1234-4234-8234-123456789012',
+  });
+  await portal.command(f.a.id, 'merchant', {
+    command: 'admin:notice-send:' + draft.id,
+    requestId: '42345678-1234-4234-8234-123456789012',
+  });
+  const pending = await f.bots.pending(f.auth);
+  const effects = await f.effects(pending);
+  assert(
+    effects.some(
+      (e) => e.announcement_id === draft.id && e.payload.text === 'Aviso criado no site',
+    ),
+  );
+});
+
+test('Web HTTP authorization derives the shop from Firebase, blocks suspension and rejects caller-supplied shop IDs', async () => {
+  const f = await fixture(),
+    cfg = {
+      ...testConfig(),
+      PLATFORM_DATABASE: 'firestore' as const,
+      API_AUTH_MODE: 'bearer' as const,
+      BOT_TOKEN_ENCRYPTION_KEY: f.key,
+    };
+  const auth = {
+    verifyIdToken: async (token: string) => {
+      if (token !== 'merchant') throw Error();
+      return f.identity;
+    },
+    verifySession: async () => {
+      throw Error();
+    },
+    createSession: async () => '',
+  };
+  const server = createApp(cfg, f.p, auth, undefined, {
+    onboarding: f.p.onboarding,
+    bots: f.bots,
+  }).listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const origin = 'http://127.0.0.1:' + (server.address() as AddressInfo).port,
+    headers = {
+      Authorization: 'Bearer merchant',
+      Origin: cfg.APP_ORIGIN,
+      'Content-Type': 'application/json',
+    };
+  try {
+    assert.equal((await fetch(origin + '/api/store/manage')).status, 401);
+    const r = await fetch(origin + '/api/store/manage', { headers });
+    assert.equal(r.status, 200);
+    const d = await r.json();
+    assert(Array.isArray(d.products));
+    const bad = await fetch(origin + '/api/store/manage/products', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        accountId: 'another-shop',
+        title: 'A',
+        description: 'B',
+        category: 'C',
+        price: 1,
+        enabled: true,
+        banner: '',
+        revision: d.revision,
+      }),
+    });
+    assert.equal(bad.status, 400);
+    const media = await fetch(origin + '/api/store/manage/media', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ data: 'data:image/png;base64,AAAA' }),
+    });
+    assert.equal(media.status, 400);
+    await f.p.suspend(f.a.id, 'Pausado para teste', 'admin');
+    assert.equal((await fetch(origin + '/api/store/manage', { headers })).status, 403);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
+  }
 });

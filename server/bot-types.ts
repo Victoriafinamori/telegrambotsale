@@ -89,6 +89,7 @@ export interface Product {
   banner?: string;
 }
 export interface Shop {
+  portal_revision?: number;
   title: string;
   welcome: string;
   support: string;

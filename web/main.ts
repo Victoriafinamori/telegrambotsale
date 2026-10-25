@@ -19,6 +19,7 @@ import type { MerchantAccount, AdminMerchantAccount } from '../server/types.js';
 import type { BotSetup } from '../server/bot-onboarding.js';
 import { botGuide } from './onboarding.js';
 import { adminBotCard, activationLabels } from './admin-bot.js';
+import { mountMerchantConsole } from './merchant-console.js';
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const esc = (v: unknown) =>
   String(v ?? '').replace(
@@ -207,7 +208,13 @@ function adminView() {
         '<button class="quiet" id="renew-subscription">Registrar renovação mensal</button>',
       );
   }
-  if(me?.account)document.querySelector('.workspace .page-heading')?.insertAdjacentHTML('beforeend','<a class="button-link" href="#/minha-loja">Abrir minha loja</a>');
+  if (me?.account)
+    document
+      .querySelector('.workspace .page-heading')
+      ?.insertAdjacentHTML(
+        'beforeend',
+        '<a class="button-link" href="#/minha-loja">Abrir minha loja</a>',
+      );
 }
 function merchantView() {
   const a = me?.account;
@@ -221,8 +228,20 @@ function merchantView() {
   shell(
     `<main class="merchant-shell"><div class="page-heading"><div><span class="eyebrow">${esc(a.store_name)}</span><h1>${botSetup?.activation_status === 'active' ? 'Sua loja' : 'Primeiros passos'}</h1></div><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div>${approved ? `<p class="welcome-note">${botSetup?.activation_status === 'active' ? 'Acompanhe sua ativação e os dados da contratação.' : 'Seu acesso foi liberado. Siga as etapas para preparar seu bot.'}</p>${botGuide(botSetup, guideStep, Boolean(config?.emulatorHost))}` : `<section class="card"><h2>${a.access_status === 'suspended' ? 'Acesso suspenso' : 'Sua loja está em análise'}</h2><p>${a.access_status === 'suspended' ? esc(a.suspension_reason || 'Fale com a Blackout Create pelo canal da contratação.') : 'Sua conta já está vinculada. Após a aprovação, você terá um assistente para criar o bot, informar seu token e ID do Telegram e solicitar a ativação na Square Cloud.'}</p><p class="note">A mensalidade começa somente após a ativação efetiva do bot.</p><button class="quiet" id="refresh">Atualizar situação</button></section>`}<details class="card contract-details"><summary>Sua contratação · ${a.reference === 'PILOTO INTERNO BLACKOUT / SEM COBRANCA REAL' ? 'Piloto interno sem cobrança' : money(a.price_cents)}</summary><dl><div><dt>Início do ciclo</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div><div><dt>Contato da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Conta</dt><dd>${esc(me!.user.email)}</dd></div></dl></details></main>`,
   );
-  if(me?.role==='platform')document.querySelector('.header-actions')?.insertAdjacentHTML('afterbegin','<a class="button-link quiet" href="#/conta">Administração</a>');
+  if (me?.role === 'platform')
+    document
+      .querySelector('.header-actions')
+      ?.insertAdjacentHTML(
+        'afterbegin',
+        '<a class="button-link quiet" href="#/conta">Administração</a>',
+      );
   if (approved && botRuntime?.provisioned) {
+    document
+      .querySelector('main.merchant-shell .page-heading')
+      ?.insertAdjacentHTML(
+        'beforeend',
+        '<a class="button-link" href="#/gestao">Gerenciar minha loja</a>',
+      );
     document
       .querySelector('main.merchant-shell')
       ?.insertAdjacentHTML(
@@ -233,7 +252,10 @@ function merchantView() {
 }
 async function load() {
   const route = location.hash.split('?')[0];
-  if (!inviteToken() && !['#/entrar', '#/conta', '#/convite','#/minha-loja'].includes(route)) {
+  if (
+    !inviteToken() &&
+    !['#/entrar', '#/conta', '#/convite', '#/minha-loja', '#/gestao'].includes(route)
+  ) {
     renderLanding();
     return;
   }
@@ -269,7 +291,35 @@ async function load() {
     renderAuth();
     return;
   }
-  if (me.role === 'platform' && route!=='#/minha-loja') {
+  if (route === '#/gestao') {
+    if (me.account?.access_status !== 'approved') {
+      merchantView();
+      return;
+    }
+    shell(
+      '<main id="merchant-console-host"><p class="welcome-note">Carregando sua loja…</p></main>',
+    );
+    await mountMerchantConsole(
+      document.querySelector<HTMLElement>('#merchant-console-host')!,
+      api,
+      async (path) => {
+        const user = auth.currentUser,
+          token = config?.authMode === 'bearer' && user ? await user.getIdToken() : '';
+        const response = await fetch(serviceUrl('/api' + path), {
+          cache: 'no-store',
+          credentials: config?.authMode === 'bearer' ? 'omit' : 'same-origin',
+          headers: token ? { Authorization: 'Bearer ' + token } : {},
+        });
+        if (!response.ok)
+          throw new Error(
+            'Não foi possível abrir o arquivo. Confira sua sessão e tente novamente.',
+          );
+        return response.blob();
+      },
+    );
+    return;
+  }
+  if (me.role === 'platform' && route !== '#/minha-loja') {
     if (me.adminMfaRequired) {
       await renderAdminMfa();
       return;
