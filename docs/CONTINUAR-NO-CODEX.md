@@ -29,11 +29,11 @@ A aplicação foi validada localmente com compilação, 19 testes automatizados 
 
 A base central agora tem adaptador Firestore (`PLATFORM_DATABASE=firestore`) e o caminho Hosting → API externa foi implementado com `VITE_API_ORIGIN`, `API_AUTH_MODE=bearer` e CORS exato. PostgreSQL fica disponível para compatibilidade e demonstração local. Os registros antigos não são migrados automaticamente. O segundo fator TOTP do dono também foi implementado sem Blaze. Leia `docs/PUBLICAR-FIREBASE-SPARK.md` para autorização, configuração e publicação.
 
-Faltam autorização Google do proprietário, identidade Firebase Admin real, configuração do Firestore real, segredos privados na hospedagem, origem HTTPS da API e integração do runtime do bot. O TOTP tem implementação local, mas precisa de validação na implantação real. O controle de produção recusa administrador sem segundo fator; não remover essa proteção para publicar. Renovação e desligamento por vencimento ainda não foram integrados.
+Esses requisitos de infraestrutura foram concluídos em 24–25/10/2026, com autorização da proprietária e testes online. O TOTP pessoal da dona está ativo. O runtime digital foi implementado e integrado à API; o próximo passo é o piloto real descrito em `BOT-TELEGRAM.md`. Novas vendas são bloqueadas por suspensão/vencimento e há renovação mensal registrada manualmente após confirmação externa de pagamento. Não remover o segundo fator para publicar.
 
 `VITE_CONTACT_URL` aguarda o link público oficial de atendimento. Não inventar preço comercial, depoimentos ou métricas. O contato, se configurado, é público; tokens, chaves privadas e senhas devem permanecer fora do Git e do chat.
 
-O código original do bot recebido no arquivo `prisma.zip` foi examinado separadamente e ainda não foi incorporado ao runtime deste repositório. Os antigos mockups também não são a implementação atual. Para integrar o bot original em outra sessão, será necessário recuperar esse arquivo original. Revisar concorrência de estoque/entrega, transições de pagamento, tratamento de token e suspensão/reinício antes de colocá-lo em operação.
+Atualização de 25/10/2026: o runtime foi implementado neste repositório a partir do escopo de produtos digitais, sem depender de `prisma.zip`. Use `docs/BOT-TELEGRAM.md` como referência atual de provisionamento, vínculo de identidade, Stars, estoque e entrega. Não solicitar o ZIP antigo como pré-requisito. Infraestrutura/API/site e segundo fator da dona foram concluídos; a próxima validação é o piloto Telegram real, com aplicativo exclusivo e espaço disponível na Square Cloud.
 
 ## Dados que não acompanham o Git
 

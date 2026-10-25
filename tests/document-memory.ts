@@ -35,7 +35,11 @@ export class MemoryDocuments implements DocumentStore {
     options: { offset?: number; limit: number; orderBy?: string; equals?: [string, unknown] },
   ) {
     let values = [...this.records]
-      .filter(([path]) => path.startsWith(collection + '/') && path.split('/').length === 2)
+      .filter(
+        ([path]) =>
+          path.startsWith(collection + '/') &&
+          path.split('/').length === collection.split('/').length + 1,
+      )
       .map(([, data]) => structuredClone(data));
     if (options.equals) values = values.filter((d) => d[options.equals![0]] === options.equals![1]);
     if (options.orderBy)

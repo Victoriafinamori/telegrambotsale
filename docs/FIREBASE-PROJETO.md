@@ -18,4 +18,4 @@ Os 36 testes online de login, autorização, TOTP, convites, isolamento, suspens
 
 Consulte [IMPLANTACAO-2026-10-24.md](IMPLANTACAO-2026-10-24.md) para configuração e validação. Na Square Cloud, manter `FIRESTORE_PREFER_REST=true`; o transporte HTTPS/REST resolveu os erros de conexão observados no gRPC. A API usa bearer/CORS de origem exata, sem cookies de terceiros.
 
-A execução dos bots, pagamentos e suspensão automática por vencimento continuam fora desta etapa. O assistente recebe dados cifrados, mas publicar o site não coloca os bots dos clientes em operação.
+Em 25/10/2026, o runtime digital foi implementado e a integração publicada na API/site. Cada bot ainda exige provisionamento de seu aplicativo exclusivo e um piloto real; publicar o site não inicia esses aplicativos. O checkout digital usa Stars, e novas vendas são bloqueadas em caso de suspensão/vencimento. Veja [BOT-TELEGRAM.md](BOT-TELEGRAM.md).

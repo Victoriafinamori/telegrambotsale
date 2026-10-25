@@ -16,6 +16,8 @@ import {
 import { HttpError, type Identity, type IdentityProvider } from './types.js';
 import type { AccountService, OnboardingService } from './platform-contract.js';
 import type { AdminMfa } from './admin-mfa.js';
+import type { BotStore } from './bot-store.js';
+import { botRuntimeRouter } from './bot-runtime-routes.js';
 type AuthedRequest = Request & { identity: Identity; requestId: string };
 const tokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   idSchema = z.uuid();
@@ -34,7 +36,7 @@ export function createApp(
   accounts: AccountService,
   auth: IdentityProvider,
   verifyBot?: BotVerifier,
-  services?: { onboarding?: OnboardingService; adminMfa?: AdminMfa },
+  services?: { onboarding?: OnboardingService; adminMfa?: AdminMfa; bots?: BotStore },
 ) {
   const app = express(),
     sessions = new SessionTransport(config),
@@ -135,6 +137,7 @@ export function createApp(
         next(e);
       }
     };
+  if (services?.bots) app.use('/internal/bot', botRuntimeRouter(services.bots, accounts));
   app.use('/api', rate('api', 300, 60000));
   app.use('/api', (req, _res, next) => {
     if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
@@ -296,18 +299,49 @@ export function createApp(
     const account = await accounts.own((req as unknown as AuthedRequest).identity.uid);
     if (!account || account.access_status !== 'approved')
       throw new HttpError(403, 'STORE_NOT_APPROVED', 'Sua loja ainda não foi liberada.');
-    const setup = await onboarding.read(account.id);
+    const setup = await onboarding.read(account.id),
+      runtime = services?.bots ? await services.bots.status(account.id) : null;
     res.json({
       account,
       botStatus:
         setup?.activation_status === 'active'
           ? 'activation_confirmed'
           : (setup?.activation_status ?? 'not_connected'),
-      runtimeStatus: 'unknown',
+      runtimeStatus: runtime
+        ? runtime.online
+          ? 'online'
+          : runtime.provisioned
+            ? 'offline'
+            : 'unconfigured'
+        : 'unknown',
+      runtime,
       billingStartsOn: 'bot_activation',
       activationConfirmation: 'manual',
     });
   });
+  app.get('/api/store/runtime', identity, async (req, res) => {
+    const account = await accounts.own((req as unknown as AuthedRequest).identity.uid);
+    if (!account || account.access_status !== 'approved')
+      throw new HttpError(403, 'STORE_NOT_APPROVED', 'Sua loja ainda não foi liberada.');
+    res.json({ runtime: services?.bots ? await services.bots.status(account.id) : null });
+  });
+  app.post(
+    '/api/store/telegram-link',
+    identity,
+    rate('bot-owner-link', 5, 600000),
+    async (req, res) => {
+      z.object({}).strict().parse(req.body);
+      const uid = (req as unknown as AuthedRequest).identity.uid,
+        account = await accounts.own(uid);
+      if (!account || !services?.bots)
+        throw new HttpError(
+          409,
+          'RUNTIME_NOT_CONFIGURED',
+          'A equipe ainda precisa preparar seu aplicativo de bot.',
+        );
+      res.json(await services.bots.ownerLink(account.id, uid));
+    },
+  );
   app.get('/api/onboarding', identity, async (req, res) => {
     res.json({ setup: await onboarding.own((req as unknown as AuthedRequest).identity.uid) });
   });
@@ -390,6 +424,26 @@ export function createApp(
   app.get('/api/admin/accounts/:id/bot-setup', async (req, res) => {
     res.json({ setup: await onboarding.read(idSchema.parse(req.params.id)) });
   });
+  app.get('/api/admin/accounts/:id/bot-runtime', async (req, res) => {
+    res.json({
+      runtime: services?.bots ? await services.bots.status(idSchema.parse(req.params.id)) : null,
+    });
+  });
+  app.post('/api/admin/accounts/:id/renew', async (req, res) => {
+    const body = z
+      .object({ requestId: z.uuid(), paymentConfirmed: z.literal(true) })
+      .strict()
+      .parse(req.body);
+    if (!services?.bots)
+      throw new HttpError(503, 'BOT_RUNTIME_UNAVAILABLE', 'Operação de bot não configurada.');
+    res.json(
+      await services.bots.renew(
+        idSchema.parse(req.params.id),
+        (req as unknown as AuthedRequest).identity.uid,
+        body.requestId,
+      ),
+    );
+  });
   app.post('/api/admin/accounts/:id/bot-setup/review', async (req, res) => {
     const input = z
       .object({
@@ -424,6 +478,22 @@ export function createApp(
         })
         .strict()
         .parse(req.body);
+      if (services?.bots) {
+        const id = idSchema.parse(req.params.id),
+          status = await services.bots.status(id);
+        const runtime = await services.bots.store.get('bot_runtimes/' + id);
+        if (
+          !status.provisioned ||
+          !status.online ||
+          !status.ownerVerified ||
+          runtime?.application_id !== input.deploymentReference
+        )
+          throw new HttpError(
+            409,
+            'BOT_NOT_OPERATIONAL',
+            'Prepare o aplicativo exclusivo, confirme o responsável pelo link do site e aguarde o bot ficar online antes de ativar.',
+          );
+      }
       res.json(
         await onboarding.activate(
           idSchema.parse(req.params.id),

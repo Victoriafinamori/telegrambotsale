@@ -12,6 +12,7 @@
     "server",
     "scripts/migrate.ts",
     "scripts/grant-admin.ts",
-    "scripts/reset-admin-mfa.ts"
+    "scripts/reset-admin-mfa.ts",
+    "scripts/bot-runtime-credential.ts"
   ]
 }

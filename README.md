@@ -2,7 +2,9 @@
 
 Primeira etapa real da plataforma: acesso com **Firebase Authentication**, contratação manual por **WhatsApp, Telegram, Discord, site ou outro canal**, convites e aprovação administrativa. A base central pode usar Firestore (`PLATFORM_DATABASE=firestore`), com autorização conferida no servidor. PostgreSQL permanece disponível para compatibilidade e para a demonstração local. Não utiliza o código `DEMO` dos antigos mockups.
 
-Esta entrega implementa entrada/aprovação do lojista e um assistente para criar o bot, validar e enviar token cifrado e ID pessoal para ativação pela equipe. O dono pode revisar os dados, solicitar correções e confirmar manualmente a ativação de um aplicativo Square Cloud exclusivo por cliente, iniciando o período mensal. Catálogo, Pix, execução dos bots e renovação/suspensão automática **ainda não estão integrados**. Aprovar o acesso ou enviar os dados não inicia o período mensal nem coloca um bot em operação.
+Além do acesso e onboarding, o repositório implementa o bot de produtos digitais: catálogo, categorias, carrinho, cupons, estoque cifrado, pagamento em Telegram Stars, entrega, reentrega, reembolso explícito, histórico, lembretes e bloqueio de novas vendas no vencimento/suspensão. Cada lojista usa um processo exclusivo na Square Cloud com credencial limitada à sua loja. A contratação da plataforma continua sendo confirmada manualmente. Aprovar o acesso ou enviar o token não inicia o período mensal nem provisiona sozinho um aplicativo.
+
+Leia [BOT-TELEGRAM.md](docs/BOT-TELEGRAM.md) para o vínculo do responsável pelo site, publicação do processo, menu `/admin`, testes e limites. A implementação foi testada com transporte Telegram simulado; um piloto com bot e pagamentos no ambiente de teste oficial ainda é necessário antes de afirmar operação real. Para produtos digitais, o checkout usa `XTR`/Stars, conforme a regra do Telegram, sem Pix nesse fluxo.
 
 ## Site e área do cliente
 
@@ -87,7 +89,7 @@ Não há botão público nem rota HTTP para alguém se tornar administrador. Rem
 
 7. Executar `npm start` atrás de um proxy HTTPS confiável. Configurar `HOST` e `TRUST_PROXY_HOPS` conforme a hospedagem; não confiar em headers de proxy sem essa necessidade. O Dockerfile fornece um runtime sem ferramentas de desenvolvimento e sem credenciais embutidas.
 
-O Firebase identifica o usuário. As permissões e vínculos ficam no banco central selecionado; um papel ou ID de loja enviado pelo navegador não libera acesso. O schema usa tabelas `platform_*` e `merchant_*` separadas das entidades do bot original. A ligação com o `Tenant` do bot será feita na etapa de conexão/provisionamento; o código original enviado no ZIP não é iniciado por este servidor.
+O Firebase identifica o usuário. As permissões e vínculos ficam no banco central selecionado; um papel ou ID de loja enviado pelo navegador não libera acesso. O runtime de bots usa Firestore e credenciais independentes por loja. A aplicação central recebe os updates do processo autorizado e mantém reservas, pedidos e entregas em transações. Nenhum ZIP antigo é necessário para executar essa implementação.
 
 ## Segurança e limites
 

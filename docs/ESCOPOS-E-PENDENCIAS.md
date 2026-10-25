@@ -1,29 +1,31 @@
-# Estado da implementação
+# Estado da implementação — 25/10/2026
 
-## Entregue e exercitado localmente
+## Infraestrutura e acesso concluídos
 
-Aplicação web compilada e API Express com Firebase Authentication; conta, confirmação/recuperação de e-mail, sessão de servidor, saída e revogação; cadastro administrativo de contratações por qualquer canal, incluindo Discord; confirmação manual da contratação, convite de sete dias, vínculo pelo e-mail confirmado, aprovação e suspensão; autorização, separação por UID/loja, auditoria e limites persistidos no PostgreSQL.
+Site publicado em https://blackout-create.web.app e API em https://blackout-create-api.squareweb.app. Firebase Spark, Authentication, Firestore privado, identidade mínima do servidor, segredos separados e TOTP da dona foram configurados e verificados. Foram aprovadas 36 verificações online de autorização/convites/isolamento/revogação e nove de confirmação/recuperação de e-mail. Consulte `IMPLANTACAO-2026-10-24.md`.
 
-Há um assistente de quatro etapas com instruções do BotFather, obtenção do ID pessoal, validação de token por getMe, rascunho e envio persistidos, cifragem AES-256-GCM e consulta administrativa auditada para configuração na Square Cloud. O ID informado ainda precisa ser conferido pela equipe; ele não libera permissões. No ambiente local, o Telegram é simulado e só aceita tokens fictícios.
+O painel cadastra contratações de qualquer canal, confirma recebimento manualmente, gera convite de uso único, vincula o e-mail confirmado e permite aprovação, suspensão, revisão e ativação. Aprovar ou receber um token não inicia a mensalidade.
 
-O painel informa o estado real. Não há pedidos fictícios nem contadores de vendas inventados. Cadastro/contratação/aceite/liberação não alteram `billing_started_at` ou `paid_through`. A aba Ativações permite revisão, solicitação de correção e confirmação manual após instalação/teste na Square Cloud. Somente essa confirmação define início/vencimento por mês civil no fuso de São Paulo. O ID do aplicativo é exclusivo por cliente. Não há verificação automática do processo, deploy ou comandos remotos de start/stop.
+## Bot digital implementado
 
-Os testes cobrem autorização indevida, outro e-mail, convite revogado/vencido/reutilizado e uso concorrente; cookie, sessão falsa/revogada, login antigo, e-mail não confirmado, CSRF/origem, corpo grande, entrada inválida, limites e configuração de produção. Firebase Admin é exercitado contra o emulador Auth. O roteiro de navegador cobre cadastro por Discord, convite, aprovação/suspensão, saída, escape de HTML e larguras de 320 a 1440 pixels.
+O runtime foi desenvolvido neste repositório a partir do escopo acordado, sem depender de ZIP antigo. Ele usa um aplicativo Square Cloud por lojista e credencial limitada à própria loja. Não recebe Firebase Admin nem chave de criptografia do servidor.
 
-## Escopo definido para o site
+Inclui vínculo do responsável por link autenticado do site, catálogo, categorias, criação/edição de produtos, estoque cifrado de textos e arquivos, carrinho, cupons, Telegram Stars, pré-checkout, reserva concorrente, confirmação de pagamento, entrega, reentrega explícita, revisão/reembolso, histórico e atendimento pelo Telegram. Administração operacional fica no comando `/admin`, não no site.
 
-O site terá divulgação pública, login, primeiros passos, ativação e assinatura. A landing page já foi implementada e abre sem depender da API. Configuração operacional da loja será pelo Telegram. A proposta de configurar catálogo/estoque/banners pelo site foi retirada desta primeira versão; ver `ESCOPO-DO-SITE.md`. A base central agora tem adaptador Firestore, além do PostgreSQL de compatibilidade/demonstração. A transferência de registros existentes não é automática. Foram implementados transporte bearer entre Hosting e API, configuração de CORS/CSP e segundo fator TOTP do dono sem Blaze. A implantação real ainda depende de autorização e da configuração da hospedagem.
+A ativação confere runtime provisionado/online, identidade vinculada e aplicativo correspondente, além do atestado de teste funcional do administrador. Renovação é registrada após pagamento externo confirmado, com idempotência e mês civil em São Paulo. Há lembretes persistidos e bloqueio de novas vendas por suspensão ou vencimento. Reiniciar o processo não reativa a loja.
 
-## Próximo bloco: bot e loja
+API e frontend com essa ligação foram publicados. Os 28 testes locais passaram, incluindo nove testes do bot com transporte Telegram simulado. O pacote mínimo do aplicativo foi compilado e sua instalação de dependências validada. Isso ainda não comprova execução com bot e pagamento reais. Leia `BOT-TELEGRAM.md`.
 
-1. Importar/consolidar o código do bot original no repositório, corrigindo as falhas identificadas antes de iniciar seus processos ou publicar webhooks.
-2. Ligar a conta aprovada e os dados cifrados do assistente a um Tenant, implementar verificação operacional do responsável e gestão de rotação/revogação. O token já é validado, exclusivo entre lojas e cifrado no servidor. Não exigir que o lojista hospede o bot.
-3. Integrar provisionamento e verificação de execução na Square Cloud, com um aplicativo por cliente. Hoje o início do período depende da confirmação explícita do administrador após instalação/teste manuais. O código original tem um manager compartilhado de tenants e precisa ser adaptado para iniciar somente a loja vinculada ao aplicativo.
-4. Consolidar catálogo, banners, categorias/ordenação, estoque por conteúdo, cupons, Pix manual/QR, comprovantes, estados de pagamento/entrega, acessos históricos e suporte no bot, com administração operacional pelo Telegram.
-5. Reservar e entregar estoque transacionalmente, com tratamento de repetição de pagamentos, pagamento tardio e falha de envio.
-6. Executar avisos, reposição e recorrência em workers persistentes; lembretes em 10, 5, 3 e 1 dia.
-7. Confirmar a renovação manual ou pelo provedor e aplicar mês civil. Suspender novas vendas no vencimento, preservar o painel e garantir que reiniciar o servidor não reative lojas suspensas.
+## Necessário para o piloto real
 
-## Publicação e início de vendas
+1. Deixar pelo menos 256 MB disponíveis na Square Cloud para o aplicativo do lojista. A última consulta mostrou 88 MB livres; faltam 168 MB. Não reduzir aplicativos existentes sem decisão da proprietária.
+2. Cadastrar uma loja piloto e concluir o convite com uma conta de lojista. A dona da plataforma mantém seu papel administrativo.
+3. Criar/escolher o bot no BotFather e informar o token somente no formulário protegido do site. Não enviar segredos pelo chat.
+4. Publicar o pacote do runtime em aplicativo exclusivo e instalar somente sua credencial privada. O upload/provisionamento é uma operação da equipe, ainda sem botão automático no painel.
+5. Confirmar o responsável no Telegram, configurar catálogo/estoque/atendimento e executar o fluxo completo da web até pagamento e entrega no ambiente de teste oficial do Telegram. Não realizar cobrança real para provar o funcionamento.
 
-Manter Firebase Spark, validar a aplicação web/API na Square Cloud já existente, configurar Firestore real, domínio, HTTPS e identidade de servidor; validar o TOTP administrativo já implementado e os requisitos de SECURITY.md; testar backup/restauração e monitoramento; validar o fluxo completo com lojas piloto. Ainda não há URL pública publicada, cobrança real ou Telegram conectado nesta entrega.
+## Operação ainda necessária antes de atender clientes
+
+Backup cifrado/restauração, retenção de updates/outbox/auditoria, monitoramento e limites de cota. O Firestore Spark tem cotas finitas; não há promessa de bots ilimitados. Pagamento financeiro automático da assinatura da plataforma não foi integrado; a renovação continua dependente da confirmação administrativa do recebimento. Migração de dados de PostgreSQL ou sistemas anteriores não é automática.
+
+Um envio Telegram com resultado de rede incerto exige revisão; não há garantia de entrega exatamente uma vez. Reentrega preserva a mesma unidade vendida. Arquivos já entregues não podem ser recuperados por um reembolso. Essas condições precisam fazer parte da operação e do atendimento.

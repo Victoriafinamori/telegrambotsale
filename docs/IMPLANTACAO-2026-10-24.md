@@ -39,3 +39,11 @@ O perfil administrativo Firebase CLI em `.local/cli-config` é separado da ident
 Publicação do site/API não integra a execução dos bots de clientes, pagamentos ou desligamento por vencimento. Essas funções continuam fora desta etapa.
 
 Referência da hospedagem: https://docs.squarecloud.app/pt-br/articles/getting-started-with-nodejs
+
+## Integração do bot em 25/10/2026
+
+O runtime de produtos digitais foi implementado e a API/site foram atualizados. A suíte tem 28 testes aprovados, incluindo nove cenários de domínio e integração HTTP com transporte Telegram simulado. `/internal/bot/config` retorna 401 sem credencial; health/config, CORS, bloqueio anônimo e privacidade da identidade foram reconferidos após o deploy.
+
+O pacote mínimo do aplicativo de cada lojista foi compilado e sua instalação de dependências validada. Ele contém apenas o runner, cliente Telegram e dotenv fixado, sem Firebase Admin ou chave de servidor. Vínculo de identidade, Stars, estoque cifrado, entrega, revisão/reembolso, lembretes e renovação manual estão documentados em [BOT-TELEGRAM.md](BOT-TELEGRAM.md).
+
+Nenhum bot real foi iniciado por essa atualização. O piloto precisa de conta de lojista, bot fornecido pelo BotFather e aplicativo dedicado. A conta Square Cloud mostrou 1.960 MB alocados dos 2.048 MB existentes, restando 88 MB; faltam 168 MB livres para o aplicativo mínimo de 256 MB. Nenhum outro aplicativo foi parado ou reduzido. Pagamentos reais não foram efetuados nos testes.

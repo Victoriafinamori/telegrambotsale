@@ -7,7 +7,7 @@ Depois de aceitar o convite e receber aprovação, o lojista entra em **Primeiro
 3. **Revisar:** conferir o username confirmado pelo Telegram e o ID pessoal informado. O token fica cifrado no servidor e não retorna à tela do lojista. O rascunho reaparece ao entrar ou recarregar. Corrigir dados exige informar novamente o token.
 4. **Enviar para ativação:** confirmar o envio e acompanhar o estado **Aguardando ativação**. A Blackout Create vê os dados no cadastro administrativo do lojista. O segredo é consultado somente por ação explícita e auditada para uso privado na Square Cloud, ficando visível por até 30 segundos no diálogo. O bot ainda não é iniciado por essa tela.
 
-O ID pessoal é informado pelo lojista e ainda não foi verificado com uma interação autenticada no Telegram. Ele não concede papel administrativo nem acesso a uma loja. Possuir um token válido permite controlar o bot, mas não identifica por si só o responsável contratado; a equipe deve conferir a titularidade/migração antes da operação.
+O ID informado não concede administração sozinho. Após preparar o runtime, o lojista usa **Confirmar minha conta no Telegram** no site e abre um link exclusivo, de uso único e validade de dez minutos. O bot confere o ID real da mensagem contra o ID cadastrado antes de liberar `/admin`. A equipe continua conferindo titularidade e migração de um bot já existente. Veja `BOT-TELEGRAM.md`.
 
 ## Persistência e criptografia
 
@@ -33,4 +33,4 @@ Na aba **Ativações**, aparecem lojas aprovadas com dados enviados e aguardando
 
 Início e vencimento são gravados atomicamente, com um mês civil no fuso America/Sao_Paulo. Aprovação, envio, revisão e correção não iniciam o ciclo. Repetições não reiniciam/estendem o período. Revisões antigas, lojas suspensas, rascunhos e aplicativos já vinculados a outro cliente são recusados. Ações administrativas são auditadas sem registrar o segredo.
 
-A confirmação não efetua cobrança financeira. Renovação, monitoramento, alertas e desligamento por vencimento ainda precisam ser ligados ao runtime. **Suspender acesso ao painel** preserva dados e bloqueia a API da loja, mas ainda não para o aplicativo da Square Cloud.
+A confirmação não efetua cobrança financeira. O runtime agora inclui heartbeat, lembretes de vencimento e bloqueio de novas vendas quando suspenso ou vencido. **Suspender acesso ao painel** preserva dados, bloqueia a API da loja e novas vendas; o processo continua atendendo pagamentos anteriores e suporte. A renovação mensal é registrada pelo administrador após confirmar o recebimento externo. Provisionamento, piloto real e limites estão em `BOT-TELEGRAM.md`.

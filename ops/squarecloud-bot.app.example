@@ -1,0 +1,7 @@
+DISPLAY_NAME=Blackout Store Bot
+DESCRIPTION=Dedicated Telegram bot runtime for one merchant
+MAIN=dist-server/server/bot-runner.js
+MEMORY=256
+VERSION=recommended
+RUNTIME=nodejs
+AUTORESTART=true

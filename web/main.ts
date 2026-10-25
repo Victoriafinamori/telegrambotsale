@@ -69,6 +69,9 @@ let csrf = '',
 let botSetup: BotSetup | null = null,
   adminBotSetup: BotSetup | null = null,
   guideStep = 1;
+type RuntimeStatus={provisioned:boolean;online:boolean;ownerVerified:boolean};
+let botRuntime: RuntimeStatus | null = null;
+let adminRuntime: RuntimeStatus | null = null;
 let adminProof = '',
   mfaSecret = '';
 function serviceUrl(path: string) {
@@ -191,6 +194,19 @@ function adminView() {
   shell(
     `<main class="workspace"><div class="page-heading"><div><span class="eyebrow">Administração da plataforma</span><h1>Lojistas</h1></div><button id="new-account">Adicionar lojista</button></div><nav class="tabs"><button data-section="accounts" class="${section === 'accounts' ? 'active' : ''}">Lojistas</button><button data-section="activations" class="${section === 'activations' ? 'active' : ''}">Ativações</button><button data-section="audit" class="${section === 'audit' ? 'active' : ''}">Histórico</button></nav>${section === 'audit' ? '<section class="card" id="audit-list">Carregando histórico…</section>' : `<section class="card compact">${accounts.map(accountRow).join('') || `<div class="empty"><b>${section === 'activations' ? 'Nenhuma ativação pendente' : 'Comece pelo primeiro lojista'}</b><p>${section === 'activations' ? 'Os bots enviados e liberados aparecerão aqui.' : 'Cadastre a contratação recebida e gere o convite de acesso.'}</p></div>`}</section><div class="pagination"><button class="quiet" id="previous" ${offset === 0 ? 'disabled' : ''}>Anterior</button><span>Página ${offset / 50 + 1}</span><button class="quiet" id="next" ${accounts.length < 50 ? 'disabled' : ''}>Próxima</button></div>`}${a && section !== 'audit' ? `<section class="card detail"><div class="card-heading"><h2>${esc(a.store_name)}</h2><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div><dl><div><dt>Lojista</dt><dd>${esc(a.name)}</dd></div><div><dt>E-mail</dt><dd>${esc(a.email)}</dd></div><div><dt>Canal da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Referência</dt><dd>${esc(a.reference || 'Não informada')}</dd></div><div><dt>Mensalidade contratada</dt><dd>${money(a.price_cents)}</dd></div><div><dt>Início da mensalidade</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div></dl><p class="note">Liberar o acesso ao painel não ativa o bot. O ciclo mensal começa somente após a ativação efetiva do bot.</p>${a.suspension_reason ? `<p class="warning">${esc(a.suspension_reason)}</p>` : ''}${adminBotSetup ? adminBotCard(adminBotSetup, a.access_status === 'approved', date) : ''}<div class="inline-actions">${!a.purchase_confirmed_at ? '<button id="confirm-purchase">Confirmar contratação</button>' : ''}${a.purchase_confirmed_at && !a.firebase_uid && a.access_status !== 'suspended' ? '<button id="issue-invite">Gerar convite</button>' : ''}${a.firebase_uid && a.access_status === 'pending' ? '<button id="approve">Liberar acesso ao painel</button>' : ''}${a.access_status !== 'suspended' ? '<button class="quiet" id="suspend">Suspender acesso ao painel</button>' : '<button class="quiet" id="restore">Remover suspensão</button>'}</div>${inviteLink ? `<div class="invite-box"><label for="invite-link">Convite · copie e envie pelo canal da contratação</label><input id="invite-link" value="${esc(inviteLink)}" readonly><button class="quiet" id="copy-invite">Copiar convite</button><small>Uso único, válido por 7 dias e vinculado ao e-mail cadastrado. Gerar outro invalida o anterior.</small></div>` : ''}</section>` : ''}</main>`,
   );
+  if (a && section !== 'audit') {
+    const details = document.querySelector('.detail');
+    if (adminRuntime)
+      details?.insertAdjacentHTML(
+        'beforeend',
+        `<section class="setup-status"><h3>Conexão do bot</h3><p>${adminRuntime.provisioned ? (adminRuntime.online ? 'Aplicativo conectado.' : 'Aplicativo aguardando conexão.') : 'Aplicativo ainda não preparado.'} ${adminRuntime.ownerVerified ? 'Responsável confirmado no Telegram.' : 'Responsável ainda precisa confirmar sua conta pelo site.'}</p></section>`,
+      );
+    if (a.billing_started_at)
+      details?.insertAdjacentHTML(
+        'beforeend',
+        '<button class="quiet" id="renew-subscription">Registrar renovação mensal</button>',
+      );
+  }
 }
 function merchantView() {
   const a = me?.account;
@@ -204,6 +220,14 @@ function merchantView() {
   shell(
     `<main class="merchant-shell"><div class="page-heading"><div><span class="eyebrow">${esc(a.store_name)}</span><h1>${botSetup?.activation_status === 'active' ? 'Sua loja' : 'Primeiros passos'}</h1></div><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div>${approved ? `<p class="welcome-note">${botSetup?.activation_status === 'active' ? 'Acompanhe sua ativação e os dados da contratação.' : 'Seu acesso foi liberado. Siga as etapas para preparar seu bot.'}</p>${botGuide(botSetup, guideStep, Boolean(config?.emulatorHost))}` : `<section class="card"><h2>${a.access_status === 'suspended' ? 'Acesso suspenso' : 'Sua loja está em análise'}</h2><p>${a.access_status === 'suspended' ? esc(a.suspension_reason || 'Fale com a Blackout Create pelo canal da contratação.') : 'Sua conta já está vinculada. Após a aprovação, você terá um assistente para criar o bot, informar seu token e ID do Telegram e solicitar a ativação na Square Cloud.'}</p><p class="note">A mensalidade começa somente após a ativação efetiva do bot.</p><button class="quiet" id="refresh">Atualizar situação</button></section>`}<details class="card contract-details"><summary>Sua contratação · ${money(a.price_cents)}</summary><dl><div><dt>Início do ciclo</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div><div><dt>Contato da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Conta</dt><dd>${esc(me!.user.email)}</dd></div></dl></details></main>`,
   );
+  if (approved && botRuntime?.provisioned) {
+    document
+      .querySelector('main.merchant-shell')
+      ?.insertAdjacentHTML(
+        'beforeend',
+        `<section class="card"><span class="eyebrow">Conexão com o Telegram</span><h2>${botRuntime.ownerVerified ? 'Responsável confirmado' : 'Confirme que este bot é seu'}</h2><p>Aplicativo do bot: <b>${botRuntime.online ? 'conectado' : 'aguardando conexão'}</b>.</p>${botRuntime.ownerVerified ? '<p>Abra seu bot e envie <code>/admin</code> para configurar produtos, estoque, banner, cupons e atendimento. Produtos digitais são pagos em Telegram Stars.</p>' : '<p>Confirme sua conta pessoal no bot para liberar o menu administrativo da sua loja.</p><button id="connect-telegram-owner">Confirmar minha conta no Telegram</button>'}</section>`,
+      );
+  }
 }
 async function load() {
   const route = location.hash.split('?')[0];
@@ -259,6 +283,13 @@ async function load() {
     adminBotSetup = selected
       ? (await api<{ setup: BotSetup | null }>('/admin/accounts/' + selected + '/bot-setup')).setup
       : null;
+    adminRuntime = selected
+      ? (
+          await api<{ runtime: typeof adminRuntime }>(
+            '/admin/accounts/' + selected + '/bot-runtime',
+          )
+        ).runtime
+      : null;
     adminView();
     if (section === 'audit') {
       const value = await api<{ events: { action: string; created_at: string }[] }>('/admin/audit');
@@ -283,6 +314,10 @@ async function load() {
           : botSetup
             ? 3
             : 1;
+    botRuntime =
+      me.account?.access_status === 'approved'
+        ? (await api<{ runtime: typeof botRuntime }>('/store/runtime')).runtime
+        : null;
     merchantView();
   }
 }
@@ -386,13 +421,22 @@ document.addEventListener('submit', (event) => {
       'bot-activation-form',
       'bot-changes-form',
       'mfa-form',
+      'renew-form',
     ].includes(form.id)
   )
     return;
   event.preventDefault();
   void task(async () => {
     const fields = new FormData(form);
-    if (form.id === 'mfa-form') {
+    if (form.id === 'renew-form') {
+      await api('/admin/accounts/' + selected + '/renew', {
+        requestId: String(fields.get('requestId')),
+        paymentConfirmed: fields.get('paymentConfirmed') === 'on',
+      });
+      document.querySelector('dialog')?.remove();
+      await load();
+      flash('Renovação mensal registrada.');
+    } else if (form.id === 'mfa-form') {
       const code = String(fields.get('code') || '');
       (form.querySelector('[name=code]') as HTMLInputElement).value = '';
       const result = await api<{ proof: string }>('/security/admin-mfa/verify', { code });
@@ -523,6 +567,9 @@ document.addEventListener('click', (event) => {
       adminBotSetup = (
         await api<{ setup: BotSetup | null }>('/admin/accounts/' + selected + '/bot-setup')
       ).setup;
+      adminRuntime = (
+        await api<{ runtime: typeof adminRuntime }>('/admin/accounts/' + selected + '/bot-runtime')
+      ).runtime;
       adminView();
       document.querySelector('.detail')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
     });
@@ -575,6 +622,13 @@ document.addEventListener('click', (event) => {
     );
     return;
   }
+  if (button.id === 'renew-subscription') {
+    dialog(
+      'Registrar renovação mensal',
+      `<form id="renew-form"><input type="hidden" name="requestId" value="${crypto.randomUUID()}"><p>Esta ação acrescenta um mês civil ao período atual ou inicia um novo período a partir de hoje, se o anterior venceu.</p><label class="check-row"><input name="paymentConfirmed" type="checkbox" required> Conferi e recebi o pagamento desta renovação pelo canal da contratação.</label><button type="submit">Confirmar renovação</button></form>`,
+    );
+    return;
+  }
   if (button.id === 'suspend') {
     dialog(
       'Suspender acesso',
@@ -583,7 +637,13 @@ document.addEventListener('click', (event) => {
     return;
   }
   void task(async () => {
-    if (button.id === 'enroll-admin-mfa') {
+    if (button.id === 'connect-telegram-owner') {
+      const link = await api<{ url: string }>('/store/telegram-link', {});
+      dialog(
+        'Confirme sua conta no Telegram',
+        `<p>Abra este link com a conta pessoal do Telegram cujo ID você informou no cadastro e toque em <b>Iniciar</b>. Ele vence em 10 minutos e só pode ser usado uma vez.</p><a class="button-link" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Confirmar no meu bot</a><p>Depois, volte ao site e clique em Atualizar situação. A configuração de produtos e estoque será feita pelo comando <code>/admin</code> no bot.</p>`,
+      );
+    } else if (button.id === 'enroll-admin-mfa') {
       const result = await api<{ secret: string }>('/security/admin-mfa/enroll', {});
       mfaSecret = result.secret;
       await renderAdminMfa();

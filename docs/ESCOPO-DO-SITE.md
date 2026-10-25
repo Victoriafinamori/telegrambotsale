@@ -24,6 +24,6 @@ Enquanto o proprietário não fornecer um endereço, o botão principal leva à 
 
 Os arquivos públicos compilados podem abrir como conteúdo estático. A área restrita pode usar `VITE_API_ORIGIN` para chamar a API externa com `API_AUTH_MODE=bearer` e CORS exato. O código dessa ligação já existe; a origem real da API, autorização Google e publicação ainda estão pendentes. Manter Spark e a Square Cloud existente; ver `PUBLICAR-FIREBASE-SPARK.md`.
 
-Histórico de renovações do cliente, suporte com link oficial, renovação financeira, validação real do segundo fator TOTP já implementado, integração do bot e desligamento por vencimento continuam pendentes. Não tratar a página de divulgação como comprovação de prontidão operacional.
+Em 25/10/2026, infraestrutura, publicação e segundo fator da dona já foram validados. O runtime do bot digital e sua ligação com o cadastro estão implementados; o piloto Telegram real permanece necessário. Há renovação mensal registrada pelo administrador, lembretes e bloqueio de novas vendas por vencimento, sem cobrança financeira automática da assinatura. Consulte `BOT-TELEGRAM.md`.
 
 Os testes de navegador cobrem apresentação com API indisponível, acesso ao login, recuperação de conectividade, navegação, FAQ e larguras de 320 a 1440 pixels, além do fluxo existente de convite/ativação. As imagens em `.local/screenshots/landing-*.png` representam testes locais, não uma URL publicada.

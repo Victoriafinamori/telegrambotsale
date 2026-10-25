@@ -9,6 +9,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { FirestoreDocumentStore } from './document-store.js';
 import { FirestorePlatform } from './firestore-platform.js';
 import { AdminMfa } from './admin-mfa.js';
+import { BotStore } from './bot-store.js';
 const config = loadConfig();
 if (config.PLATFORM_DATABASE === 'postgres' && !config.DATABASE_URL)
   throw new Error('Configure DATABASE_URL ou use npm run local para o ambiente de testes.');
@@ -34,6 +35,9 @@ const accounts = firestore ?? new Accounts(db!, config.inviteMs),
     firestore
       ? {
           onboarding: firestore.onboarding,
+          bots: config.BOT_TOKEN_ENCRYPTION_KEY
+            ? new BotStore(firestore.store, config.BOT_TOKEN_ENCRYPTION_KEY)
+            : undefined,
           adminMfa: config.ADMIN_MFA_ENCRYPTION_KEY
             ? new AdminMfa(firestore.store, config.ADMIN_MFA_ENCRYPTION_KEY)
             : undefined,
