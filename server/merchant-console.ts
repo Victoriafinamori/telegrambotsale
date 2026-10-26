@@ -26,6 +26,7 @@ export const productInput = z
     price: z.number().int().min(1).max(10000000),
     enabled: z.boolean(),
     banner: asset,
+    pix_qr: asset.optional(),
     revision: z.number().int().nonnegative(),
   })
   .strict();
@@ -72,9 +73,11 @@ export class MerchantConsole {
     this.vault = new SecretVault(key);
   }
   private async owner(tx: DocumentTransaction, id: string, uid: string) {
-    const account = await tx.get('merchant_accounts/' + id),
-      setup = await tx.get('merchant_bot_setup/' + id),
-      shop = (await tx.get(botRoot(id))) as Shop | null;
+    const [account, setup, shop] = await Promise.all([
+      tx.get('merchant_accounts/' + id),
+      tx.get('merchant_bot_setup/' + id),
+      tx.get(botRoot(id)) as Promise<Shop | null>,
+    ]);
     if (!account || account.firebase_uid !== uid || account.access_status !== 'approved')
       throw new HttpError(
         403,
@@ -152,7 +155,14 @@ export class MerchantConsole {
       if (!current && shop.products.length >= 40)
         throw new HttpError(409, 'PRODUCT_LIMIT', 'Limite de 40 produtos atingido.');
       const { revision, ...fields } = value,
-        product: Product = { ...fields, id: pid, stock: current?.stock ?? 0 };
+        qr = value.pix_qr ?? current?.pix_qr ?? '',
+        product: Product = {
+          ...fields,
+          id: pid,
+          stock: current?.stock ?? 0,
+          pix_qr: qr,
+          pix_qr_price: qr && qr !== current?.pix_qr ? value.price : (current?.pix_qr_price ?? 0),
+        };
       if (current) shop.products = shop.products.map((p) => (p.id === pid ? product : p));
       else {
         shop.products.push(product);
@@ -351,7 +361,11 @@ export class MerchantConsole {
     await botTransaction(this.store, async (tx) => {
       const { shop } = await this.owner(tx, id, uid),
         uploaded = await tx.get(botPath(id, 'assets', fileId));
-      if (!uploaded && shop.banner !== fileId && !shop.products.some((p) => p.banner === fileId))
+      if (
+        !uploaded &&
+        shop.banner !== fileId &&
+        !shop.products.some((p) => p.banner === fileId || p.pix_qr === fileId)
+      )
         throw new HttpError(404, 'IMAGE_NOT_FOUND', 'Imagem não encontrada.');
     });
     const { client } = await this.mediaClient(id, uid);

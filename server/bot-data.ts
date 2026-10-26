@@ -19,8 +19,17 @@ export async function botTransaction<T>(
 ) {
   return store.transaction(async (raw) => {
     const writes = new Map<string, Doc | null>();
+    const reads = new Map<string, Promise<Doc | null>>();
     const tx: DocumentTransaction = {
-      get: async (key) => (writes.has(key) ? structuredClone(writes.get(key)!) : raw.get(key)),
+      get: async (key) => {
+        if (writes.has(key)) return structuredClone(writes.get(key)!);
+        let read = reads.get(key);
+        if (!read) {
+          read = raw.get(key);
+          reads.set(key, read);
+        }
+        return structuredClone(await read);
+      },
       set: (key, value) => {
         writes.set(key, structuredClone(value));
       },

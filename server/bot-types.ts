@@ -87,6 +87,8 @@ export interface Product {
   enabled: boolean;
   stock: number;
   banner?: string;
+  pix_qr?: string;
+  pix_qr_price?: number;
 }
 export interface Shop {
   portal_revision?: number;

@@ -56,8 +56,10 @@ export class BotStore {
   }
 
   private async lifecycle(tx: DocumentTransaction, id: string) {
-    const account = await tx.get('merchant_accounts/' + id),
-      setup = await tx.get('merchant_bot_setup/' + id);
+    const [account, setup] = await Promise.all([
+      tx.get('merchant_accounts/' + id),
+      tx.get('merchant_bot_setup/' + id),
+    ]);
     if (!account || !setup?.submitted_at || !account.firebase_uid || !account.purchase_confirmed_at)
       throw unavailable();
     return { account, setup };
@@ -150,8 +152,11 @@ export class BotStore {
     return { accountId: match[1], generation: r.generation };
   }
   private async access(tx: DocumentTransaction, auth: RuntimeAccess) {
-    const runtime = await tx.get('bot_runtimes/' + auth.accountId),
-      { account, setup } = await this.lifecycle(tx, auth.accountId);
+    const [runtime, { account, setup }, shop] = await Promise.all([
+      tx.get('bot_runtimes/' + auth.accountId),
+      this.lifecycle(tx, auth.accountId),
+      tx.get(root(auth.accountId)) as Promise<Shop | null>,
+    ]);
     if (
       !runtime ||
       runtime.revoked ||
@@ -159,7 +164,6 @@ export class BotStore {
       runtime.bot_id !== setup.bot_id
     )
       throw unavailable();
-    const shop = (await tx.get(root(auth.accountId))) as Shop | null;
     if (!shop) throw unavailable();
     return { runtime, account, setup, shop };
   }
@@ -1461,16 +1465,33 @@ export class BotStore {
               customer.coupon = '';
               saveCustomer();
               if (shop.payment_mode === 'manual') {
-                say(
-                  `${orderSummary(order)}\n\nPix/transferência\n${shop.payment_instructions}\n\nEnvie o comprovante pelo botão abaixo. A entrega depende da aprovação do lojista.`,
-                  buttons([
-                    [['Enviar comprovante', 'receipt:' + oid]],
-                    [
-                      ['Meus pedidos', 'orders'],
-                      ['Cancelar pedido', 'cancel:' + oid],
-                    ],
-                  ]),
-                );
+                const single =
+                  reservation.length === 1 && reservation[0].quantity === 1
+                    ? shop.products.find((p) => p.id === reservation[0].product_id)
+                    : undefined;
+                const qr =
+                  !order.coupon && single?.pix_qr && single.pix_qr_price === order.total
+                    ? single.pix_qr
+                    : '';
+                const markup = buttons([
+                  [['Enviar comprovante', 'receipt:' + oid]],
+                  [
+                    ['Meus pedidos', 'orders'],
+                    ['Cancelar pedido', 'cancel:' + oid],
+                  ],
+                ]);
+                if (qr)
+                  effect('sendPhoto', {
+                    chat_id: chatId,
+                    photo: qr,
+                    caption: `${orderSummary(order)}\n\nPix · confira o valor e o recebedor no seu banco antes de pagar.\nEnvie o comprovante pelo botão abaixo. A entrega depende da aprovação do lojista.`,
+                    reply_markup: markup,
+                  });
+                else
+                  say(
+                    `${orderSummary(order)}\n\nPix/transferência\n${shop.payment_instructions}\n\nEnvie o comprovante pelo botão abaixo. A entrega depende da aprovação do lojista.`,
+                    markup,
+                  );
               } else
                 effect(
                   'sendInvoice',
@@ -1520,11 +1541,15 @@ export class BotStore {
             say('Pedido cancelado e estoque liberado.', menu());
           } else say('Este pedido não pode ser cancelado aqui. Use /paysupport.');
         } else {
-          if (shop.banner) effect('sendPhoto', { chat_id: chatId, photo: shop.banner });
-          say(
-            `${shop.title}\n\n${shop.welcome}${!selling ? '\n\nLoja em configuração ou temporariamente sem novas vendas.' : ''}`,
-            menu(),
-          );
+          const welcome = `${shop.title}\n\n${shop.welcome}${!selling ? '\n\nLoja em configuração ou temporariamente sem novas vendas.' : ''}`;
+          if (shop.banner)
+            effect('sendPhoto', {
+              chat_id: chatId,
+              photo: shop.banner,
+              caption: welcome,
+              reply_markup: menu(),
+            });
+          else say(welcome, menu());
         }
       }
       saveShop();

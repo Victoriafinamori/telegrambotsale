@@ -17,6 +17,105 @@ import {
   RuntimeApiError,
 } from '../server/bot-runner.js';
 import { TelegramClient, TelegramError } from '../server/telegram-client.js';
+import { botTransaction } from '../server/bot-data.js';
+
+test('Transaction reads are shared only within the attempt, cloned, and superseded by buffered writes', async () => {
+  const memory = new MemoryDocuments();
+  await memory.transaction(async (tx) => tx.set('sample/one', { value: 1 }));
+  let reads = 0;
+  const store = {
+    get: memory.get.bind(memory),
+    list: memory.list.bind(memory),
+    transaction: async <T>(
+      work: (tx: import('../server/document-store.js').DocumentTransaction) => Promise<T>,
+    ) =>
+      memory.transaction<T>((tx) =>
+        work({
+          ...tx,
+          get: async (key) => {
+            reads++;
+            return tx.get(key);
+          },
+        }),
+      ),
+  };
+  await botTransaction(store, async (tx) => {
+    const [a, b] = await Promise.all([tx.get('sample/one'), tx.get('sample/one')]);
+    a!.value = 100;
+    assert.equal(b!.value, 1);
+    tx.set('sample/one', { value: 2 });
+    assert.equal((await tx.get('sample/one'))!.value, 2);
+  });
+  assert.equal(reads, 1);
+  await botTransaction(store, async (tx) => assert.equal((await tx.get('sample/one'))!.value, 2));
+  assert.equal(reads, 2);
+});
+
+test('Welcome banner, caption and menu are one photo message, with text fallback when absent', async () => {
+  const f = await fixture();
+  await f.click(111111111, 'admin:banner');
+  await photo(f, 111111111, 'WELCOME_PHOTO');
+  const outputs = await f.send(222222222, '/start');
+  const image = outputs.find((e) => e.method === 'sendPhoto');
+  assert.equal(image?.payload.photo, 'WELCOME_PHOTO');
+  assert(String(image?.payload.caption).includes('Test Shop'));
+  assert(image?.payload.reply_markup);
+  assert(!outputs.some((e) => e.method === 'sendMessage'));
+  await f.store.transaction(async (tx) => {
+    const key = 'bot_shops/' + f.a.id;
+    tx.set(key, { ...(await tx.get(key)), banner: '' });
+  });
+  assert((await f.send(222222222, '/start')).some((e) => e.method === 'sendMessage'));
+});
+
+test('Manual Pix QR is scoped to a single full-price unit; multiple quantities, coupons and changed prices use manual data', async () => {
+  for (const mode of ['single', 'quantity', 'coupon', 'changed', 'multiple'] as const) {
+    const f = await fixture(true, undefined, 'merchant', '123456789', 'manual');
+    const pid = await f.product();
+    const portal = new MerchantConsole(f.store, f.key, f.bots);
+    const snapshot = await portal.read(f.a.id, 'merchant');
+    const p = snapshot.products[0];
+    await portal.saveProduct(f.a.id, 'merchant', {
+      id: pid,
+      title: p.title,
+      description: p.description,
+      category: p.category,
+      price: p.price,
+      enabled: true,
+      banner: '',
+      pix_qr: 'PRODUCT_QR',
+      revision: snapshot.revision,
+    });
+    await f.click(222222222, 'add:' + pid);
+    if (mode === 'quantity') await f.click(222222222, 'add:' + pid);
+    if (mode === 'multiple') {
+      const other = await f.product();
+      await f.click(222222222, 'add:' + other);
+    }
+    if (mode === 'coupon' || mode === 'changed')
+      await f.store.transaction(async (tx) => {
+        const root = 'bot_shops/' + f.a.id,
+          shop = (await tx.get(root))!;
+        if (mode === 'changed') shop.products[0].price++;
+        else {
+          shop.coupons.SALE = { percent: 10, limit: 5, used: 0 };
+          const key = root + '/customers/222222222',
+            customer = (await tx.get(key))!;
+          tx.set(key, { ...customer, coupon: 'SALE' });
+        }
+        tx.set(root, shop);
+      });
+    const outputs = await f.click(222222222, 'checkout');
+    const image = outputs.find((e) => e.method === 'sendPhoto' && e.payload.photo === 'PRODUCT_QR');
+    assert.equal(Boolean(image), mode === 'single', mode);
+    if (image) assert(image.payload.reply_markup);
+    else
+      assert(
+        outputs.some((e) => String(e.payload.text).includes('Dados de teste')),
+        mode,
+      );
+  }
+});
 
 async function fixture(
   activate = true,
