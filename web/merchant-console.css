@@ -321,6 +321,41 @@ body:has(#merchant-console-host) > #app > header {
   display: grid;
   gap: 0;
 }
+.mc-category-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-bottom: 12px;
+}
+.mc-category-tools button {
+  gap: 8px;
+}
+.mc-category-tools svg {
+  width: 18px;
+  height: 18px;
+}
+.mc-order-help {
+  font-size: 14px;
+}
+.mc-product-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.mc-product-row .mc-product {
+  border-bottom: 0;
+}
+.mc-product-order {
+  display: flex;
+  gap: 6px;
+}
+.mc-category-dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+}
 .mc-category-form {
   display: flex;
   align-items: end;
@@ -597,6 +632,12 @@ select:focus-visible {
   }
 }
 @media (max-width: 650px) {
+  .mc-product-row {
+    gap: 8px;
+  }
+  .mc-product-order {
+    flex-direction: column;
+  }
   .mc-category-form {
     align-items: stretch;
     flex-direction: column;

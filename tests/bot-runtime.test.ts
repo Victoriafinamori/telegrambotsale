@@ -19,6 +19,173 @@ import {
 import { TelegramClient, TelegramError } from '../server/telegram-client.js';
 import { botTransaction } from '../server/bot-data.js';
 
+test('Category rename and deletion move products atomically while preserving stock and existing orders', async () => {
+  const f = await fixture(true, undefined, 'merchant', '123456789', 'manual');
+  const pid = await f.product(),
+    portal = new MerchantConsole(f.store, f.key, f.bots);
+  const oid = await manualCheckout(f, 222222222, pid);
+  const stockKey = `bot_shops/${f.a.id}/products/${pid}`,
+    orderKey = `bot_shops/${f.a.id}/orders/${oid}`;
+  const stock = await f.store.get(stockKey),
+    order = await f.store.get(orderKey);
+  let snapshot = await portal.read(f.a.id, 'merchant');
+  await assert.rejects(
+    () =>
+      portal.manageCategory(f.a.id, 'other', {
+        action: 'rename',
+        name: 'Arquivos',
+        newName: 'Licenças',
+        revision: snapshot.revision,
+      }),
+    { code: 'STORE_NOT_APPROVED' },
+  );
+  const oldRevision = snapshot.revision;
+  await portal.manageCategory(f.a.id, 'merchant', {
+    action: 'rename',
+    name: 'Arquivos',
+    newName: 'Licenças',
+    revision: oldRevision,
+  });
+  await assert.rejects(
+    () =>
+      portal.manageCategory(f.a.id, 'merchant', {
+        action: 'delete',
+        name: 'Licenças',
+        revision: oldRevision,
+      }),
+    { code: 'STORE_CHANGED' },
+  );
+  snapshot = await portal.read(f.a.id, 'merchant');
+  assert.equal(snapshot.products[0].category, 'Licenças');
+  assert(!snapshot.categories.includes('Arquivos'));
+  await assert.rejects(
+    () =>
+      portal.manageCategory(f.a.id, 'merchant', {
+        action: 'delete',
+        name: 'Licenças',
+        revision: snapshot.revision,
+      }),
+    { code: 'CATEGORY_HAS_PRODUCTS' },
+  );
+  await portal.createCategory(f.a.id, 'merchant', { name: 'Destino', revision: snapshot.revision });
+  snapshot = await portal.read(f.a.id, 'merchant');
+  await assert.rejects(
+    () =>
+      portal.manageCategory(f.a.id, 'merchant', {
+        action: 'rename',
+        name: 'Licenças',
+        newName: 'Destino',
+        revision: snapshot.revision,
+      }),
+    { code: 'CATEGORY_EXISTS' },
+  );
+  await portal.manageCategory(f.a.id, 'merchant', {
+    action: 'delete',
+    name: 'Licenças',
+    destination: 'Destino',
+    revision: snapshot.revision,
+  });
+  snapshot = await portal.read(f.a.id, 'merchant');
+  assert.equal(snapshot.products[0].category, 'Destino');
+  assert(!snapshot.categories.includes('Licenças'));
+  assert.deepEqual(await f.store.get(stockKey), stock);
+  assert.deepEqual(await f.store.get(orderKey), order);
+  await portal.createCategory(f.a.id, 'merchant', { name: 'Vazia', revision: snapshot.revision });
+  snapshot = await portal.read(f.a.id, 'merchant');
+  await portal.manageCategory(f.a.id, 'merchant', {
+    action: 'delete',
+    name: 'Vazia',
+    revision: snapshot.revision,
+  });
+  assert(!(await portal.read(f.a.id, 'merchant')).categories.includes('Vazia'));
+});
+
+test('Product moves persist within their category and Telegram renders the saved order after restart', async () => {
+  const f = await fixture(),
+    portal = new MerchantConsole(f.store, f.key, f.bots);
+  const first = await f.product(),
+    other = await f.product(),
+    last = await f.product();
+  let snapshot = await portal.read(f.a.id, 'merchant');
+  const p = snapshot.products.find((p) => p.id === other)!;
+  await portal.saveProduct(f.a.id, 'merchant', {
+    id: other,
+    title: p.title,
+    description: p.description,
+    category: 'Outra',
+    price: p.price,
+    enabled: true,
+    banner: '',
+    revision: snapshot.revision,
+  });
+  snapshot = await portal.read(f.a.id, 'merchant');
+  const original = snapshot.products;
+  await assert.rejects(
+    () =>
+      portal.moveProduct(f.a.id, 'other', {
+        productId: first,
+        direction: 'down',
+        revision: snapshot.revision,
+      }),
+    { code: 'STORE_NOT_APPROVED' },
+  );
+  const oldRevision = snapshot.revision;
+  await portal.moveProduct(f.a.id, 'merchant', {
+    productId: first,
+    direction: 'down',
+    revision: oldRevision,
+  });
+  await assert.rejects(
+    () =>
+      portal.moveProduct(f.a.id, 'merchant', {
+        productId: last,
+        direction: 'down',
+        revision: oldRevision,
+      }),
+    { code: 'STORE_CHANGED' },
+  );
+  snapshot = await portal.read(f.a.id, 'merchant');
+  assert.deepEqual(
+    snapshot.products.map((p) => p.id),
+    [last, other, first],
+  );
+  for (const product of original)
+    assert.deepEqual(
+      snapshot.products.find((p) => p.id === product.id),
+      product,
+    );
+  const categories = await f.click(222222222, 'catalog');
+  const links = categories.flatMap(
+    (e) =>
+      (
+        e.payload.reply_markup as
+          | { inline_keyboard?: { text: string; callback_data: string }[][] }
+          | undefined
+      )?.inline_keyboard?.flat() ?? [],
+  );
+  const link = links.find((b) => b.text.includes('Arquivos'))!;
+  const restarted = new BotStore(f.store, f.key, () => new Date('2026-10-25T12:00:00Z'));
+  const result = await restarted.process(
+    await restarted.authenticate(f.runtimeKey),
+    f.callback(222222222, link.callback_data),
+  );
+  const effects = await f.effects(result.effectIds);
+  const text = JSON.stringify(
+    effects.find((e) => String(e.payload.text).includes('Escolha um produto'))!.payload
+      .reply_markup,
+  );
+  assert(text.indexOf('p:' + last) < text.indexOf('p:' + first));
+  await portal.moveProduct(f.a.id, 'merchant', {
+    productId: last,
+    direction: 'up',
+    revision: (await portal.read(f.a.id, 'merchant')).revision,
+  });
+  assert.deepEqual(
+    (await portal.read(f.a.id, 'merchant')).products.map((p) => p.id),
+    [last, other, first],
+  );
+});
+
 test('Catalog starts at categories even with one category; category links remain stable when sorting changes', async () => {
   const f = await fixture();
   const pid = await f.product();

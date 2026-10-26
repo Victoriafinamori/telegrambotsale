@@ -70,6 +70,9 @@ const navigation = [
 ] as const;
 const icon = (name: string) => {
   const paths: Record<string, string> = {
+    up: '<path d="m6 10 6-6 6 6M12 4v16"/>',
+    down: '<path d="m6 14 6 6 6-6M12 20V4"/>',
+    trash: '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/>',
     chevron: '<path d="m9 5 7 7-7 7"/>',
     overview:
       '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
@@ -305,7 +308,7 @@ export async function mountMerchantConsole(
                 'Depois, adicione os produtos que fazem parte dela.',
               )
             }</div></section>`
-          : `<section class="mc-panel"><div class="mc-panel-head"><div><button class="text-button" data-action="all-categories">Voltar às categorias</button><h2 tabindex="-1">${esc(category)}</h2><p>${products.length} ${products.length === 1 ? 'produto nesta categoria' : 'produtos nesta categoria'}</p></div><button data-action="new-product">Adicionar produto</button></div><div class="mc-product-list">${products.map((p) => `<button class="mc-product" data-edit="${p.id}"><span class="mc-product-image" ${p.banner ? `data-asset="${esc(p.banner)}"` : ''}>Sem foto</span><span><strong>${esc(p.title)}</strong><small>${p.enabled ? 'Disponível' : 'Oculto'}</small></span><span><b>${money(p.price, data.payment_mode === 'manual' ? 'BRL' : 'XTR')}</b><small>${p.stock} un. · Editar</small></span></button>`).join('') || empty('Esta categoria ainda está vazia', 'Use Adicionar produto para começar.')}</div></section>`;
+          : `<section class="mc-panel"><div class="mc-panel-head"><div><button class="text-button" data-action="all-categories">Voltar às categorias</button><h2 tabindex="-1">${esc(category)}</h2><p>${products.length} ${products.length === 1 ? 'produto nesta categoria' : 'produtos nesta categoria'}</p></div><button data-action="new-product">Adicionar produto</button></div><div class="mc-category-tools"><button class="quiet" data-action="rename-category">${icon('appearance')}Renomear categoria</button><button class="quiet" data-action="delete-category">${icon('trash')}Excluir categoria</button></div><p class="mc-order-help">Use as setas para definir a ordem dos produtos no Telegram.</p><div class="mc-product-list">${products.map((p, index) => `<div class="mc-product-row" data-product-id="${p.id}"><button class="mc-product" data-edit="${p.id}"><span class="mc-product-image" ${p.banner ? `data-asset="${esc(p.banner)}"` : ''}>Sem foto</span><span><strong>${esc(p.title)}</strong><small>${p.enabled ? 'Disponível' : 'Oculto'}</small></span><span><b>${money(p.price, data.payment_mode === 'manual' ? 'BRL' : 'XTR')}</b><small>${p.stock} un. · Editar</small></span></button><div class="mc-product-order" role="group" aria-label="Ordem de ${esc(p.title)}"><button class="mc-icon-button" data-move="${p.id}" data-direction="up" aria-label="Mover ${esc(p.title)} para cima" title="Mover para cima" ${index === 0 ? 'disabled' : ''}>${icon('up')}</button><button class="mc-icon-button" data-move="${p.id}" data-direction="down" aria-label="Mover ${esc(p.title)} para baixo" title="Mover para baixo" ${index === products.length - 1 ? 'disabled' : ''}>${icon('down')}</button></div></div>`).join('') || empty('Esta categoria ainda está vazia', 'Use Adicionar produto para começar.')}</div></section>`;
     }
     if (section === 'product-edit') {
       const p = selected;
@@ -446,8 +449,11 @@ export async function mountMerchantConsole(
     if (busy) return;
     busy = true;
     host.setAttribute('aria-busy', 'true');
-    const btns = [...host.querySelectorAll<HTMLButtonElement>('button')];
-    btns.forEach((b) => (b.disabled = true));
+    const btns = [...host.querySelectorAll<HTMLButtonElement>('button')].map((button) => ({
+      button,
+      disabled: button.disabled,
+    }));
+    btns.forEach(({ button }) => (button.disabled = true));
     try {
       await work();
     } catch (error) {
@@ -455,7 +461,7 @@ export async function mountMerchantConsole(
     } finally {
       busy = false;
       host.removeAttribute('aria-busy');
-      btns.forEach((b) => (b.disabled = false));
+      btns.forEach(({ button, disabled }) => (button.disabled = disabled));
     }
   };
   const confirm = (
@@ -502,10 +508,90 @@ export async function mountMerchantConsole(
     dialog.showModal();
     return dialog;
   };
+  const categoryDialog = (action: 'rename' | 'delete') => {
+    if (category === null || busy) return;
+    const name = category,
+      revision = data.revision;
+    const count = data.products.filter((p) => p.category === name).length;
+    const destinations = [
+      ...new Set([...(data.categories ?? []), ...data.products.map((p) => p.category)]),
+    ]
+      .filter((n) => n !== name)
+      .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    const dialog = document.createElement('dialog');
+    dialog.className = 'mc-category-dialog';
+    dialog.setAttribute('aria-labelledby', 'mc-category-dialog-title');
+    dialog.innerHTML = `<h2 id="mc-category-dialog-title">${action === 'rename' ? 'Renomear categoria' : 'Excluir categoria'}</h2><p><strong>${esc(name)}</strong></p><form>${action === 'rename' ? input('newName', 'Novo nome', name, 'required maxlength="40"') : count ? `<p>${count} ${count === 1 ? 'produto será movido' : 'produtos serão movidos'} para outra categoria, preservando estoque, preços e pedidos.</p>${destinations.length ? `<label>Mover produtos para<select name="destination" required><option value="">Escolha a categoria de destino</option>${destinations.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('')}</select></label>` : '<p>Crie outra categoria no catálogo para receber estes produtos antes de excluir esta.</p>'}` : '<p>Esta categoria está vazia. Confirme para removê-la do catálogo.</p>'}<div class="mc-shortcuts"><button class="quiet" type="button" data-close>Cancelar</button><button type="submit" ${action === 'delete' && count && !destinations.length ? 'disabled' : ''}>${action === 'rename' ? 'Salvar nome' : count ? 'Mover produtos e excluir categoria' : 'Excluir categoria'}</button></div><p role="alert" hidden></p></form>`;
+    host.append(dialog);
+    dialog.addEventListener('close', () => dialog.remove());
+    dialog.querySelector('[data-close]')!.addEventListener('click', () => dialog.close());
+    dialog.querySelector('form')!.addEventListener('submit', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const fields = new FormData(event.target as HTMLFormElement);
+      const newName = String(fields.get('newName') ?? '').trim();
+      void run(async () => {
+        try {
+          await api('/store/manage/categories/manage', {
+            action,
+            name,
+            revision,
+            ...(action === 'rename'
+              ? { newName }
+              : count
+                ? { destination: String(fields.get('destination') ?? '') }
+                : {}),
+          });
+        } catch (error) {
+          const feedback = dialog.querySelector<HTMLElement>('[role="alert"]')!;
+          feedback.hidden = false;
+          feedback.textContent =
+            error instanceof Error
+              ? error.message
+              : 'Não foi possível alterar a categoria. Atualize e tente novamente.';
+          return;
+        }
+        category = action === 'rename' ? newName : null;
+        dialog.close();
+        await refreshSection();
+        alert(
+          action === 'rename'
+            ? 'Categoria renomeada.'
+            : 'Categoria excluída. Os produtos foram preservados.',
+        );
+      });
+    });
+    dialog.showModal();
+    (
+      dialog.querySelector<HTMLElement>('input, select') ??
+      dialog.querySelector<HTMLElement>('[data-close]')
+    )?.focus();
+  };
   host.addEventListener('click', (event) => {
     const button = (event.target as Element).closest<HTMLButtonElement>('button');
     if (!button || button.closest('dialog')) return;
     event.stopPropagation();
+    if (
+      button.dataset.action === 'rename-category' ||
+      button.dataset.action === 'delete-category'
+    ) {
+      categoryDialog(button.dataset.action === 'rename-category' ? 'rename' : 'delete');
+      return;
+    }
+    if (button.dataset.move) {
+      const productId = button.dataset.move;
+      void run(async () => {
+        await api('/store/manage/products/order', {
+          productId,
+          direction: button.dataset.direction,
+          revision: data.revision,
+        });
+        await refreshSection();
+        host.querySelector<HTMLElement>(`[data-product-id="${productId}"] .mc-product`)?.focus();
+        alert('Ordem dos produtos atualizada no Telegram.');
+      });
+      return;
+    }
     if (button.dataset.action === 'toggle-navigation') {
       if (mobile.matches) {
         mobileOpen = true;

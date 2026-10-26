@@ -495,9 +495,9 @@ export class BotStore {
           );
           return;
         }
-        const available = shop.products
-          .filter((p) => p.enabled && (!category || p.category === category))
-          .sort((a, b) => a.category.localeCompare(b.category));
+        const available = shop.products.filter(
+          (p) => p.enabled && (!category || p.category === category),
+        );
         if (!available.length) {
           say('O catálogo ainda não tem produtos disponíveis.', menu());
           return;

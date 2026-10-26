@@ -196,6 +196,92 @@ export class MerchantConsole {
       this.audit(tx, id, uid, 'store.category_created_web');
     });
   }
+  async manageCategory(id: string, uid: string, input: unknown) {
+    const name = z.string().trim().min(1).max(40),
+      revision = z.number().int().nonnegative();
+    const value = z
+      .discriminatedUnion('action', [
+        z.object({ action: z.literal('rename'), name, newName: name, revision }).strict(),
+        z
+          .object({ action: z.literal('delete'), name, destination: name.optional(), revision })
+          .strict(),
+      ])
+      .parse(input);
+    await botTransaction(this.store, async (tx) => {
+      const { shop } = await this.owner(tx, id, uid);
+      this.revision(shop, value.revision);
+      const categories = [
+        ...new Set([...(shop.categories ?? []), ...shop.products.map((p) => p.category)]),
+      ];
+      if (!categories.includes(value.name))
+        throw new HttpError(
+          404,
+          'CATEGORY_NOT_FOUND',
+          'Categoria não encontrada. Atualize o catálogo.',
+        );
+      if (value.action === 'rename') {
+        if (value.newName === value.name) return;
+        if (categories.includes(value.newName))
+          throw new HttpError(409, 'CATEGORY_EXISTS', 'Já existe uma categoria com esse nome.');
+        shop.categories = categories.map((category) =>
+          category === value.name ? value.newName : category,
+        );
+        shop.products = shop.products.map((p) =>
+          p.category === value.name ? { ...p, category: value.newName } : p,
+        );
+      } else {
+        const hasProducts = shop.products.some((p) => p.category === value.name);
+        if (
+          hasProducts &&
+          (!value.destination ||
+            value.destination === value.name ||
+            !categories.includes(value.destination))
+        )
+          throw new HttpError(
+            409,
+            'CATEGORY_HAS_PRODUCTS',
+            'Escolha outra categoria para receber os produtos antes de excluir.',
+          );
+        shop.categories = categories.filter((category) => category !== value.name);
+        if (hasProducts)
+          shop.products = shop.products.map((p) =>
+            p.category === value.name ? { ...p, category: value.destination! } : p,
+          );
+      }
+      tx.set(botRoot(id), { ...shop, portal_revision: value.revision + 1 });
+      this.audit(
+        tx,
+        id,
+        uid,
+        value.action === 'rename' ? 'store.category_renamed_web' : 'store.category_deleted_web',
+      );
+    });
+  }
+  async moveProduct(id: string, uid: string, input: unknown) {
+    const value = z
+      .object({
+        productId: z.string().regex(/^[a-f0-9]{12}$/),
+        direction: z.enum(['up', 'down']),
+        revision: z.number().int().nonnegative(),
+      })
+      .strict()
+      .parse(input);
+    await botTransaction(this.store, async (tx) => {
+      const { shop } = await this.owner(tx, id, uid);
+      this.revision(shop, value.revision);
+      const index = shop.products.findIndex((p) => p.id === value.productId);
+      if (index < 0) throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'Produto não encontrado.');
+      const positions = shop.products.flatMap((p, i) =>
+        p.category === shop.products[index].category ? [i] : [],
+      );
+      const position = positions.indexOf(index),
+        target = positions[position + (value.direction === 'up' ? -1 : 1)];
+      if (target === undefined) return;
+      [shop.products[index], shop.products[target]] = [shop.products[target], shop.products[index]];
+      tx.set(botRoot(id), { ...shop, portal_revision: value.revision + 1 });
+      this.audit(tx, id, uid, 'store.product_reordered_web');
+    });
+  }
   async addStock(id: string, uid: string, input: unknown) {
     const value = z
       .object({
