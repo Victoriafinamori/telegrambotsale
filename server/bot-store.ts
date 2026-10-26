@@ -330,7 +330,12 @@ export class BotStore {
         chatId = chat?.id ?? from?.id;
       const say = (
         text: string,
-        markup?: ReturnType<typeof buttons>,
+        markup?: {
+          inline_keyboard: (
+            | { text: string; callback_data: string }
+            | { text: string; url: string }
+          )[][];
+        },
         target: number | string | undefined = chatId,
       ) => {
         if (target)
@@ -364,25 +369,23 @@ export class BotStore {
         session: null,
       };
       const saveCustomer = () => tx.set(cartPath, customer);
-      const menu = () =>
-        buttons([
-          [
-            ['🛍️ Produtos', 'catalog'],
-            ['🛒 Carrinho', 'cart'],
-          ],
-          [
-            ['🧾 Meus pedidos', 'orders'],
-            ['💬 Suporte', 'support'],
-          ],
-          [
+      const menu = () => ({
+        inline_keyboard: [
+          ...buttons([
             [
-              customer.notices ? '🔕 Parar avisos' : '🔔 Receber avisos',
-              customer.notices ? 'notices:unsubscribe' : 'notices:subscribe',
+              ['🛍️ Produtos', 'catalog'],
+              ['🛒 Carrinho', 'cart'],
             ],
-          ],
-          ...(owner ? [[['⚙️ Gerenciar loja', 'admin']] as [string, string][]] : []),
-          ...(owner ? [[['Carteira', 'admin:wallet']] as [string, string][]] : []),
-        ]);
+            [
+              ['🧾 Meus pedidos', 'orders'],
+              ['💬 Suporte', 'support'],
+            ],
+            ...(owner ? [[['⚙️ Gerenciar loja', 'admin']] as [string, string][]] : []),
+            ...(owner ? [[['Carteira', 'admin:wallet']] as [string, string][]] : []),
+          ]).inline_keyboard,
+          [{ text: '🚀 Quero um bot igual · Blackout', url: 'https://blackout-create.web.app/' }],
+        ],
+      });
       const adminMenu = () =>
         buttons([
           [
@@ -862,7 +865,7 @@ export class BotStore {
           saveCustomer();
           say(
             enabled
-              ? 'Você ativou os avisos desta loja. Pode parar a qualquer momento pelo menu ou /pararavisos.'
+              ? 'Você ativou os avisos desta loja. Pode parar a qualquer momento com /pararavisos.'
               : 'Você não receberá novos avisos desta loja. Seus pedidos e atendimento continuam disponíveis.',
             menu(),
           );

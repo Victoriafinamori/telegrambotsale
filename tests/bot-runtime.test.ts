@@ -325,6 +325,40 @@ test('Wallet HTTP derives merchant identity, blocks arbitrary account IDs and ha
   }
 });
 
+test('Store start shows management only to the verified merchant and offers Blackout to buyers', async () => {
+  const f = await fixture();
+  const keyboard = (effects: BotEffect[]) =>
+    (
+      effects.find((e) => e.payload.reply_markup)?.payload.reply_markup as any
+    ).inline_keyboard.flat();
+  const buyer = keyboard(await f.send(222222222, '/start'));
+  assert(
+    !buyer.some((b: any) => b.callback_data === 'admin' || b.callback_data === 'admin:wallet'),
+  );
+  assert(!buyer.some((b: any) => /Receber avisos|Gerenciar loja|Carteira/.test(b.text)));
+  assert(
+    buyer.some(
+      (b: any) =>
+        b.text.includes('Quero um bot igual') && b.url === 'https://blackout-create.web.app/',
+    ),
+  );
+  const owner = keyboard(await f.send(111111111, '/start'));
+  assert(owner.some((b: any) => b.callback_data === 'admin'));
+  assert(owner.some((b: any) => b.callback_data === 'admin:wallet'));
+  const denied = await f.click(222222222, 'admin');
+  assert(denied.some((e) => String(e.payload.text).includes('somente ao responsável')));
+  await f.store.transaction(async (tx) => {
+    const setup = (await tx.get('merchant_bot_setup/' + f.a.id))!;
+    tx.set('merchant_bot_setup/' + f.a.id, { ...setup, telegram_user_id: '333333333' });
+  });
+  const formerOwner = keyboard(await f.send(111111111, '/start'));
+  assert(
+    !formerOwner.some(
+      (b: any) => b.callback_data === 'admin' || b.callback_data === 'admin:wallet',
+    ),
+  );
+});
+
 test('Telegram wallet wizard uses owner binding, web review and explicit confirmation; buyer gets no wallet', async () => {
   const p = await walletFixture();
   const denied = await p.f.click(222222222, 'admin:wallet');
