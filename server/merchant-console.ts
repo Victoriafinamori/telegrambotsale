@@ -115,6 +115,9 @@ export class MerchantConsole {
         welcome: shop.welcome,
         banner: shop.banner,
         products: shop.products,
+        categories: [
+          ...new Set([...(shop.categories ?? []), ...shop.products.map((p) => p.category)]),
+        ].sort((a, b) => a.localeCompare(b, 'pt-BR')),
         support: shop.support,
         support_name: shop.support_name ?? '',
         support_phone: shop.support_phone ?? '',
@@ -171,6 +174,26 @@ export class MerchantConsole {
       tx.set(botRoot(id), { ...shop, portal_revision: revision + 1 });
       this.audit(tx, id, uid, 'store.product_saved_web');
       return { id: pid };
+    });
+  }
+  async createCategory(id: string, uid: string, input: unknown) {
+    const value = z
+      .object({ name: z.string().trim().min(1).max(40), revision: z.number().int().nonnegative() })
+      .strict()
+      .parse(input);
+    await botTransaction(this.store, async (tx) => {
+      const { shop } = await this.owner(tx, id, uid);
+      this.revision(shop, value.revision);
+      const categories = [
+        ...new Set([...(shop.categories ?? []), ...shop.products.map((p) => p.category)]),
+      ];
+      if (!categories.includes(value.name)) {
+        if (categories.length >= 40)
+          throw new HttpError(409, 'CATEGORY_LIMIT', 'Limite de 40 categorias atingido.');
+        categories.push(value.name);
+      }
+      tx.set(botRoot(id), { ...shop, categories, portal_revision: value.revision + 1 });
+      this.audit(tx, id, uid, 'store.category_created_web');
     });
   }
   async addStock(id: string, uid: string, input: unknown) {

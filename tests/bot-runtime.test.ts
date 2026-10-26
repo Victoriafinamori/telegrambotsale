@@ -19,6 +19,70 @@ import {
 import { TelegramClient, TelegramError } from '../server/telegram-client.js';
 import { botTransaction } from '../server/bot-data.js';
 
+test('Catalog starts at categories even with one category; category links remain stable when sorting changes', async () => {
+  const f = await fixture();
+  const pid = await f.product();
+  const menu = await f.click(222222222, 'catalog');
+  const categoryMessage = menu.find((e) =>
+    String(e.payload.text).includes('Escolha uma categoria'),
+  )!;
+  assert(categoryMessage);
+  const rows = (
+    categoryMessage.payload.reply_markup as {
+      inline_keyboard: { text: string; callback_data: string }[][];
+    }
+  ).inline_keyboard;
+  const category = rows.flat().find((b) => b.text.includes('Arquivos'))!;
+  assert(category.callback_data.startsWith('cat:'));
+  assert(!rows.flat().some((b) => b.callback_data === 'p:' + pid));
+  await f.store.transaction(async (tx) => {
+    const key = 'bot_shops/' + f.a.id,
+      shop = (await tx.get(key))!;
+    shop.products.push({
+      ...shop.products[0],
+      id: 'abcdef012345',
+      title: 'Outro catálogo',
+      category: 'AAA',
+    });
+    tx.set(key, shop);
+  });
+  const items = await f.click(222222222, category.callback_data);
+  const output = items.find((e) => String(e.payload.text).includes('Escolha um produto'))!;
+  assert(output);
+  const buttons = JSON.stringify(output.payload.reply_markup);
+  assert(buttons.includes('p:' + pid));
+  assert(!buttons.includes('Outro catálogo'));
+  const product = (await f.click(222222222, 'p:' + pid)).find((e) =>
+    String(e.payload.text).includes('Descrição do arquivo'),
+  )!;
+  assert(JSON.stringify(product.payload.reply_markup).includes(category.callback_data));
+});
+
+test('Merchant can create empty categories before products; existing categories stay visible and writes require owner and current revision', async () => {
+  const f = await fixture(),
+    portal = new MerchantConsole(f.store, f.key, f.bots);
+  const snapshot = await portal.read(f.a.id, 'merchant');
+  await assert.rejects(
+    () => portal.createCategory(f.a.id, 'other', { name: 'Licenças', revision: snapshot.revision }),
+    { code: 'STORE_NOT_APPROVED' },
+  );
+  await portal.createCategory(f.a.id, 'merchant', {
+    name: 'Licenças',
+    revision: snapshot.revision,
+  });
+  assert((await portal.read(f.a.id, 'merchant')).categories.includes('Licenças'));
+  await assert.rejects(
+    () => portal.createCategory(f.a.id, 'merchant', { name: 'Outra', revision: snapshot.revision }),
+    { code: 'STORE_CHANGED' },
+  );
+  await f.product();
+  const updated = await portal.read(f.a.id, 'merchant');
+  assert(updated.categories.includes('Arquivos'));
+  assert(updated.categories.includes('Licenças'));
+  const buyer = await f.click(222222222, 'catalog');
+  assert(!JSON.stringify(buyer).includes('Licenças'));
+});
+
 test('Transaction reads are shared only within the attempt, cloned, and superseded by buffered writes', async () => {
   const memory = new MemoryDocuments();
   await memory.transaction(async (tx) => tx.set('sample/one', { value: 1 }));

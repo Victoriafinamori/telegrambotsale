@@ -5,6 +5,7 @@ type Data = {
   welcome: string;
   banner: string;
   products: Product[];
+  categories: string[];
   support: string;
   support_name: string;
   support_phone: string;
@@ -69,6 +70,7 @@ const navigation = [
 ] as const;
 const icon = (name: string) => {
   const paths: Record<string, string> = {
+    chevron: '<path d="m9 5 7 7-7 7"/>',
     overview:
       '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
     products: '<path d="m12 3 9 5-9 5-9-5 9-5Zm-9 5v9l9 5 9-5V8M12 13v9M7.5 5.5l9 5"/>',
@@ -103,6 +105,7 @@ export async function mountMerchantConsole(
 ) {
   let data: Data,
     section = 'overview',
+    category: string | null = null,
     selected: Product | undefined,
     orders: Order[] = [],
     notices: Announcement[] = [],
@@ -283,11 +286,40 @@ export async function mountMerchantConsole(
     let body = '';
     if (section === 'overview')
       body = `<div class="mc-metrics">${metric('Vendas aprovadas', money(data.stats.gross_brl))}${metric('Compradores', data.stats.buyers)}${metric('Pedidos entregues', data.stats.delivered_orders)}${metric('Para aprovar', data.pendingReview)}</div><section class="mc-panel"><div class="mc-panel-head"><h2>Seu próximo passo</h2><button data-section="orders">Conferir pedidos</button></div><p>Configure a vitrine e o atendimento. As alterações salvas aqui são usadas pelo seu bot no Telegram.</p><div class="mc-shortcuts"><button class="quiet" data-section="products">Produtos e fotos</button><button class="quiet" data-section="appearance">Mensagem de entrada</button><button class="quiet" data-section="payments">Dados de pagamento</button></div><dl><div><dt>Pedidos criados</dt><dd>${data.stats.orders}</dd></div><div><dt>Aguardando pagamento</dt><dd>${data.pendingPayment}</dd></div><div><dt>Recusados</dt><dd>${data.stats.rejected_orders}</dd></div><div><dt>Vendas em Stars</dt><dd>${money(data.stats.gross_stars, 'XTR')}</dd></div></dl></section>`;
-    if (section === 'products')
-      body = `<section class="mc-panel"><div class="mc-panel-head"><div><h2>Catálogo</h2><p>${data.products.length} de 40 produtos · fotos opcionais</p></div><button data-action="new-product">Adicionar produto</button></div>${data.products.length ? `<div class="mc-product-list">${data.products.map((p) => `<button class="mc-product quiet" data-edit="${p.id}"><div class="mc-product-image" ${p.banner ? `data-asset="${esc(p.banner)}"` : ''}>${p.banner ? 'Foto' : 'Sem foto'}</div><span><b>${esc(p.title)}</b><small>${esc(p.category)} · ${p.enabled ? 'Disponível' : 'Oculto'}</small><strong>${money(p.price, data.payment_mode === 'manual' ? 'BRL' : 'XTR')}</strong></span><span>${p.stock} un.<small>Editar →</small></span></button>`).join('')}</div>` : empty('Seu catálogo começa aqui', 'Cadastre o primeiro produto e depois adicione as unidades no estoque.')}</section>`;
+    if (section === 'products') {
+      const names = [
+        ...new Set([...(data.categories ?? []), ...data.products.map((p) => p.category)]),
+      ].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+      const products = data.products.filter((p) => p.category === category);
+      body =
+        category === null
+          ? `<section class="mc-panel"><div class="mc-panel-head"><div><h2>Categorias</h2><p>Organize o catálogo. Escolha uma categoria para cadastrar ou editar seus produtos.</p></div></div><form data-form="category" class="mc-category-form">${revision()}${input('name', 'Nova categoria', '', 'required maxlength="40" placeholder="Ex.: Cursos, arquivos, licenças"')}<button type="submit">Criar categoria</button></form><div class="mc-category-list">${
+              names
+                .map((name) => {
+                  const count = data.products.filter((p) => p.category === name).length;
+                  return `<button class="mc-category" data-category="${esc(name)}">${icon('folder')}<span><strong>${esc(name)}</strong><small>${count} ${count === 1 ? 'produto' : 'produtos'}</small></span>${icon('chevron')}</button>`;
+                })
+                .join('') ||
+              empty(
+                'Crie a primeira categoria',
+                'Depois, adicione os produtos que fazem parte dela.',
+              )
+            }</div></section>`
+          : `<section class="mc-panel"><div class="mc-panel-head"><div><button class="text-button" data-action="all-categories">Voltar às categorias</button><h2 tabindex="-1">${esc(category)}</h2><p>${products.length} ${products.length === 1 ? 'produto nesta categoria' : 'produtos nesta categoria'}</p></div><button data-action="new-product">Adicionar produto</button></div><div class="mc-product-list">${products.map((p) => `<button class="mc-product" data-edit="${p.id}"><span class="mc-product-image" ${p.banner ? `data-asset="${esc(p.banner)}"` : ''}>Sem foto</span><span><strong>${esc(p.title)}</strong><small>${p.enabled ? 'Disponível' : 'Oculto'}</small></span><span><b>${money(p.price, data.payment_mode === 'manual' ? 'BRL' : 'XTR')}</b><small>${p.stock} un. · Editar</small></span></button>`).join('') || empty('Esta categoria ainda está vazia', 'Use Adicionar produto para começar.')}</div></section>`;
+    }
     if (section === 'product-edit') {
       const p = selected;
-      body = `<section class="mc-panel"><div class="mc-panel-head"><h2>${p ? 'Editar produto' : 'Novo produto'}</h2><button class="quiet" data-section="products">Voltar ao catálogo</button></div><form data-form="product">${revision()}${p ? `<input type="hidden" name="id" value="${p.id}">` : ''}${input('title', 'Nome do produto', p?.title ?? '', 'required maxlength="70"')}${area('description', 'Descrição', p?.description ?? '', 400)}<div class="mc-form-row">${input('category', 'Categoria', p?.category ?? '', 'required maxlength="40"')}${input('price', data.payment_mode === 'manual' ? 'Preço · R$' : 'Preço · Stars', p ? (data.payment_mode === 'manual' ? p.price / 100 : p.price) : '', 'type="number" required min="0.01" max="100000" step="' + (data.payment_mode === 'manual' ? '0.01' : '1') + '"')}</div>${picture('banner', p?.banner ?? '', 'Foto do produto · opcional')}${data.payment_mode === 'manual' ? picture('pix_qr', p?.pix_qr ?? '', 'QR Code Pix deste produto · opcional') + '<p class="mc-note">Envie o QR gerado no seu banco para o preço deste produto. Usado somente para uma unidade, sem cupom. Carrinhos com vários itens ou quantidade maior recebem os dados Pix manuais. Ao mudar o preço, envie um QR atualizado; o anterior não será usado para o novo valor.</p>' : ''}<label class="mc-check"><input type="checkbox" name="enabled" ${p?.enabled !== false ? 'checked' : ''}> Disponível no catálogo</label><button type="submit">Salvar produto</button></form></section>`;
+      body = `<section class="mc-panel"><div class="mc-panel-head"><h2>${p ? 'Editar produto' : 'Novo produto'}</h2><button class="quiet" data-section="products">Voltar ao catálogo</button></div><form data-form="product">${revision()}${p ? `<input type="hidden" name="id" value="${p.id}">` : ''}${input('title', 'Nome do produto', p?.title ?? '', 'required maxlength="70"')}${area('description', 'Descrição', p?.description ?? '', 400)}<div class="mc-form-row"><label>Categoria<select name="category" required><option value="">Escolha uma categoria</option>${[
+        ...new Set([...(data.categories ?? []), ...data.products.map((v) => v.category)]),
+      ]
+        .sort((a, b) => a.localeCompare(b, 'pt-BR'))
+        .map(
+          (name) =>
+            `<option value="${esc(name)}" ${name === (p?.category ?? category) ? 'selected' : ''}>${esc(name)}</option>`,
+        )
+        .join(
+          '',
+        )}</select></label>${input('price', data.payment_mode === 'manual' ? 'Preço · R$' : 'Preço · Stars', p ? (data.payment_mode === 'manual' ? p.price / 100 : p.price) : '', 'type="number" required min="0.01" max="100000" step="' + (data.payment_mode === 'manual' ? '0.01' : '1') + '"')}</div>${picture('banner', p?.banner ?? '', 'Foto do produto · opcional')}${data.payment_mode === 'manual' ? picture('pix_qr', p?.pix_qr ?? '', 'QR Code Pix deste produto · opcional') + '<p class="mc-note">Envie o QR gerado no seu banco para o preço deste produto. Usado somente para uma unidade, sem cupom. Carrinhos com vários itens ou quantidade maior recebem os dados Pix manuais. Ao mudar o preço, envie um QR atualizado; o anterior não será usado para o novo valor.</p>' : ''}<label class="mc-check"><input type="checkbox" name="enabled" ${p?.enabled !== false ? 'checked' : ''}> Disponível no catálogo</label><button type="submit">Salvar produto</button></form></section>`;
     }
     if (section === 'stock')
       body = `<section class="mc-panel"><h2>Adicionar estoque</h2><p>Cada linha é uma unidade exclusiva. O conteúdo é cifrado e entregue após a aprovação do pagamento.</p>${data.products.length ? `<form data-form="stock"><input type="hidden" name="requestId" value="${crypto.randomUUID()}"><label>Produto<select name="productId">${data.products.map((p) => `<option value="${p.id}">${esc(p.title)} · ${p.stock} disponíveis</option>`).join('')}</select></label>${area('units', 'Uma unidade por linha', '', 20020)}<small>Até 20 unidades por envio · 100 disponíveis por produto. Os códigos existentes não são exibidos neste painel.</small><button type="submit">Adicionar unidades</button></form><p>Para adicionar arquivos digitais ao estoque, envie o arquivo em <b>/admin → Estoque</b> no bot. Fotos da vitrine podem ser enviadas pelo próprio site.</p>` : empty('Cadastre um produto primeiro', 'Depois ele aparecerá aqui para receber estoque.')}</section>`;
@@ -317,7 +349,7 @@ export async function mountMerchantConsole(
       })
       .join(
         '',
-      )}</nav><div class="mc-sidebar-footer"><a href="https://t.me/${esc(data.botUsername)}" target="_blank" rel="noopener noreferrer" aria-label="Abrir meu bot no Telegram" title="Abrir meu bot no Telegram">${icon('external')}<span class="mc-nav-label">Abrir meu bot</span></a><a href="#/configuracao" class="mc-back" aria-label="Ativação e conexão" title="Ativação e conexão">${icon('back')}<span class="mc-nav-label">Ativação e conexão</span></a></div></aside><div class="mc-main"><div class="mc-title"><div class="mc-page-heading"><button class="mc-icon-button" data-action="toggle-navigation" aria-controls="mc-sidebar">${icon('menu')}</button><h2 tabindex="-1">${navigation.find(([id]) => id === section)?.[1] ?? 'Editar produto'}</h2></div><button class="quiet" data-action="refresh">Atualizar</button></div><p id="mc-feedback" class="feedback" role="status" hidden></p>${body}</div></div>`;
+      )}</nav><div class="mc-sidebar-footer"><a href="https://t.me/${esc(data.botUsername)}" target="_blank" rel="noopener noreferrer" aria-label="Abrir meu bot no Telegram" title="Abrir meu bot no Telegram">${icon('external')}<span class="mc-nav-label">Abrir meu bot</span></a><a href="#/configuracao" class="mc-back" aria-label="Ativação e conexão" title="Ativação e conexão">${icon('back')}<span class="mc-nav-label">Ativação e conexão</span></a></div></aside><div class="mc-main"><div class="mc-title"><div class="mc-page-heading"><button class="mc-icon-button" data-action="toggle-navigation" aria-controls="mc-sidebar">${icon('menu')}</button><h2 tabindex="-1">${navigation.find(([id]) => id === section)?.[1] ?? (section === 'product-edit' && !selected ? 'Novo produto' : 'Editar produto')}</h2></div><button class="quiet" data-action="refresh">Atualizar</button></div><p id="mc-feedback" class="feedback" role="status" hidden></p>${body}</div></div>`;
     if (listLoading || listError) {
       const main = host.querySelector('.mc-main')!;
       if (listLoading && !listLoaded.has(section))
@@ -376,6 +408,7 @@ export async function mountMerchantConsole(
   const openSection = async (target: string) => {
     if (target === 'orders' && cursor) listLoaded.delete('orders');
     section = target;
+    if (target === 'products') category = null;
     selected = undefined;
     cursor = '';
     const request = ++navigationRequest;
@@ -491,6 +524,20 @@ export async function mountMerchantConsole(
     }
     if (button.dataset.action === 'close-navigation') {
       closeNavigation();
+      return;
+    }
+    if (button.dataset.category !== undefined) {
+      if (busy) return;
+      category = button.dataset.category;
+      section = 'products';
+      render();
+      host.querySelector<HTMLElement>('.mc-panel h2')?.focus();
+      return;
+    }
+    if (button.dataset.action === 'all-categories') {
+      category = null;
+      section = 'products';
+      render();
       return;
     }
     if (button.dataset.section) {
@@ -618,7 +665,13 @@ export async function mountMerchantConsole(
       const fields = new FormData(form),
         value = (name: string) => String(fields.get(name) ?? ''),
         kind = form.dataset.form;
-      if (kind === 'product') {
+      if (kind === 'category') {
+        await api('/store/manage/categories', {
+          name: value('name'),
+          revision: Number(value('revision')),
+        });
+        category = value('name').trim();
+      } else if (kind === 'product') {
         await api('/store/manage/products', {
           ...(value('id') ? { id: value('id') } : {}),
           title: value('title'),
@@ -633,6 +686,7 @@ export async function mountMerchantConsole(
           revision: Number(value('revision')),
         });
         section = 'products';
+        category = value('category');
       } else if (kind === 'stock') {
         const units = value('units')
           .split('\n')
@@ -684,7 +738,9 @@ export async function mountMerchantConsole(
       alert(
         kind === 'notice'
           ? 'Rascunho salvo. Nenhum aviso foi enviado.'
-          : 'Alterações salvas. Seu bot já usa estes dados.',
+          : kind === 'category'
+            ? 'Categoria criada. Adicione os produtos dela.'
+            : 'Alterações salvas. Seu bot já usa estes dados.',
       );
     });
   });

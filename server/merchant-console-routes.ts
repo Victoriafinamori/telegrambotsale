@@ -39,6 +39,11 @@ export function merchantConsoleRouter(
     const { id, uid } = owner(req);
     res.json(await console.saveProduct(id, uid, req.body));
   });
+  router.post('/categories', async (req, res) => {
+    const { id, uid } = owner(req);
+    await console.createCategory(id, uid, req.body);
+    res.json({ ok: true });
+  });
   router.post('/stock', async (req, res) => {
     const { id, uid } = owner(req);
     await console.addStock(id, uid, req.body);

@@ -359,11 +359,11 @@ export class BotStore {
       const menu = () =>
         buttons([
           [
-            ['🛍 Produtos', 'catalog'],
+            ['🛍️ Produtos', 'catalog'],
             ['🛒 Carrinho', 'cart'],
           ],
           [
-            ['📦 Meus pedidos', 'orders'],
+            ['🧾 Meus pedidos', 'orders'],
             ['💬 Suporte', 'support'],
           ],
           [
@@ -372,20 +372,20 @@ export class BotStore {
               customer.notices ? 'notices:unsubscribe' : 'notices:subscribe',
             ],
           ],
-          ...(owner ? [[['⚙️ Administrar', 'admin']] as [string, string][]] : []),
+          ...(owner ? [[['⚙️ Gerenciar loja', 'admin']] as [string, string][]] : []),
         ]);
       const adminMenu = () =>
         buttons([
           [
-            ['➕ Produto', 'admin:new'],
+            ['➕ Novo produto', 'admin:new'],
             ['📦 Estoque', 'admin:stock'],
           ],
           [
-            ['📝 Editar produto', 'admin:edit'],
-            ['🎟 Cupom', 'admin:coupon'],
+            ['✏️ Editar produto', 'admin:edit'],
+            ['🎟️ Cupons', 'admin:coupon'],
           ],
           [
-            ['🖼 Banner', 'admin:banner'],
+            ['🖼️ Banner da loja', 'admin:banner'],
             ['👋 Boas-vindas', 'admin:welcome'],
           ],
           [
@@ -464,8 +464,8 @@ export class BotStore {
       };
       const showProduct = (p: Product) => {
         const reply_markup = buttons([
-          [['Adicionar ao carrinho', 'add:' + p.id]],
-          [['Voltar', 'catalog']],
+          [['🛒 Adicionar ao carrinho', 'add:' + p.id]],
+          [['↩️ Voltar à categoria', 'cat:' + tokenHash(p.category).slice(0, 16)]],
         ]);
         effect(p.banner ? 'sendPhoto' : 'sendMessage', {
           chat_id: chatId,
@@ -479,10 +479,19 @@ export class BotStore {
         const categories = [
           ...new Set(shop.products.filter((p) => p.enabled).map((p) => p.category)),
         ].sort();
-        if (!category && categories.length > 1) {
+        if (!category && categories.length) {
           say(
-            'Escolha uma categoria:',
-            buttons(categories.map((name, index) => [[name, 'cat:' + index]])),
+            `${shop.title}\n\nEscolha uma categoria para ver os produtos.`,
+            buttons([
+              ...categories.map(
+                (name) =>
+                  [[`📁 ${name}`, 'cat:' + tokenHash(name).slice(0, 16)]] as [string, string][],
+              ),
+              [
+                ['🛒 Carrinho', 'cart'],
+                ['🏠 Início', 'home'],
+              ],
+            ]),
           );
           return;
         }
@@ -494,7 +503,7 @@ export class BotStore {
           return;
         }
         say(
-          'Escolha um produto:',
+          `${category}\n\nEscolha um produto para ver os detalhes.`,
           buttons([
             ...available.map(
               (p) =>
@@ -506,8 +515,8 @@ export class BotStore {
                 ] as [string, string][],
             ),
             [
+              ['↩️ Categorias', 'catalog'],
               ['🛒 Carrinho', 'cart'],
-              ['🏠 Início', 'home'],
             ],
           ]),
         );
@@ -535,15 +544,17 @@ export class BotStore {
             ),
             [
               [
-                shop.payment_mode === 'manual' ? 'Pagar por Pix/transferência' : 'Pagar com Stars',
+                shop.payment_mode === 'manual'
+                  ? '💠 Pagar com Pix/transferência'
+                  : '⭐ Pagar com Stars',
                 'checkout',
               ],
             ],
             [
-              ['Inserir cupom', 'coupon'],
-              ['Esvaziar', 'clear'],
+              ['🎟️ Usar cupom', 'coupon'],
+              ['🗑️ Esvaziar carrinho', 'clear'],
             ],
-            [['Produtos', 'catalog']],
+            [['↩️ Categorias', 'catalog']],
           ]),
         );
       };
@@ -1358,9 +1369,12 @@ export class BotStore {
           const categories = [
               ...new Set(shop.products.filter((p) => p.enabled).map((p) => p.category)),
             ].sort(),
-            category = categories[Number(cmd.slice(4))];
+            category = /^\d{1,2}$/.test(cmd.slice(4))
+              ? categories[Number(cmd.slice(4))]
+              : categories.find((name) => tokenHash(name).slice(0, 16) === cmd.slice(4));
           if (!selling && !owner) say('A loja ainda não está recebendo pedidos.');
           else if (category) catalog(category);
+          else catalog();
         } else if (cmd.startsWith('remove:')) {
           const item = customer.items.find((v: any) => v.id === cmd.slice(7));
           if (item) {
@@ -1474,10 +1488,10 @@ export class BotStore {
                     ? single.pix_qr
                     : '';
                 const markup = buttons([
-                  [['Enviar comprovante', 'receipt:' + oid]],
+                  [['📎 Enviar comprovante', 'receipt:' + oid]],
                   [
-                    ['Meus pedidos', 'orders'],
-                    ['Cancelar pedido', 'cancel:' + oid],
+                    ['🧾 Meus pedidos', 'orders'],
+                    ['✖️ Cancelar pedido', 'cancel:' + oid],
                   ],
                 ]);
                 if (qr)

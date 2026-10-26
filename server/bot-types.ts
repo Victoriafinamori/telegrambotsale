@@ -102,6 +102,7 @@ export interface Shop {
   owner_id: string | null;
   owner_bot_id: string | null;
   products: Product[];
+  categories?: string[];
   coupons: Record<string, { percent: number; limit: number; used: number }>;
   recent_orders: string[];
   open_orders: string[];
