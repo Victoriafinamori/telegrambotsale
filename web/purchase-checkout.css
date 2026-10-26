@@ -98,8 +98,9 @@ body:has(.purchase-checkout) {
   font-variant-numeric: tabular-nums;
 }
 .pc-summary {
-  background: #111f36;
-  color: #eff5ff;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
   padding: 32px;
   border-radius: 16px;
   position: sticky;
@@ -107,14 +108,14 @@ body:has(.purchase-checkout) {
   min-width: 0;
 }
 .pc-summary .brand {
-  color: #eff5ff;
+  color: var(--ink);
   margin-bottom: 34px;
 }
 .pc-summary .brand small {
-  color: #b4c5df;
+  color: var(--muted);
 }
 .pc-summary h2 {
-  color: #eff5ff;
+  color: var(--ink);
   font-size: 28px;
   line-height: 1.25;
   letter-spacing: -0.025em;
@@ -134,7 +135,7 @@ body:has(.purchase-checkout) {
 }
 .pc-summary dt {
   font-size: 13px;
-  color: #b4c5df;
+  color: var(--muted);
 }
 .pc-summary dd {
   margin: 0;
@@ -145,7 +146,7 @@ body:has(.purchase-checkout) {
 .pc-summary .pc-total {
   padding-top: 20px;
   margin-top: 8px;
-  border-top: 1px solid #344a69;
+  border-top: 1px solid var(--line);
 }
 .pc-total dd {
   font-size: 32px;
@@ -153,7 +154,7 @@ body:has(.purchase-checkout) {
 }
 .pc-summary > p,
 .pc-summary > small {
-  color: #b4c5df;
+  color: var(--muted);
   font-size: 12px;
   line-height: 1.9;
   margin: 24px 0 0;

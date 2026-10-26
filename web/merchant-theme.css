@@ -68,7 +68,10 @@ body:has(#merchant-console-host) > #app > header {
   border-color: var(--mc-action);
   color: #fff;
 }
-.mc-main button:where(:not(.quiet, .text-button, .mc-icon-button, .mc-category, .mc-product)):hover:not(:disabled) {
+.mc-main
+  button:where(:not(.quiet, .text-button, .mc-icon-button, .mc-category, .mc-product)):hover:not(
+    :disabled
+  ) {
   background: var(--mc-action-hover);
   border-color: var(--mc-action-hover);
 }
@@ -79,14 +82,7 @@ body:has(#merchant-console-host) > #app > header {
   color: var(--accent);
 }
 #merchant-console-host .mc-sidebar {
-  --surface: #111f36;
-  --bg: #1b2e4b;
-  --ink: #f2f6ff;
-  --muted: #b4c5df;
-  --line: #2d405e;
-  --accent: #a9cdff;
-  --soft: #284576;
-  border-right: 0;
+  border-right: 1px solid var(--line);
   background: var(--surface);
 }
 .mc-store-mark {
@@ -95,24 +91,24 @@ body:has(#merchant-console-host) > #app > header {
   border-radius: 13px;
 }
 .mc-store-info > span {
-  color: #a9c1e4;
+  color: var(--muted);
 }
 .mc-sidebar h1 {
-  color: #f2f6ff;
+  color: var(--ink);
   font-weight: 700;
 }
 .mc-sidebar nav button {
   border-radius: 10px;
 }
 .mc-sidebar nav button svg {
-  color: #a9c1e4;
+  color: currentColor;
 }
 .mc-sidebar nav button.active {
-  color: #fff;
-  background: #2856d5;
+  color: var(--accent);
+  background: var(--soft);
 }
 .mc-sidebar nav button.active svg {
-  color: #fff;
+  color: currentColor;
 }
 .mc-sidebar nav button.active::after {
   content: '';
@@ -120,20 +116,20 @@ body:has(#merchant-console-host) > #app > header {
   height: 5px;
   margin-left: auto;
   border-radius: 50%;
-  background: #fff;
+  background: currentColor;
 }
 .mc-collapsed .mc-sidebar nav button.active::after {
   display: none;
 }
 .mc-nav-group {
-  color: #a9c1e4;
+  color: var(--muted);
   font-weight: 600;
 }
 .mc-sidebar-footer a {
   font-size: 13px;
 }
 .mc-sidebar :focus-visible {
-  outline-color: #a9cdff;
+  outline-color: var(--accent);
   outline-offset: -3px;
 }
 .mc-title {
@@ -217,30 +213,30 @@ body:has(#merchant-console-host) > #app > header {
   justify-content: space-between;
   gap: 28px;
   padding: 30px;
-  background: #1d3c76;
-  color: #fff;
+  background: var(--soft);
+  color: var(--ink);
 }
 .mc-overview-intro h2 {
-  color: #fff;
+  color: var(--ink);
   margin-bottom: 10px;
   font-size: 24px;
 }
 .mc-overview-intro p {
-  color: #d5e2fa;
+  color: var(--muted);
   max-width: 64ch;
   margin: 0;
 }
 .mc-main .mc-overview-intro button[data-section] {
-  background: #fff;
-  border-color: #fff;
-  color: #1d3c76;
+  background: var(--mc-action);
+  border-color: var(--mc-action);
+  color: #fff;
   gap: 10px;
   flex-shrink: 0;
 }
 .mc-main .mc-overview-intro button[data-section]:hover {
-  background: #eaf0ff;
-  color: #1d3c76;
-  border-color: #eaf0ff;
+  background: var(--mc-action-hover);
+  color: #fff;
+  border-color: var(--mc-action-hover);
 }
 .mc-overview-intro svg,
 .mc-quicklinks svg {

@@ -1,4 +1,5 @@
 import './style.css';
+import { themeControl, syncThemeControl, toggleTheme } from './theme.js';
 import './landing.css';
 import { landingPage, publicContactUrl } from './landing.js';
 import { initializeApp, type FirebaseOptions } from 'firebase/app';
@@ -152,6 +153,7 @@ function renderLanding() {
   document.querySelector('meta[name="robots"]')?.setAttribute('content', 'index,follow');
   if (!app.querySelector('.landing-page'))
     app.innerHTML = landingPage(publicContactUrl(import.meta.env.VITE_CONTACT_URL), Boolean(me));
+  syncThemeControl();
   const anchor = location.hash.slice(1);
   if (
     ['experiencia', 'pagamentos', 'como-funciona', 'duvidas', 'contratar', 'conteudo'].includes(
@@ -187,7 +189,8 @@ function flash(value: string) {
 function shell(content: string) {
   document.title = 'Blackout Create · Área do cliente';
   document.querySelector('meta[name="robots"]')?.setAttribute('content', 'noindex,nofollow');
-  app.innerHTML = `<header>${brand}<div class="header-actions"><button class="quiet" id="theme" type="button" aria-label="Alternar tema">◐</button>${me ? '<button class="quiet" id="logout">Sair</button>' : ''}</div></header>${config?.emulatorHost ? '<div class="local-banner"><b>Ambiente local de testes</b> · Sem pagamentos ou bots reais. Não informe dados reais.</div>' : ''}<div id="feedback" class="feedback" role="status" ${feedback ? '' : 'hidden'}>${esc(feedback)}</div>${content}<footer>Blackout Create · <a href="#/">Início</a></footer>`;
+  app.innerHTML = `<header>${brand}<div class="header-actions">${themeControl()}${me ? '<button class="quiet" id="logout">Sair</button>' : ''}</div></header>${config?.emulatorHost ? '<div class="local-banner"><b>Ambiente local de testes</b> · Sem pagamentos ou bots reais. Não informe dados reais.</div>' : ''}<div id="feedback" class="feedback" role="status" ${feedback ? '' : 'hidden'}>${esc(feedback)}</div>${content}<footer>Blackout Create · <a href="#/">Início</a></footer>`;
+  syncThemeControl();
 }
 function renderAuth() {
   const signup = authMode === 'signup',
@@ -710,7 +713,7 @@ document.addEventListener('click', (event) => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button');
   if (!button || button.disabled) return;
   if (button.id === 'theme') {
-    document.documentElement.classList.toggle('dark');
+    toggleTheme();
     return;
   }
   if (button.id === 'close-dialog') {
