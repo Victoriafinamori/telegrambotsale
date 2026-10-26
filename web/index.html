@@ -5,14 +5,83 @@
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
     <meta
       name="description"
-      content="Conheça a proposta da Blackout Create para sua loja de produtos digitais no Telegram. Acesse sua conta e acompanhe a ativação do bot e sua assinatura."
+      content="Venda produtos digitais no Telegram com Pix automático, entrega integrada e painel web. Gerencie produtos, estoque, pedidos e carteira com a Blackout Create."
     />
-    <meta name="theme-color" content="#081526" />
-    <title>Blackout Create · Seu bot de vendas no Telegram</title>
+    <meta name="theme-color" content="#091525" />
+    <meta name="robots" content="index,follow" />
+    <link rel="canonical" href="https://blackout-create.web.app/" />
+    <link rel="icon" href="/brand.webp" type="image/webp" />
+    <link rel="preload" href="/fonts/manrope.ttf" as="font" type="font/ttf" crossorigin />
+    <meta property="og:locale" content="pt_BR" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Blackout Create" />
+    <meta
+      property="og:title"
+      content="Sua loja no Telegram. Seu controle, no site. | Blackout Create"
+    />
+    <meta
+      property="og:description"
+      content="Bot de vendas com Pix automático, entrega de produtos digitais e painel web para gerenciar sua loja."
+    />
+    <meta property="og:url" content="https://blackout-create.web.app/" />
+    <meta
+      property="og:image"
+      content="https://blackout-create.web.app/examples/painel-blackout.jpg"
+    />
+    <meta property="og:image:alt" content="Painel real de gestão de loja da Blackout Create" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="Blackout Create | Sua loja no Telegram, seu controle no site"
+    />
+    <meta
+      name="twitter:description"
+      content="Venda produtos digitais com Pix automático, entrega integrada e painel web."
+    />
+    <meta
+      name="twitter:image"
+      content="https://blackout-create.web.app/examples/painel-blackout.jpg"
+    />
+    <title>Blackout Create | Bot de vendas no Telegram com Pix automático</title>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Organization",
+            "@id": "https://blackout-create.web.app/#organization",
+            "name": "Blackout Create",
+            "url": "https://blackout-create.web.app/",
+            "logo": "https://blackout-create.web.app/brand.webp",
+            "sameAs": ["https://t.me/blackoutshopbrbot"]
+          },
+          {
+            "@type": "WebSite",
+            "@id": "https://blackout-create.web.app/#website",
+            "url": "https://blackout-create.web.app/",
+            "name": "Blackout Create",
+            "inLanguage": "pt-BR",
+            "publisher": { "@id": "https://blackout-create.web.app/#organization" }
+          },
+          {
+            "@type": "SoftwareApplication",
+            "name": "Blackout Create",
+            "url": "https://blackout-create.web.app/",
+            "applicationCategory": "BusinessApplication",
+            "operatingSystem": "Web, Telegram",
+            "description": "Plataforma para lojas de produtos digitais no Telegram, com painel web, Pix automático integrado, gestão de estoque, pedidos e carteira.",
+            "provider": { "@id": "https://blackout-create.web.app/#organization" }
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
     <div id="app"><p class="startup">Carregando Blackout Create…</p></div>
-    <noscript>Ative o JavaScript para acessar a aplicação.</noscript>
+    <noscript
+      >O painel de gestão requer JavaScript. Você pode conhecer a Blackout e abrir o bot de
+      demonstração pelos links desta página.</noscript
+    >
     <script type="module" src="/main.ts"></script>
   </body>
 </html>

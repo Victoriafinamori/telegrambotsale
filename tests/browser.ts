@@ -35,7 +35,7 @@ try {
   // The public landing remains usable while the private API is unavailable.
   await admin.route('**/api/**', (route) => route.abort());
   await admin.goto(origin);
-  await admin.getByRole('heading', { name: /Seu próximo pedido/ }).waitFor();
+  await admin.getByRole('heading', { name: /Sua loja no Telegram/ }).waitFor();
   for (const width of [320, 390, 768, 1440]) {
     await admin.setViewportSize({ width, height: 1000 });
     assert(
