@@ -36,8 +36,15 @@ export class TelegramClient {
       ok?: boolean;
       result?: T;
       error_code?: number;
+      description?: string;
       parameters?: { retry_after?: number };
     } | null;
+    if (
+      data?.error_code === 400 &&
+      ['editMessageText', 'editMessageMedia'].includes(method) &&
+      data.description?.startsWith('Bad Request: message is not modified')
+    )
+      return true as T;
     if (!response.ok || !data?.ok)
       throw new TelegramError(
         Number(data?.error_code ?? response.status),

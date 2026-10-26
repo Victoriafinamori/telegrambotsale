@@ -7,6 +7,7 @@ type Data = {
   banner: string;
   products: Product[];
   categories: string[];
+  category_emojis: Record<string, string>;
   support: string;
   support_name: string;
   support_phone: string;
@@ -297,11 +298,11 @@ export async function mountMerchantConsole(
       const products = data.products.filter((p) => p.category === category);
       body =
         category === null
-          ? `<section class="mc-panel"><div class="mc-panel-head"><div><h2>Categorias</h2><p>Organize o catálogo. Escolha uma categoria para cadastrar ou editar seus produtos.</p></div></div><form data-form="category" class="mc-category-form">${revision()}${input('name', 'Nova categoria', '', 'required maxlength="40" placeholder="Ex.: Cursos, arquivos, licenças"')}<button type="submit">Criar categoria</button></form><div class="mc-category-list">${
+          ? `<section class="mc-panel"><div class="mc-panel-head"><div><h2>Categorias</h2><p>Organize o catálogo. Escolha uma categoria para cadastrar ou editar seus produtos.</p></div></div><form data-form="category" class="mc-category-form">${revision()}${input('name', 'Nova categoria', '', 'required maxlength="40" placeholder="Ex.: Cursos, arquivos, licenças"')}${input('emoji', 'Emoji (opcional)', '', 'maxlength="32" placeholder="Cole o emoji que preferir"')}<button type="submit">Criar categoria</button></form><div class="mc-category-list">${
               names
                 .map((name) => {
                   const count = data.products.filter((p) => p.category === name).length;
-                  return `<button class="mc-category" data-category="${esc(name)}">${icon('folder')}<span><strong>${esc(name)}</strong><small>${count} ${count === 1 ? 'produto' : 'produtos'}</small></span>${icon('chevron')}</button>`;
+                  return `<button class="mc-category" data-category="${esc(name)}">${data.category_emojis?.[name] ? `<span aria-hidden="true">${esc(data.category_emojis[name])}</span>` : ''}<span><strong>${esc(name)}</strong><small>${count} ${count === 1 ? 'produto' : 'produtos'}</small></span>${icon('chevron')}</button>`;
                 })
                 .join('') ||
               empty(
@@ -309,7 +310,7 @@ export async function mountMerchantConsole(
                 'Depois, adicione os produtos que fazem parte dela.',
               )
             }</div></section>`
-          : `<section class="mc-panel"><div class="mc-panel-head"><div><button class="text-button" data-action="all-categories">Voltar às categorias</button><h2 tabindex="-1">${esc(category)}</h2><p>${products.length} ${products.length === 1 ? 'produto nesta categoria' : 'produtos nesta categoria'}</p></div><button data-action="new-product">Adicionar produto</button></div><div class="mc-category-tools"><button class="quiet" data-action="rename-category">${icon('appearance')}Renomear categoria</button><button class="quiet" data-action="delete-category">${icon('trash')}Excluir categoria</button></div><p class="mc-order-help">Use as setas para definir a ordem dos produtos no Telegram.</p><div class="mc-product-list">${products.map((p, index) => `<div class="mc-product-row" data-product-id="${p.id}"><button class="mc-product" data-edit="${p.id}"><span class="mc-product-image" ${p.banner ? `data-asset="${esc(p.banner)}"` : ''}>Sem foto</span><span><strong>${esc(p.title)}</strong><small>${p.enabled ? 'Disponível' : 'Oculto'}</small></span><span><b>${money(p.price, data.payment_mode === 'manual' ? 'BRL' : 'XTR')}</b><small>${p.stock} un. · Editar</small></span></button><div class="mc-product-order" role="group" aria-label="Ordem de ${esc(p.title)}"><button class="mc-icon-button" data-move="${p.id}" data-direction="up" aria-label="Mover ${esc(p.title)} para cima" title="Mover para cima" ${index === 0 ? 'disabled' : ''}>${icon('up')}</button><button class="mc-icon-button" data-move="${p.id}" data-direction="down" aria-label="Mover ${esc(p.title)} para baixo" title="Mover para baixo" ${index === products.length - 1 ? 'disabled' : ''}>${icon('down')}</button></div></div>`).join('') || empty('Esta categoria ainda está vazia', 'Use Adicionar produto para começar.')}</div></section>`;
+          : `<section class="mc-panel"><div class="mc-panel-head"><div><button class="text-button" data-action="all-categories">Voltar às categorias</button><h2 tabindex="-1">${esc(category)}</h2><p>${products.length} ${products.length === 1 ? 'produto nesta categoria' : 'produtos nesta categoria'}</p></div><button data-action="new-product">Adicionar produto</button></div><div class="mc-category-tools"><button class="quiet" data-action="rename-category">${icon('appearance')}Editar categoria</button><button class="quiet" data-action="delete-category">${icon('trash')}Excluir categoria</button></div><p class="mc-order-help">Use as setas para definir a ordem dos produtos no Telegram.</p><div class="mc-product-list">${products.map((p, index) => `<div class="mc-product-row" data-product-id="${p.id}"><button class="mc-product" data-edit="${p.id}"><span class="mc-product-image" ${p.banner ? `data-asset="${esc(p.banner)}"` : ''}>Sem foto</span><span><strong>${esc(p.title)}</strong><small>${p.enabled ? 'Disponível' : 'Oculto'}</small></span><span><b>${money(p.price, data.payment_mode === 'manual' ? 'BRL' : 'XTR')}</b><small>${p.stock} un. · Editar</small></span></button><div class="mc-product-order" role="group" aria-label="Ordem de ${esc(p.title)}"><button class="mc-icon-button" data-move="${p.id}" data-direction="up" aria-label="Mover ${esc(p.title)} para cima" title="Mover para cima" ${index === 0 ? 'disabled' : ''}>${icon('up')}</button><button class="mc-icon-button" data-move="${p.id}" data-direction="down" aria-label="Mover ${esc(p.title)} para baixo" title="Mover para baixo" ${index === products.length - 1 ? 'disabled' : ''}>${icon('down')}</button></div></div>`).join('') || empty('Esta categoria ainda está vazia', 'Use Adicionar produto para começar.')}</div></section>`;
     }
     if (section === 'product-edit') {
       const p = selected;
@@ -528,7 +529,7 @@ export async function mountMerchantConsole(
     const dialog = document.createElement('dialog');
     dialog.className = 'mc-category-dialog';
     dialog.setAttribute('aria-labelledby', 'mc-category-dialog-title');
-    dialog.innerHTML = `<h2 id="mc-category-dialog-title">${action === 'rename' ? 'Renomear categoria' : 'Excluir categoria'}</h2><p><strong>${esc(name)}</strong></p><form>${action === 'rename' ? input('newName', 'Novo nome', name, 'required maxlength="40"') : count ? `<p>${count} ${count === 1 ? 'produto será movido' : 'produtos serão movidos'} para outra categoria, preservando estoque, preços e pedidos.</p>${destinations.length ? `<label>Mover produtos para<select name="destination" required><option value="">Escolha a categoria de destino</option>${destinations.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('')}</select></label>` : '<p>Crie outra categoria no catálogo para receber estes produtos antes de excluir esta.</p>'}` : '<p>Esta categoria está vazia. Confirme para removê-la do catálogo.</p>'}<div class="mc-shortcuts"><button class="quiet" type="button" data-close>Cancelar</button><button type="submit" ${action === 'delete' && count && !destinations.length ? 'disabled' : ''}>${action === 'rename' ? 'Salvar nome' : count ? 'Mover produtos e excluir categoria' : 'Excluir categoria'}</button></div><p role="alert" hidden></p></form>`;
+    dialog.innerHTML = `<h2 id="mc-category-dialog-title">${action === 'rename' ? 'Editar categoria' : 'Excluir categoria'}</h2><p><strong>${esc(name)}</strong></p><form>${action === 'rename' ? input('newName', 'Nome da categoria', name, 'required maxlength="40"') + input('emoji', 'Emoji (opcional)', data.category_emojis?.[name] ?? '', 'maxlength="32" placeholder="Cole um emoji ou deixe vazio"') : count ? `<p>${count} ${count === 1 ? 'produto será movido' : 'produtos serão movidos'} para outra categoria, preservando estoque, preços e pedidos.</p>${destinations.length ? `<label>Mover produtos para<select name="destination" required><option value="">Escolha a categoria de destino</option>${destinations.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('')}</select></label>` : '<p>Crie outra categoria no catálogo para receber estes produtos antes de excluir esta.</p>'}` : '<p>Esta categoria está vazia. Confirme para removê-la do catálogo.</p>'}<div class="mc-shortcuts"><button class="quiet" type="button" data-close>Cancelar</button><button type="submit" ${action === 'delete' && count && !destinations.length ? 'disabled' : ''}>${action === 'rename' ? 'Salvar categoria' : count ? 'Mover produtos e excluir categoria' : 'Excluir categoria'}</button></div><p role="alert" hidden></p></form>`;
     host.append(dialog);
     dialog.addEventListener('close', () => dialog.remove());
     dialog.querySelector('[data-close]')!.addEventListener('click', () => dialog.close());
@@ -544,7 +545,7 @@ export async function mountMerchantConsole(
             name,
             revision,
             ...(action === 'rename'
-              ? { newName }
+              ? { newName, emoji: String(fields.get('emoji') ?? '').trim() }
               : count
                 ? { destination: String(fields.get('destination') ?? '') }
                 : {}),
@@ -761,6 +762,7 @@ export async function mountMerchantConsole(
       if (kind === 'category') {
         await api('/store/manage/categories', {
           name: value('name'),
+          emoji: value('emoji'),
           revision: Number(value('revision')),
         });
         category = value('name').trim();

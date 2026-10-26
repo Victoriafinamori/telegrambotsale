@@ -22,6 +22,170 @@ import { MercadoPagoPayments, validMpSignature } from '../server/mercado-pago.js
 import { pixKey, manualPixText } from '../server/pix.js';
 import { PurinCashPayments, validPurinSignature } from '../server/purin-cash.js';
 import { PaymentGateway } from '../server/payment-gateway.js';
+import { tokenHash } from '../server/accounts.js';
+
+test('Buyer navigation edits existing text/media screens instead of adding a message per click', async () => {
+  const f = await fixture(),
+    pid = await f.product();
+  const press = async (data: string, photo = false) => {
+    const update = f.callback(222222222, data);
+    update.callback_query!.message = {
+      chat: { id: 222222222, type: 'private' },
+      message_id: 50,
+      ...(photo ? { photo: [{ file_id: 'product_photo' }] } : {}),
+    };
+    return f.effects((await f.bots.process(f.auth, update)).effectIds);
+  };
+  for (let i = 0; i < 2; i++) {
+    const result = await press('catalog');
+    assert(result.some((e) => e.method === 'editMessageText' && e.payload.message_id === 50));
+    assert(!result.some((e) => e.method === 'sendMessage'));
+  }
+  await f.store.transaction(async (tx) => {
+    const shop = (await tx.get('bot_shops/' + f.a.id))!;
+    shop.products[0].banner = 'photo_test';
+    tx.set('bot_shops/' + f.a.id, shop);
+  });
+  const photo = await press('p:' + pid);
+  assert(photo.some((e) => e.method === 'editMessageMedia' && (e.payload.media as any).caption));
+  const back = await press('catalog', true);
+  assert.equal(back.filter((e) => e.method === 'deleteMessage').length, 1);
+  assert.equal(back.filter((e) => e.method === 'sendMessage').length, 1);
+  const client = new TelegramClient('123456789:' + 'A'.repeat(35), async () =>
+    Response.json(
+      {
+        ok: false,
+        error_code: 400,
+        description:
+          'Bad Request: message is not modified: specified new message content is exactly the same',
+      },
+      { status: 400 },
+    ),
+  );
+  assert.equal(await client.call('editMessageText', {}), true);
+  await assert.rejects(() => client.call('sendMessage', {}), { code: 400 });
+});
+
+test('Add to cart returns to the category; buy now checks out only the chosen item and preserves the existing cart', async () => {
+  const f = await fixture(),
+    first = await f.product(),
+    second = await f.product();
+  const details = await f.click(222222222, 'p:' + first),
+    buttons = (
+      details.find((e) => e.method === 'sendMessage')!.payload.reply_markup as any
+    ).inline_keyboard.flat();
+  assert(buttons.some((b: any) => b.callback_data === 'buy:' + first));
+  assert(buttons.some((b: any) => b.callback_data === 'add:' + first));
+  const added = await f.click(222222222, 'add:' + first);
+  assert(added.some((e) => String(e.payload.text).includes('Escolha um produto')));
+  const cartBefore = await f.store.get(`bot_shops/${f.a.id}/customers/222222222`);
+  const direct = await f.click(222222222, 'buy:' + second),
+    invoice = direct.find((e) => e.method === 'sendInvoice')!;
+  assert(invoice);
+  const order = await f.store.get(`bot_shops/${f.a.id}/orders/${invoice.payload.payload}`);
+  assert.equal(order!.items.length, 1);
+  assert.equal(order!.items[0].product_id, second);
+  assert.equal(order!.items[0].quantity, 1);
+  assert.deepEqual(
+    (await f.store.get(`bot_shops/${f.a.id}/customers/222222222`))!.items,
+    cartBefore!.items,
+  );
+});
+
+test('Stock alerts require opt-in, survive restart, notify once after web restock, and honour cancellation before send', async () => {
+  const f = await fixture(true, undefined, 'merchant', '123456789', 'manual'),
+    pid = await f.product([]);
+  const details = await f.click(222222222, 'p:' + pid),
+    keyboard = (
+      details.find((e) => e.method === 'sendMessage')!.payload.reply_markup as any
+    ).inline_keyboard.flat();
+  assert(keyboard.some((b: any) => b.callback_data === 'watch:' + pid));
+  assert(!keyboard.some((b: any) => b.callback_data.startsWith('buy:')));
+  const prompt = await f.click(222222222, 'watch:' + pid);
+  assert(prompt.some((e) => String(e.payload.text).includes('Quer receber um aviso')));
+  await f.click(222222222, 'watch-on:' + pid);
+  await f.click(222222222, 'watch-on:' + pid);
+  await f.click(333333333, 'watch-off:' + pid);
+  await f.bots.tick(f.auth);
+  assert.equal(
+    (await f.store.list(`bot_shops/${f.a.id}/effects`, { limit: 1000 })).filter(
+      (e) => e.stock_watch_id,
+    ).length,
+    0,
+  );
+  const portal = new MerchantConsole(f.store, f.key, f.bots);
+  await portal.addStock(f.a.id, 'merchant', {
+    productId: pid,
+    units: ['NEW_LICENSE'],
+    requestId: crypto.randomUUID(),
+  });
+  const restarted = new BotStore(f.store, f.key, () => new Date('2026-10-25T12:00:00Z'));
+  await restarted.tick(f.auth);
+  await restarted.tick(f.auth);
+  const alerts = (await f.store.list(`bot_shops/${f.a.id}/effects`, { limit: 1000 })).filter(
+    (e) => e.stock_watch_id,
+  );
+  assert.equal(alerts.length, 1);
+  const delivered = await f.effects(alerts.map((e) => e.id));
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].payload.chat_id, '222222222');
+  assert.equal((await f.effects(alerts.map((e) => e.id))).length, 0);
+  // Cancel a second subscription after it has been queued, before dispatch.
+  await f.store.transaction(async (tx) => {
+    const shop = (await tx.get('bot_shops/' + f.a.id))!;
+    shop.products[0].stock = 0;
+    tx.set('bot_shops/' + f.a.id, shop);
+  });
+  await f.click(444444444, 'watch-on:' + pid);
+  await f.store.transaction(async (tx) => {
+    const shop = (await tx.get('bot_shops/' + f.a.id))!;
+    shop.products[0].stock = 1;
+    tx.set('bot_shops/' + f.a.id, shop);
+  });
+  await restarted.tick(f.auth);
+  await f.click(444444444, 'watch-off:' + pid);
+  const second = (await f.store.list(`bot_shops/${f.a.id}/effects`, { limit: 1000 })).filter((e) =>
+    e.stock_watch_id?.endsWith('_444444444'),
+  );
+  assert.equal((await f.effects(second.map((e) => e.id))).length, 0);
+});
+
+test('Category emojis are merchant-chosen, optional, editable without renaming and preserved across rename', async () => {
+  const f = await fixture(),
+    portal = new MerchantConsole(f.store, f.key, f.bots);
+  await f.product();
+  let data = await portal.read(f.a.id, 'merchant');
+  await portal.manageCategory(f.a.id, 'merchant', {
+    action: 'rename',
+    name: 'Arquivos',
+    newName: 'Arquivos',
+    emoji: '🔥',
+    revision: data.revision,
+  });
+  const catalog = await f.click(222222222, 'catalog'),
+    labels = JSON.stringify(catalog.map((e) => e.payload.reply_markup));
+  assert(labels.includes('🔥 Arquivos'));
+  assert(!labels.includes('📁'));
+  data = await portal.read(f.a.id, 'merchant');
+  await portal.manageCategory(f.a.id, 'merchant', {
+    action: 'rename',
+    name: 'Arquivos',
+    newName: 'Downloads',
+    revision: data.revision,
+  });
+  assert.equal((await portal.read(f.a.id, 'merchant')).category_emojis.Downloads, '🔥');
+  await f.click(111111111, 'admin:category:' + tokenHash('Downloads').slice(0, 16));
+  await f.send(111111111, 'remover');
+  assert.equal((await portal.read(f.a.id, 'merchant')).category_emojis.Downloads, '');
+  data = await portal.read(f.a.id, 'merchant');
+  await assert.rejects(() =>
+    portal.createCategory(f.a.id, 'merchant', {
+      name: 'Inválida',
+      emoji: 'dois emojis 🔥🛒',
+      revision: data.revision,
+    }),
+  );
+});
 
 async function purinFixture(failCreate = false) {
   const f = await fixture(true, undefined, 'merchant', '123456789', 'manual');

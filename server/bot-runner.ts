@@ -143,7 +143,11 @@ export async function processTelegramUpdate(
             from: from(callback.from),
             data: callback.data,
             message: callback.message
-              ? { chat: { id: callback.message.chat.id, type: callback.message.chat.type } }
+              ? {
+                  message_id: callback.message.message_id,
+                  photo: callback.message.photo?.map((p) => ({ file_id: p.file_id })),
+                  chat: { id: callback.message.chat.id, type: callback.message.chat.type },
+                }
               : undefined,
           },
         }

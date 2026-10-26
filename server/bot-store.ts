@@ -1,4 +1,7 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { reuseNavigationMessage } from './bot-navigation.js';
+import { categoryEmoji } from './category-emoji.js';
+import { queueStockAlerts } from './stock-alerts.js';
 import { tokenHash } from './accounts.js';
 import type { Doc, DocumentStore, DocumentTransaction } from './document-store.js';
 import { SecretVault } from './secret-vault.js';
@@ -406,6 +409,7 @@ export class BotStore {
             ['📣 Avisos', 'admin:notices'],
             ['🏪 Abrir loja', 'catalog'],
           ],
+          [['Categorias e emojis', 'admin:categories']],
         ]);
       const release = async (order: Order, status: 'expired' | 'cancelled' | 'rejected') => {
         for (const item of order.items) {
@@ -466,7 +470,14 @@ export class BotStore {
       };
       const showProduct = (p: Product) => {
         const reply_markup = buttons([
-          [['🛒 Adicionar ao carrinho', 'add:' + p.id]],
+          ...(p.stock > 0
+            ? [
+                [
+                  ['Comprar agora', 'buy:' + p.id],
+                  ['Adicionar ao carrinho', 'add:' + p.id],
+                ] as [string, string][],
+              ]
+            : [[['Notificar quando tiver estoque', 'watch:' + p.id]] as [string, string][]]),
           [['↩️ Voltar à categoria', 'cat:' + tokenHash(p.category).slice(0, 16)]],
         ]);
         effect(p.banner ? 'sendPhoto' : 'sendMessage', {
@@ -487,7 +498,12 @@ export class BotStore {
             buttons([
               ...categories.map(
                 (name) =>
-                  [[`📁 ${name}`, 'cat:' + tokenHash(name).slice(0, 16)]] as [string, string][],
+                  [
+                    [
+                      `${shop.category_emojis?.[name] ? shop.category_emojis[name] + ' ' : ''}${name}`,
+                      'cat:' + tokenHash(name).slice(0, 16),
+                    ],
+                  ] as [string, string][],
               ),
               [
                 ['🛒 Carrinho', 'cart'],
@@ -899,6 +915,34 @@ export class BotStore {
           };
           if (await this.notices.action(noticeContext, action)) {
             // Announcement prompts and drafts are managed independently of orders.
+          } else if (action === 'categories') {
+            const categories = [
+              ...new Set([...(shop.categories ?? []), ...shop.products.map((p) => p.category)]),
+            ];
+            say(
+              'Escolha uma categoria para alterar seu emoji.',
+              buttons([
+                ...categories.map(
+                  (name) =>
+                    [
+                      [
+                        `${shop.category_emojis?.[name] ?? ''} ${name}`.trim(),
+                        'admin:category:' + tokenHash(name).slice(0, 16),
+                      ],
+                    ] as [string, string][],
+                ),
+                [['Voltar', 'admin']],
+              ]),
+            );
+          } else if (action.startsWith('category:')) {
+            const name = [
+              ...new Set([...(shop.categories ?? []), ...shop.products.map((p) => p.category)]),
+            ].find((name) => tokenHash(name).slice(0, 16) === action.slice(9));
+            if (name) {
+              customer.session = { step: 'category_emoji', category: name };
+              say(`Envie o emoji de ${name}, ou envie "remover" para deixar sem emoji.`);
+              saveCustomer();
+            }
           } else if (action === 'payment') {
             customer.session = null;
             say(
@@ -1197,6 +1241,21 @@ export class BotStore {
               customer.session = { ...session, step: 'product_category', price };
               say('Qual é a categoria do produto (até 40 caracteres)?');
             }
+          } else if (session.step === 'category_emoji') {
+            const parsed = categoryEmoji.safeParse(text.toLowerCase() === 'remover' ? '' : text);
+            const exists = [
+              ...(shop.categories ?? []),
+              ...shop.products.map((p) => p.category),
+            ].includes(session.category);
+            if (!exists) {
+              customer.session = null;
+              say('Categoria removida. Escolha outra categoria.', adminMenu());
+            } else if (!parsed.success) say('Envie um único emoji ou escreva "remover".');
+            else {
+              shop.category_emojis = { ...shop.category_emojis, [session.category]: parsed.data };
+              customer.session = null;
+              say('Emoji da categoria atualizado.', adminMenu());
+            }
           } else if (session.step === 'product_category') {
             if (!text || text.length > 40) say('Use de 1 a 40 caracteres.');
             else if (shop.products.length >= 40) {
@@ -1368,6 +1427,52 @@ export class BotStore {
             }
           }
           saveCustomer();
+        } else if (cmd.startsWith('watch:')) {
+          const p = shop.products.find((v) => v.id === cmd.slice(6) && v.enabled);
+          if (!p) say('Produto indisponível.');
+          else if (p.stock > 0) showProduct(p);
+          else
+            say(
+              `${p.title} está sem estoque. Quer receber um aviso quando voltar?`,
+              buttons([
+                [
+                  ['Sim, avisar', 'watch-on:' + p.id],
+                  ['Não', 'watch-off:' + p.id],
+                ],
+                [['Voltar ao produto', 'p:' + p.id]],
+              ]),
+            );
+        } else if (cmd.startsWith('watch-on:') || cmd.startsWith('watch-off:')) {
+          const on = cmd.startsWith('watch-on:'),
+            pid = cmd.slice(on ? 9 : 10),
+            p = shop.products.find((v) => v.id === pid && v.enabled);
+          if (!p || (on && !selling)) say('Produto indisponível.');
+          else if (on && p.stock > 0) showProduct(p);
+          else {
+            const wid = pid + '_' + userId,
+              target = path(id, 'stock_watchers', wid),
+              previous = await tx.get(target);
+            tx.set(target, {
+              id: wid,
+              user_id: userId,
+              product_id: pid,
+              active: on,
+              cancelled: !on,
+              nonce: on && previous?.active ? previous.nonce : randomUUID(),
+              requested_at: this.now(),
+            });
+            say(
+              on
+                ? 'Pronto. Você receberá um aviso quando este produto voltar ao estoque.'
+                : 'Tudo bem. Não enviaremos aviso deste produto.',
+              buttons([
+                [
+                  ['Voltar à categoria', 'cat:' + tokenHash(p.category).slice(0, 16)],
+                  ['Carrinho', 'cart'],
+                ],
+              ]),
+            );
+          }
         } else if (cmd.startsWith('cat:')) {
           const categories = [
               ...new Set(shop.products.filter((p) => p.enabled).map((p) => p.category)),
@@ -1396,16 +1501,30 @@ export class BotStore {
         } else if (cmd.startsWith('add:')) {
           const p = shop.products.find((v) => v.id === cmd.slice(4) && v.enabled);
           if (!selling) say('A loja não está recebendo novos pedidos.');
-          else if (!p?.stock) say('Produto sem estoque.');
-          else {
+          else if (!p?.stock) {
+            if (p) showProduct(p);
+            else say('Produto indisponível.');
+          } else {
             const current = customer.items.find((v: any) => v.id === p.id);
             if (customer.items.reduce((s: number, v: any) => s + v.quantity, 0) >= 10)
               say('Limite de 10 unidades por pedido.');
+            else if (current && current.quantity >= p.stock)
+              say(
+                'Seu carrinho já contém todas as unidades disponíveis.',
+                buttons([
+                  [
+                    ['Carrinho', 'cart'],
+                    ['Voltar', 'cat:' + tokenHash(p.category).slice(0, 16)],
+                  ],
+                ]),
+              );
             else {
               if (current) current.quantity++;
               else customer.items.push({ id: p.id, quantity: 1 });
               saveCustomer();
-              say('Adicionado ao carrinho.', menu());
+              const ack = effects.find((e) => e.method === 'answerCallbackQuery');
+              if (ack) ack.payload.text = 'Adicionado ao carrinho.';
+              catalog(p.category);
             }
           }
         } else if (cmd === 'cart' || cmd === '/carrinho') showCart();
@@ -1418,7 +1537,10 @@ export class BotStore {
           customer.session = { step: 'coupon' };
           saveCustomer();
           say('Envie o código do cupom.');
-        } else if (cmd === 'checkout') {
+        } else if (cmd === 'checkout' || cmd.startsWith('buy:')) {
+          const direct = cmd.startsWith('buy:'),
+            checkoutItems = direct ? [{ id: cmd.slice(4), quantity: 1 }] : customer.items;
+          const checkoutCoupon = direct ? '' : customer.coupon;
           if (!selling) say('A loja não está recebendo novos pedidos.');
           else if (!hasSupport(shop))
             say('O lojista precisa configurar o atendimento antes de receber pagamentos.');
@@ -1440,15 +1562,15 @@ export class BotStore {
             !manualPixText(shop)
           )
             say('O lojista ainda precisa configurar os dados de pagamento.');
-          else if (!customer.items.length) say('Adicione um produto ao carrinho.');
+          else if (!checkoutItems.length) say('Adicione um produto ao carrinho.');
           else if (shop.open_orders.length >= 25)
             say('Há muitos pedidos em andamento. Aguarde alguns minutos.');
           else {
-            const coupon = customer.coupon ? shop.coupons[customer.coupon] : null;
+            const coupon = checkoutCoupon ? shop.coupons[checkoutCoupon] : null;
             const reservation: Order['items'] = [];
             let total = 0,
-              valid = !customer.coupon || Boolean(coupon && coupon.used < coupon.limit);
-            for (const item of customer.items) {
+              valid = !checkoutCoupon || Boolean(coupon && coupon.used < coupon.limit);
+            for (const item of checkoutItems) {
               const p = shop.products.find((v) => v.id === item.id && v.enabled),
                 stock = await tx.get(productDoc(item.id));
               if (!p || !stock || stock.units.length < item.quantity) {
@@ -1496,7 +1618,7 @@ export class BotStore {
                   : {}),
                 items: reservation,
                 total,
-                coupon: customer.coupon,
+                coupon: checkoutCoupon,
                 created_at: now,
                 expires_at: new Date(now.getTime() + (automaticPix ? 60 : 20) * 60000),
                 status: 'awaiting_payment',
@@ -1513,8 +1635,10 @@ export class BotStore {
               shop.open_orders.push(oid);
               stats(shop).orders++;
               customer.orders = [oid, ...customer.orders].slice(0, 30);
-              customer.items = [];
-              customer.coupon = '';
+              if (!direct) {
+                customer.items = [];
+                customer.coupon = '';
+              }
               saveCustomer();
               if (automaticPix) {
                 effect('sendMessage', {
@@ -1630,6 +1754,7 @@ export class BotStore {
           else say(welcome, menu());
         }
       }
+      if (!web) reuseNavigationMessage(update, effects);
       saveShop();
       const effectIds = effects.map((v) => v.id);
       for (const out of effects) {
@@ -1657,7 +1782,7 @@ export class BotStore {
   }
 
   async tick(auth: RuntimeAccess, botName?: string) {
-    return buffered(this.store, async (tx) => {
+    const result = await buffered(this.store, async (tx) => {
       const { runtime, account, setup, shop } = await this.access(tx, auth);
       if (botName && botName !== shop.title) {
         shop.title = botName;
@@ -1697,6 +1822,8 @@ export class BotStore {
       tx.set('bot_runtimes/' + auth.accountId, { ...runtime, last_seen: this.now() });
       return { offset: runtime.offset };
     });
+    await queueStockAlerts(this.store, this.vault, auth, this.now());
+    return result;
   }
   async renew(accountId: string, actor: string, requestId: string) {
     return buffered(this.store, async (tx) => {
@@ -1737,6 +1864,19 @@ export class BotStore {
         target = path(auth.accountId, 'effects', effectId),
         out = (await tx.get(target)) as (BotEffect & { lease_at?: Date }) | null;
       if (!out || !['pending', 'sending'].includes(out.status)) return null;
+      if (out.stock_watch_id) {
+        const watch = await tx.get(path(auth.accountId, 'stock_watchers', out.stock_watch_id));
+        if (!watch || watch.cancelled || watch.nonce !== out.stock_watch_nonce) {
+          tx.set(target, { ...out, status: 'skipped', finished_at: this.now() });
+          return null;
+        }
+        if (
+          account.access_status !== 'approved' ||
+          setup.activation_status !== 'active' ||
+          account.paid_through <= this.now()
+        )
+          return null;
+      }
       if (out.status === 'sending') {
         if (out.lease_at && this.now().getTime() - out.lease_at.getTime() > 120000) {
           tx.set(target, { ...out, status: 'uncertain' });

@@ -1,0 +1,10 @@
+# Catálogo e compra no Telegram
+
+- Categoria: o lojista escolhe um emoji opcional em Produtos → categoria → Editar categoria no site, ou em `/admin` → Categorias e emojis no Telegram. Não existe emoji padrão imposto pelo bot. Os nomes antigos que já contêm emojis permanecem intactos.
+- Produto disponível: **Comprar agora** cria o pedido para uma unidade desse produto e segue o checkout configurado na loja. Preserva o carrinho existente e não aplica o cupom daquele carrinho a esta compra independente. **Adicionar ao carrinho** adiciona uma unidade e retorna aos produtos da categoria. A confirmação aparece no aviso do botão.
+- Produto esgotado: **Notificar quando tiver estoque** abre uma confirmação **Sim / Não**. A inscrição pertence ao comprador, ao produto e à loja. O aviso é enviado uma vez quando o bot verificar estoque disponível; não reserva a unidade. Uma nova inscrição exige nova confirmação.
+- O monitor de reposição roda na manutenção do bot (cerca de 45 segundos), com varredura paginada de até 40 inscrições por ciclo. Reposição pelo site ou Telegram, assim como estoque devolvido por pedidos cancelados/vencidos, usa o mesmo estoque. Cancelar antes do envio invalida o aviso pendente. Inscrições sobrevivem a reinícios e são isoladas por loja.
+- A navegação de catálogo, carrinho e menus administrativos atualiza a mensagem clicada. Texto vira edição de texto; produto com foto usa edição da mídia e legenda. Na volta de uma foto para uma tela só de texto, o bot substitui a mensagem anterior. Pedidos, cobranças, comprovantes, avisos e entregas continuam com registros separados.
+- Pressionar novamente um botão cujo conteúdo já está aberto não gera nova mensagem nem erro de envio. Atualizações sem metadados da mensagem (workers antigos) continuam compatíveis, mas exigem atualizar o worker para aproveitar a edição de mensagens.
+
+Publicar API e frontend, depois atualizar `bot-runner.js` e `telegram-client.js` do worker de cada lojista. O pacote de worker permanece limitado a esses dois arquivos e dotenv, sem credenciais de administração ou código privado da plataforma.

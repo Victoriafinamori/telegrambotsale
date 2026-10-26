@@ -41,7 +41,13 @@ export const telegramUpdate = z.object({
       id: z.string().max(128),
       from: telegramUser,
       data: z.string().max(64).optional(),
-      message: z.object({ chat: z.object({ id: z.number().int(), type: z.string() }) }).optional(),
+      message: z
+        .object({
+          message_id: z.number().int().positive().optional(),
+          photo: z.array(file).max(20).optional(),
+          chat: z.object({ id: z.number().int(), type: z.string() }),
+        })
+        .optional(),
     })
     .optional(),
   pre_checkout_query: z
@@ -56,6 +62,9 @@ export const telegramUpdate = z.object({
 });
 export type TelegramUpdate = z.infer<typeof telegramUpdate>;
 export type TelegramMethod =
+  | 'editMessageText'
+  | 'editMessageMedia'
+  | 'deleteMessage'
   | 'sendMessage'
   | 'sendPhoto'
   | 'sendDocument'
@@ -73,6 +82,8 @@ export interface BotEffect {
   lease?: string;
   announcement_id?: string;
   recipient_id?: string;
+  stock_watch_id?: string;
+  stock_watch_nonce?: string;
 }
 export interface StockUnit {
   id: string;
@@ -103,6 +114,7 @@ export interface Shop {
   owner_bot_id: string | null;
   products: Product[];
   categories?: string[];
+  category_emojis?: Record<string, string>;
   coupons: Record<string, { percent: number; limit: number; used: number }>;
   recent_orders: string[];
   open_orders: string[];

@@ -7,6 +7,7 @@ import { SecretVault } from './secret-vault.js';
 import { HttpError } from './types.js';
 import { supportUrl } from './bot-appearance.js';
 import { stats } from './bot-orders.js';
+import { categoryEmoji } from './category-emoji.js';
 import type { BotStore } from './bot-store.js';
 import { TelegramClient } from './telegram-client.js';
 
@@ -123,6 +124,7 @@ export class MerchantConsole {
         welcome: shop.welcome,
         banner: shop.banner,
         products: shop.products,
+        category_emojis: shop.category_emojis ?? {},
         categories: [
           ...new Set([...(shop.categories ?? []), ...shop.products.map((p) => p.category)]),
         ].sort((a, b) => a.localeCompare(b, 'pt-BR')),
@@ -186,7 +188,11 @@ export class MerchantConsole {
   }
   async createCategory(id: string, uid: string, input: unknown) {
     const value = z
-      .object({ name: z.string().trim().min(1).max(40), revision: z.number().int().nonnegative() })
+      .object({
+        name: z.string().trim().min(1).max(40),
+        emoji: categoryEmoji.optional(),
+        revision: z.number().int().nonnegative(),
+      })
       .strict()
       .parse(input);
     await botTransaction(this.store, async (tx) => {
@@ -200,7 +206,15 @@ export class MerchantConsole {
           throw new HttpError(409, 'CATEGORY_LIMIT', 'Limite de 40 categorias atingido.');
         categories.push(value.name);
       }
-      tx.set(botRoot(id), { ...shop, categories, portal_revision: value.revision + 1 });
+      tx.set(botRoot(id), {
+        ...shop,
+        categories,
+        category_emojis: {
+          ...shop.category_emojis,
+          ...(value.emoji !== undefined ? { [value.name]: value.emoji } : {}),
+        },
+        portal_revision: value.revision + 1,
+      });
       this.audit(tx, id, uid, 'store.category_created_web');
     });
   }
@@ -209,7 +223,15 @@ export class MerchantConsole {
       revision = z.number().int().nonnegative();
     const value = z
       .discriminatedUnion('action', [
-        z.object({ action: z.literal('rename'), name, newName: name, revision }).strict(),
+        z
+          .object({
+            action: z.literal('rename'),
+            name,
+            newName: name,
+            emoji: categoryEmoji.optional(),
+            revision,
+          })
+          .strict(),
         z
           .object({ action: z.literal('delete'), name, destination: name.optional(), revision })
           .strict(),
@@ -228,8 +250,7 @@ export class MerchantConsole {
           'Categoria não encontrada. Atualize o catálogo.',
         );
       if (value.action === 'rename') {
-        if (value.newName === value.name) return;
-        if (categories.includes(value.newName))
+        if (value.newName !== value.name && categories.includes(value.newName))
           throw new HttpError(409, 'CATEGORY_EXISTS', 'Já existe uma categoria com esse nome.');
         shop.categories = categories.map((category) =>
           category === value.name ? value.newName : category,
@@ -237,6 +258,13 @@ export class MerchantConsole {
         shop.products = shop.products.map((p) =>
           p.category === value.name ? { ...p, category: value.newName } : p,
         );
+        const emoji = value.emoji ?? shop.category_emojis?.[value.name] ?? '';
+        shop.category_emojis = {
+          ...Object.fromEntries(
+            Object.entries(shop.category_emojis ?? {}).filter(([key]) => key !== value.name),
+          ),
+          [value.newName]: emoji,
+        };
       } else {
         const hasProducts = shop.products.some((p) => p.category === value.name);
         if (
@@ -251,6 +279,9 @@ export class MerchantConsole {
             'Escolha outra categoria para receber os produtos antes de excluir.',
           );
         shop.categories = categories.filter((category) => category !== value.name);
+        shop.category_emojis = Object.fromEntries(
+          Object.entries(shop.category_emojis ?? {}).filter(([key]) => key !== value.name),
+        );
         if (hasProducts)
           shop.products = shop.products.map((p) =>
             p.category === value.name ? { ...p, category: value.destination! } : p,
