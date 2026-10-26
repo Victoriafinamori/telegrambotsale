@@ -1,4 +1,5 @@
 import './merchant-console.css';
+import './merchant-theme.css';
 import { mountPaymentSettings } from './payment-settings.js';
 import { mountWallet } from './wallet.js';
 import type { Product, ShopStats, Announcement } from '../server/bot-types.js';
@@ -74,6 +75,10 @@ const navigation = [
 ] as const;
 const icon = (name: string) => {
   const paths: Record<string, string> = {
+    buyers:
+      '<circle cx="9" cy="8" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 5a3 3 0 0 1 0 6m2 3a5 5 0 0 1 3 4v3"/>',
+    delivered: '<rect x="3" y="3" width="18" height="18" rx="4"/><path d="m7 12 3 3 7-7"/>',
+    pending: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     wallet: '<path d="M3 6h16v3H3zM3 9v11h18V9M16 13h5v4h-5z"/>',
     up: '<path d="m6 10 6-6 6 6M12 4v16"/>',
     down: '<path d="m6 14 6 6 6-6M12 20V4"/>',
@@ -236,8 +241,8 @@ export async function mountMerchantConsole(
     }
   };
   const revision = () => `<input type="hidden" name="revision" value="${data.revision}">`;
-  const metric = (label: string, value: string | number) =>
-    `<div class="mc-metric"><span>${label}</span><strong>${esc(value)}</strong></div>`;
+  const metric = (label: string, value: string | number, kind: string, symbol: string) =>
+    `<div class="mc-metric mc-metric-${kind}"><div class="mc-metric-heading"><span>${label}</span><i class="mc-stat-icon" aria-hidden="true">${icon(symbol)}</i></div><strong>${esc(value)}</strong></div>`;
   const empty = (title: string, text: string) =>
     `<div class="mc-empty"><h3>${title}</h3><p>${text}</p></div>`;
   const settingsFields = () => `<input type="hidden" name="revision" value="${data.revision}">`;
@@ -293,7 +298,7 @@ export async function mountMerchantConsole(
     revoke();
     let body = '';
     if (section === 'overview')
-      body = `<div class="mc-metrics">${metric('Vendas aprovadas', money(data.stats.gross_brl))}${metric('Compradores', data.stats.buyers)}${metric('Pedidos entregues', data.stats.delivered_orders)}${metric('Para aprovar', data.pendingReview)}</div><section class="mc-panel"><div class="mc-panel-head"><h2>Seu próximo passo</h2><button data-section="orders">Conferir pedidos</button></div><p>Configure a vitrine e o atendimento. As alterações salvas aqui são usadas pelo seu bot no Telegram.</p><div class="mc-shortcuts"><button class="quiet" data-section="products">Produtos e fotos</button><button class="quiet" data-section="appearance">Mensagem de entrada</button><button class="quiet" data-section="payments">Dados de pagamento</button></div><dl><div><dt>Pedidos criados</dt><dd>${data.stats.orders}</dd></div><div><dt>Aguardando pagamento</dt><dd>${data.pendingPayment}</dd></div><div><dt>Recusados</dt><dd>${data.stats.rejected_orders}</dd></div><div><dt>Vendas em Stars</dt><dd>${money(data.stats.gross_stars, 'XTR')}</dd></div></dl></section>`;
+      body = `<div class="mc-metrics">${metric('Vendas aprovadas', money(data.stats.gross_brl), 'sales', 'wallet')}${metric('Compradores', data.stats.buyers, 'buyers', 'buyers')}${metric('Pedidos entregues', data.stats.delivered_orders, 'delivered', 'delivered')}${metric('Para aprovar', data.pendingReview, 'pending', 'pending')}</div><section class="mc-panel mc-overview-panel"><div class="mc-overview-intro"><div><h2>Seu próximo passo</h2><p>Configure a vitrine e o atendimento. As alterações salvas aqui são usadas pelo seu bot no Telegram.</p></div><button data-section="orders">Conferir pedidos ${icon('chevron')}</button></div><div class="mc-quicklinks"><button data-section="products">${icon('products')}<span><b>Produtos e fotos</b><small>Organize seu catálogo</small></span>${icon('chevron')}</button><button data-section="appearance">${icon('appearance')}<span><b>Mensagem de entrada</b><small>Dê a sua cara à loja</small></span>${icon('chevron')}</button><button data-section="payments">${icon('payments')}<span><b>Dados de pagamento</b><small>Configure como receber</small></span>${icon('chevron')}</button></div><dl><div><dt>Pedidos criados</dt><dd>${data.stats.orders}</dd></div><div><dt>Aguardando pagamento</dt><dd>${data.pendingPayment}</dd></div><div><dt>Recusados</dt><dd>${data.stats.rejected_orders}</dd></div><div><dt>Vendas em Stars</dt><dd>${money(data.stats.gross_stars, 'XTR')}</dd></div></dl></section>`;
     if (section === 'products') {
       const names = [
         ...new Set([...(data.categories ?? []), ...data.products.map((p) => p.category)]),
