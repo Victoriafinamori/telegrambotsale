@@ -838,3 +838,50 @@ select:focus-visible {
     transition: none;
   }
 }
+.mc-subscription-plans {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin: 24px 0;
+}
+.mc-subscription-plan {
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--mc-input, var(--bg));
+  min-width: 0;
+}
+.mc-subscription-plan h3 {
+  font-size: 18px;
+  margin: 0 0 16px;
+  color: var(--ink);
+}
+.mc-subscription-plan p {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 22px;
+}
+.mc-subscription-plan strong {
+  font-size: 30px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.025em;
+}
+.mc-subscription-plan span {
+  font-size: 13px;
+}
+.mc-subscription-plan button {
+  width: 100%;
+}
+@media (max-width: 1000px) {
+  .mc-subscription-plans {
+    grid-template-columns: 1fr;
+  }
+  .mc-subscription-plan p {
+    flex-direction: row;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+}

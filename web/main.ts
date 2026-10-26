@@ -20,6 +20,7 @@ import type { BotSetup } from '../server/bot-onboarding.js';
 import { botGuide } from './onboarding.js';
 import { adminBotCard, activationLabels } from './admin-bot.js';
 import { mountPurinAdmin } from './purin-admin.js';
+import { mountSubscriptionAdmin } from './subscription.js';
 import { mountMerchantConsole } from './merchant-console.js';
 import { mountPixCheckout } from './pix-checkout.js';
 const app = document.querySelector<HTMLDivElement>('#app')!;
@@ -201,7 +202,7 @@ function accountRow(a: AdminMerchantAccount) {
 function adminView() {
   const a = accounts.find((a) => a.id === selected);
   shell(
-    `<main class="workspace"><div class="page-heading"><div><span class="eyebrow">Administração da plataforma</span><h1>Lojistas</h1></div><button id="new-account">Adicionar lojista</button></div><nav class="tabs"><button data-section="accounts" class="${section === 'accounts' ? 'active' : ''}">Lojistas</button><button data-section="activations" class="${section === 'activations' ? 'active' : ''}">Ativações</button><button data-section="audit" class="${section === 'audit' ? 'active' : ''}">Histórico</button></nav>${section === 'audit' ? '<section class="card" id="audit-list">Carregando histórico…</section>' : `<section class="card compact">${accounts.map(accountRow).join('') || `<div class="empty"><b>${section === 'activations' ? 'Nenhuma ativação pendente' : 'Comece pelo primeiro lojista'}</b><p>${section === 'activations' ? 'Os bots enviados e liberados aparecerão aqui.' : 'Cadastre a contratação recebida e gere o convite de acesso.'}</p></div>`}</section><div class="pagination"><button class="quiet" id="previous" ${offset === 0 ? 'disabled' : ''}>Anterior</button><span>Página ${offset / 50 + 1}</span><button class="quiet" id="next" ${accounts.length < 50 ? 'disabled' : ''}>Próxima</button></div>`}${a && section !== 'audit' ? `<section class="card detail"><div class="card-heading"><h2>${esc(a.store_name)}</h2><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div><dl><div><dt>Lojista</dt><dd>${esc(a.name)}</dd></div><div><dt>E-mail</dt><dd>${esc(a.email)}</dd></div><div><dt>Canal da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Referência</dt><dd>${esc(a.reference || 'Não informada')}</dd></div><div><dt>Mensalidade contratada</dt><dd>${money(a.price_cents)}</dd></div><div><dt>Início da mensalidade</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div></dl><p class="note">Liberar o acesso ao painel não ativa o bot. O ciclo mensal começa somente após a ativação efetiva do bot.</p>${a.suspension_reason ? `<p class="warning">${esc(a.suspension_reason)}</p>` : ''}${adminBotSetup ? adminBotCard(adminBotSetup, a.access_status === 'approved', date) : ''}<div class="inline-actions">${!a.purchase_confirmed_at ? '<button id="confirm-purchase">Confirmar contratação</button>' : ''}${a.purchase_confirmed_at && !a.firebase_uid && a.access_status !== 'suspended' ? '<button id="issue-invite">Gerar convite</button>' : ''}${a.firebase_uid && a.access_status === 'pending' ? '<button id="approve">Liberar acesso ao painel</button>' : ''}${a.access_status !== 'suspended' ? '<button class="quiet" id="suspend">Suspender acesso ao painel</button>' : '<button class="quiet" id="restore">Remover suspensão</button>'}</div>${inviteLink ? `<div class="invite-box"><label for="invite-link">Convite · copie e envie pelo canal da contratação</label><input id="invite-link" value="${esc(inviteLink)}" readonly><button class="quiet" id="copy-invite">Copiar convite</button><small>Uso único, válido por 7 dias e vinculado ao e-mail cadastrado. Gerar outro invalida o anterior.</small></div>` : ''}</section>` : ''}</main>`,
+    `<main class="workspace"><div class="page-heading"><div><span class="eyebrow">Administração da plataforma</span><h1>Lojistas</h1></div><button id="new-account">Adicionar lojista</button></div><nav class="tabs"><button data-section="accounts" class="${section === 'accounts' ? 'active' : ''}">Lojistas</button><button data-section="activations" class="${section === 'activations' ? 'active' : ''}">Ativações</button><button data-section="audit" class="${section === 'audit' ? 'active' : ''}">Histórico</button></nav>${section === 'audit' ? '<section class="card" id="audit-list">Carregando histórico…</section>' : `<section class="card compact">${accounts.map(accountRow).join('') || `<div class="empty"><b>${section === 'activations' ? 'Nenhuma ativação pendente' : 'Comece pelo primeiro lojista'}</b><p>${section === 'activations' ? 'Os bots enviados e liberados aparecerão aqui.' : 'Cadastre a contratação recebida e gere o convite de acesso.'}</p></div>`}</section><div class="pagination"><button class="quiet" id="previous" ${offset === 0 ? 'disabled' : ''}>Anterior</button><span>Página ${offset / 50 + 1}</span><button class="quiet" id="next" ${accounts.length < 50 ? 'disabled' : ''}>Próxima</button></div>`}${a && section !== 'audit' ? `<section class="card detail"><div class="card-heading"><h2>${esc(a.store_name)}</h2><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div><dl><div><dt>Lojista</dt><dd>${esc(a.name)}</dd></div><div><dt>E-mail</dt><dd>${esc(a.email)}</dd></div><div><dt>Canal da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Referência</dt><dd>${esc(a.reference || 'Não informada')}</dd></div><div><dt>Valor do ciclo contratado</dt><dd>${money(a.price_cents)}</dd></div><div><dt>Início da assinatura</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div></dl><p class="note">Liberar o acesso ao painel não ativa o bot. O período contratado começa somente após a ativação efetiva do bot.</p>${a.suspension_reason ? `<p class="warning">${esc(a.suspension_reason)}</p>` : ''}${adminBotSetup ? adminBotCard(adminBotSetup, a.access_status === 'approved', date) : ''}<div class="inline-actions">${!a.purchase_confirmed_at ? '<button id="confirm-purchase">Confirmar contratação</button>' : ''}${a.purchase_confirmed_at && !a.firebase_uid && a.access_status !== 'suspended' ? '<button id="issue-invite">Gerar convite</button>' : ''}${a.firebase_uid && a.access_status === 'pending' ? '<button id="approve">Liberar acesso ao painel</button>' : ''}${a.access_status !== 'suspended' ? '<button class="quiet" id="suspend">Suspender acesso ao painel</button>' : '<button class="quiet" id="restore">Remover suspensão</button>'}</div>${inviteLink ? `<div class="invite-box"><label for="invite-link">Convite · copie e envie pelo canal da contratação</label><input id="invite-link" value="${esc(inviteLink)}" readonly><button class="quiet" id="copy-invite">Copiar convite</button><small>Uso único, válido por 7 dias e vinculado ao e-mail cadastrado. Gerar outro invalida o anterior.</small></div>` : ''}</section>` : ''}</main>`,
   );
   if (section !== 'audit') {
     const workspace = document.querySelector('.workspace');
@@ -226,8 +227,20 @@ function adminView() {
     if (a.billing_started_at)
       details?.insertAdjacentHTML(
         'beforeend',
-        '<button class="quiet" id="renew-subscription">Registrar renovação mensal</button>',
+        '<button class="quiet" id="renew-subscription">Registrar renovação do plano contratado</button>',
       );
+    else {
+      const planHost = document.createElement('section');
+      planHost.className = 'setup-status';
+      details?.append(planHost);
+      void mountSubscriptionAdmin(planHost, api, a.id);
+    }
+  }
+  if (section !== 'audit') {
+    const plansHost = document.createElement('section');
+    plansHost.className = 'card';
+    document.querySelector('.workspace')?.append(plansHost);
+    void mountSubscriptionAdmin(plansHost, api);
   }
   if (me?.account)
     document
@@ -247,7 +260,7 @@ function merchantView() {
   }
   const approved = a.access_status === 'approved';
   shell(
-    `<main class="merchant-shell"><div class="page-heading"><div><span class="eyebrow">${esc(a.store_name)}</span><h1>${botSetup?.activation_status === 'active' ? 'Sua loja' : 'Primeiros passos'}</h1></div><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div>${approved ? `<p class="welcome-note">${botSetup?.activation_status === 'active' ? 'Acompanhe sua ativação e os dados da contratação.' : 'Seu acesso foi liberado. Siga as etapas para preparar seu bot.'}</p>${botGuide(botSetup, guideStep, Boolean(config?.emulatorHost))}` : `<section class="card"><h2>${a.access_status === 'suspended' ? 'Acesso suspenso' : 'Sua loja está em análise'}</h2><p>${a.access_status === 'suspended' ? esc(a.suspension_reason || 'Fale com a Blackout Create pelo canal da contratação.') : 'Sua conta já está vinculada. Após a aprovação, você terá um assistente para criar o bot, informar seu token e ID do Telegram e solicitar a ativação na Square Cloud.'}</p><p class="note">A mensalidade começa somente após a ativação efetiva do bot.</p><button class="quiet" id="refresh">Atualizar situação</button></section>`}<details class="card contract-details"><summary>Sua contratação · ${a.reference === 'PILOTO INTERNO BLACKOUT / SEM COBRANCA REAL' ? 'Piloto interno sem cobrança' : money(a.price_cents)}</summary><dl><div><dt>Início do ciclo</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div><div><dt>Contato da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Conta</dt><dd>${esc(me!.user.email)}</dd></div></dl></details></main>`,
+    `<main class="merchant-shell"><div class="page-heading"><div><span class="eyebrow">${esc(a.store_name)}</span><h1>${botSetup?.activation_status === 'active' ? 'Sua loja' : 'Primeiros passos'}</h1></div><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div>${approved ? `<p class="welcome-note">${botSetup?.activation_status === 'active' ? 'Acompanhe sua ativação e os dados da contratação.' : 'Seu acesso foi liberado. Siga as etapas para preparar seu bot.'}</p>${botGuide(botSetup, guideStep, Boolean(config?.emulatorHost))}` : `<section class="card"><h2>${a.access_status === 'suspended' ? 'Acesso suspenso' : 'Sua loja está em análise'}</h2><p>${a.access_status === 'suspended' ? esc(a.suspension_reason || 'Fale com a Blackout Create pelo canal da contratação.') : 'Sua conta já está vinculada. Após a aprovação, você terá um assistente para criar o bot, informar seu token e ID do Telegram e solicitar a ativação na Square Cloud.'}</p><p class="note">A mensalidade começa somente após a ativação efetiva do bot.</p><button class="quiet" id="refresh">Atualizar situação</button></section>`}<details class="card contract-details"><summary>Sua contratação · ${a.reference === 'PILOTO INTERNO BLACKOUT / SEM COBRANCA REAL' ? 'Piloto interno sem cobrança' : money(a.price_cents)}</summary><dl><div><dt>Período contratado</dt><dd>${a.billing_months ?? 1} mês(es)</dd></div><div><dt>Início do ciclo</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div><div><dt>Contato da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Conta</dt><dd>${esc(me!.user.email)}</dd></div></dl></details></main>`,
   );
   if (me?.role === 'platform')
     document
@@ -551,7 +564,7 @@ document.addEventListener('submit', (event) => {
       });
       document.querySelector('dialog')?.remove();
       await load();
-      flash('Renovação mensal registrada.');
+      flash('Renovação do plano registrada.');
     } else if (form.id === 'mfa-form') {
       const code = String(fields.get('code') || '');
       (form.querySelector('[name=code]') as HTMLInputElement).value = '';
@@ -734,14 +747,14 @@ document.addEventListener('click', (event) => {
   if (button.id === 'new-account') {
     dialog(
       'Adicionar lojista',
-      `<form id="registration-form"><label>Nome do lojista<input name="name" required maxlength="80" autocomplete="name"></label><label>Nome da loja<input name="storeName" required maxlength="80"></label><label>E-mail<input name="email" type="email" required maxlength="254" autocomplete="email"></label><div class="form-row"><label>Canal da contratação<select name="channel"><option value="whatsapp">WhatsApp</option><option value="telegram">Telegram</option><option value="discord">Discord</option><option value="site">Site</option><option value="other">Outro</option></select></label><label>Mensalidade · R$<input name="price" type="number" required min="0.01" max="100000" step="0.01" placeholder="49,90"></label></div><label>Referência da contratação · opcional<input name="reference" maxlength="200" placeholder="Pedido ou conversa conferida"></label><p class="note">O cadastro não confirma pagamento nem inicia a mensalidade.</p><button type="submit">Cadastrar lojista</button></form>`,
+      `<form id="registration-form"><label>Nome do lojista<input name="name" required maxlength="80" autocomplete="name"></label><label>Nome da loja<input name="storeName" required maxlength="80"></label><label>E-mail<input name="email" type="email" required maxlength="254" autocomplete="email"></label><div class="form-row"><label>Canal da contratação<select name="channel"><option value="whatsapp">WhatsApp</option><option value="telegram">Telegram</option><option value="discord">Discord</option><option value="site">Site</option><option value="other">Outro</option></select></label><label>Valor do ciclo · R$<input name="price" type="number" required min="0.01" max="100000" step="0.01" placeholder="9,99"></label></div><label>Referência da contratação · opcional<input name="reference" maxlength="200" placeholder="Pedido ou conversa conferida"></label><p class="note">O cadastro não confirma pagamento nem inicia o período contratado.</p><button type="submit">Cadastrar lojista</button></form>`,
     );
     return;
   }
   if (button.id === 'renew-subscription') {
     dialog(
-      'Registrar renovação mensal',
-      `<form id="renew-form"><input type="hidden" name="requestId" value="${crypto.randomUUID()}"><p>Esta ação acrescenta um mês civil ao período atual ou inicia um novo período a partir de hoje, se o anterior venceu.</p><label class="check-row"><input name="paymentConfirmed" type="checkbox" required> Conferi e recebi o pagamento desta renovação pelo canal da contratação.</label><button type="submit">Confirmar renovação</button></form>`,
+      'Registrar renovação do plano contratado',
+      `<form id="renew-form"><input type="hidden" name="requestId" value="${crypto.randomUUID()}"><p>Esta ação acrescenta o período contratado (1, 3 ou 12 meses) ao vencimento atual, ou inicia um novo período a partir de hoje se o anterior venceu.</p><label class="check-row"><input name="paymentConfirmed" type="checkbox" required> Conferi e recebi o pagamento desta renovação pelo canal da contratação.</label><button type="submit">Confirmar renovação</button></form>`,
     );
     return;
   }

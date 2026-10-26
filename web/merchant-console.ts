@@ -2,6 +2,7 @@ import './merchant-console.css';
 import './merchant-theme.css';
 import { mountPaymentSettings } from './payment-settings.js';
 import { mountWallet } from './wallet.js';
+import { mountSubscription } from './subscription.js';
 import type { Product, ShopStats, Announcement } from '../server/bot-types.js';
 type Data = {
   title: string;
@@ -67,6 +68,7 @@ const navigation = [
   ['stock', 'Estoque'],
   ['orders', 'Pedidos'],
   ['wallet', 'Carteira'],
+  ['subscription', 'Assinatura'],
   ['appearance', 'Aparência'],
   ['support', 'Suporte'],
   ['payments', 'Pagamentos'],
@@ -75,6 +77,8 @@ const navigation = [
 ] as const;
 const icon = (name: string) => {
   const paths: Record<string, string> = {
+    subscription:
+      '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M7 3v4M17 3v4M3 11h18m-14 5 3 3 6-6"/>',
     buyers:
       '<circle cx="9" cy="8" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 5a3 3 0 0 1 0 6m2 3a5 5 0 0 1 3 4v3"/>',
     delivered: '<rect x="3" y="3" width="18" height="18" rx="4"/><path d="m7 12 3 3 7-7"/>',
@@ -117,7 +121,11 @@ export async function mountMerchantConsole(
   privateFile: (path: string) => Promise<Blob>,
 ) {
   let data: Data,
-    section = location.hash.includes('?wallet=') ? 'wallet' : 'overview',
+    section = location.hash.includes('?subscription=')
+      ? 'subscription'
+      : location.hash.includes('?wallet=')
+        ? 'wallet'
+        : 'overview',
     category: string | null = null,
     selected: Product | undefined,
     orders: Order[] = [],
@@ -373,6 +381,12 @@ export async function mountMerchantConsole(
     }
     syncNavigation();
     mountLivePreview();
+    if (section === 'subscription') {
+      const subscription = document.createElement('div');
+      host.querySelector('.mc-main')!.append(subscription);
+      subscription.innerHTML = '<p role="status">Carregando sua assinatura…</p>';
+      void mountSubscription(subscription, api);
+    }
     if (section === 'wallet') {
       const wallet = document.createElement('div');
       host.querySelector('.mc-main')!.append(wallet);

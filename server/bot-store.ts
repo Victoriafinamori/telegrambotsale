@@ -382,6 +382,7 @@ export class BotStore {
             ],
             ...(owner ? [[['⚙️ Gerenciar loja', 'admin']] as [string, string][]] : []),
             ...(owner ? [[['Carteira', 'admin:wallet']] as [string, string][]] : []),
+            ...(owner ? [[['Minha assinatura', 'admin:subscription']] as [string, string][]] : []),
           ]).inline_keyboard,
           [{ text: '🚀 Quero um bot igual · Blackout', url: 'https://blackout-create.web.app/' }],
         ],
@@ -418,6 +419,7 @@ export class BotStore {
           ],
           [['Categorias e emojis', 'admin:categories']],
           [['Carteira', 'admin:wallet']],
+          [['Minha assinatura', 'admin:subscription']],
         ]);
       const release = async (order: Order, status: 'expired' | 'cancelled' | 'rejected') => {
         for (const item of order.items) {
@@ -828,6 +830,22 @@ export class BotStore {
             text: walletScreen.text,
             reply_markup: walletScreen.markup,
           });
+        } else if (owner && (cmd === '/assinatura' || cmd === 'admin:subscription')) {
+          say(
+            `Sua assinatura Blackout Create.\nVencimento: ${account.paid_through instanceof Date ? account.paid_through.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : 'Aguardando ativação'}.\nEscolha o plano mensal, trimestral ou anual no site. O acesso é renovado após a confirmação do Pix.`,
+            {
+              inline_keyboard: [
+                [
+                  {
+                    text: 'Escolher plano e renovar',
+                    url:
+                      (this.checkoutOrigin ?? 'https://blackout-create.web.app') +
+                      '/#/minha-loja?subscription=1',
+                  },
+                ],
+              ],
+            },
+          );
         } else if (await this.receipts.action(receiptContext, cmd)) {
           if (web?.reason && cmd.startsWith('admin:review-reject:'))
             await this.receipts.input(receiptContext, web.reason);
@@ -1805,11 +1823,14 @@ export class BotStore {
       if (
         setup.activation_status === 'active' &&
         shop.owner_id &&
+        account.access_status === 'approved' &&
+        shop.owner_id === setup.telegram_user_id &&
+        shop.owner_bot_id === setup.bot_id &&
         account.paid_through instanceof Date
       ) {
         const days = Math.ceil((account.paid_through.getTime() - this.now().getTime()) / 86400000),
           day = Math.max(0, days);
-        if ([10, 5, 3, 1, 0].includes(day)) {
+        if ([10, 5, 3, 2, 1, 0].includes(day)) {
           const eid = 'r' + tokenHash(account.paid_through.toISOString() + ':' + day).slice(0, 24),
             target = path(auth.accountId, 'effects', eid);
           if (!(await tx.get(target))) {
@@ -1817,13 +1838,27 @@ export class BotStore {
               chat_id: shop.owner_id,
               text:
                 day === 0
-                  ? 'Seu período Blackout Create venceu. Novos pedidos estão pausados. Seu histórico e suporte permanecem disponíveis. Entre no site e fale pelo canal da contratação para renovar.'
-                  : `Sua assinatura Blackout Create vence em ${day} dia(s). Consulte a contratação no site para renovar.`,
+                  ? 'Seu período Blackout Create venceu. Novos pedidos estão pausados. Seu histórico e suporte permanecem disponíveis. Escolha um plano e renove pelo site.'
+                  : `Sua assinatura Blackout Create vence em ${day} dia(s), em ${account.paid_through.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}. Renove pelo site para continuar recebendo pedidos.`,
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    {
+                      text: 'Renovar meu bot',
+                      url:
+                        (this.checkoutOrigin ?? 'https://blackout-create.web.app') +
+                        '/#/minha-loja?subscription=1',
+                    },
+                  ],
+                ],
+              },
             };
             tx.set(target, {
               id: eid,
               method: 'sendMessage',
               status: 'pending',
+              subscription_reminder_due: account.paid_through.toISOString(),
+              subscription_owner_id: shop.owner_id,
               created_at: this.now(),
               payload_ciphertext: this.vault.seal(
                 JSON.stringify(payload),
@@ -1848,7 +1883,7 @@ export class BotStore {
       if (setup.activation_status !== 'active' || !account.billing_started_at)
         throw new HttpError(409, 'BOT_NOT_ACTIVATED', 'Ative e teste o bot antes da renovação.');
       const base = account.paid_through > this.now() ? account.paid_through : this.now(),
-        until = nextBillingMonth(base);
+        until = nextBillingMonth(base, account.billing_months ?? 1);
       tx.set('merchant_accounts/' + accountId, { ...account, paid_through: until });
       tx.set(receiptPath, { id: requestId, created_at: this.now(), paid_through: until, actor });
       this.audit(tx, accountId, 'bot_subscription.renewed_manually', actor);
@@ -1890,6 +1925,17 @@ export class BotStore {
           tx.set(target, { ...out, status: 'skipped', finished_at: this.now() });
           return null;
         }
+      }
+      if (
+        (out.subscription_owner_id && out.subscription_owner_id !== shop.owner_id) ||
+        (out.subscription_reminder_due &&
+          (account.access_status !== 'approved' ||
+            account.paid_through?.toISOString() !== out.subscription_reminder_due ||
+            shop.owner_id !== setup.telegram_user_id ||
+            shop.owner_bot_id !== setup.bot_id))
+      ) {
+        tx.set(target, { ...out, status: 'skipped', finished_at: this.now() });
+        return null;
       }
       if (out.stock_watch_id) {
         const watch = await tx.get(path(auth.accountId, 'stock_watchers', out.stock_watch_id));

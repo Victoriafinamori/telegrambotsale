@@ -29,6 +29,7 @@ export interface MerchantAccount {
   channel: Channel;
   reference: string;
   price_cents: number;
+  billing_months?: number;
   firebase_uid: string | null;
   purchase_confirmed_at: Date | null;
   access_status: 'pending' | 'approved' | 'suspended';

@@ -24,6 +24,7 @@ import { MercadoPagoPayments } from './mercado-pago.js';
 import { PurinCashPayments } from './purin-cash.js';
 import { PaymentGateway } from './payment-gateway.js';
 import { PurinWallet } from './purin-wallet.js';
+import { PlatformSubscriptions } from './platform-subscriptions.js';
 import { publicPaymentRouter, mercadoPagoWebhook } from './payment-routes.js';
 type AuthedRequest = Request & { identity: Identity; requestId: string };
 const tokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/),
@@ -199,6 +200,16 @@ export function createApp(
         )
       : undefined);
   if (services?.bots) services.bots.wallet = wallet;
+  const subscriptions =
+    purin && services?.bots && config.BOT_TOKEN_ENCRYPTION_KEY
+      ? new PlatformSubscriptions(
+          services.bots.store,
+          config.BOT_TOKEN_ENCRYPTION_KEY,
+          purin,
+          config.APP_ORIGIN,
+          config.API_PUBLIC_ORIGIN ?? config.APP_ORIGIN,
+        )
+      : undefined;
   if (services?.bots) app.use('/internal/bot', botRuntimeRouter(services.bots, accounts, gateway));
   app.use('/api', rate('api', 300, 60000));
   app.use('/api', (req, _res, next) => {
@@ -225,6 +236,23 @@ export function createApp(
         if (!Buffer.isBuffer(req.body))
           throw new HttpError(400, 'PURIN_EVENT_INVALID', 'Use JSON.');
         await purin.notify(
+          String(req.params.generation),
+          req.body,
+          req.get('x-webhook-signature') ?? '',
+          req.get('x-webhook-id') ?? '',
+        );
+        res.json({ ok: true });
+      },
+    );
+  if (subscriptions)
+    app.post(
+      '/payments/subscriptions/:generation',
+      rate('subscription-webhook', 300, 60000),
+      express.raw({ type: 'application/json', limit: '16kb' }),
+      async (req, res) => {
+        if (!Buffer.isBuffer(req.body))
+          throw new HttpError(400, 'PURIN_EVENT_INVALID', 'Use JSON.');
+        await subscriptions.notify(
           String(req.params.generation),
           req.body,
           req.get('x-webhook-signature') ?? '',
@@ -416,6 +444,35 @@ export function createApp(
       activationConfirmation: 'manual',
     });
   });
+  const subscriptionOwner = async (req: Request) => {
+    const uid = (req as unknown as AuthedRequest).identity.uid,
+      account = await accounts.own(uid);
+    if (!account || !subscriptions)
+      throw new HttpError(403, 'SUBSCRIPTION_OWNER_REQUIRED', 'Assinatura indisponível.');
+    return { uid, id: account.id, service: subscriptions };
+  };
+  app.get('/api/store/subscription', identity, async (req, res) => {
+    const o = await subscriptionOwner(req);
+    res.json(await o.service.read(o.id, o.uid));
+  });
+  app.post(
+    '/api/store/subscription/create',
+    identity,
+    rate('subscription-create', 10, 600000),
+    async (req, res) => {
+      const o = await subscriptionOwner(req);
+      res.json(await o.service.create(o.id, o.uid, req.body));
+    },
+  );
+  app.post(
+    '/api/store/subscription/check',
+    identity,
+    rate('subscription-check', 30, 60000),
+    async (req, res) => {
+      const o = await subscriptionOwner(req);
+      res.json(await o.service.check(o.id, o.uid, req.body));
+    },
+  );
   app.get('/api/store/runtime', identity, async (req, res) => {
     const account = await accounts.own((req as unknown as AuthedRequest).identity.uid);
     if (!account || account.access_status !== 'approved')
@@ -524,6 +581,29 @@ export function createApp(
     res.json(await services.adminMfa.verify(user, binding(req), code));
   });
   app.use('/api/admin', identity, admin);
+  app.get('/api/admin/subscription-plans', async (_req, res) => {
+    if (!subscriptions)
+      throw new HttpError(503, 'SUBSCRIPTION_UNAVAILABLE', 'Assinaturas indisponíveis.');
+    res.json(await subscriptions.settings());
+  });
+  app.post('/api/admin/subscription-plans', async (req, res) => {
+    if (!subscriptions)
+      throw new HttpError(503, 'SUBSCRIPTION_UNAVAILABLE', 'Assinaturas indisponíveis.');
+    res.json(
+      await subscriptions.configure((req as unknown as AuthedRequest).identity.uid, req.body),
+    );
+  });
+  app.post('/api/admin/accounts/:id/subscription-plan', async (req, res) => {
+    if (!subscriptions)
+      throw new HttpError(503, 'SUBSCRIPTION_UNAVAILABLE', 'Assinaturas indisponíveis.');
+    res.json(
+      await subscriptions.assignInitial(
+        idSchema.parse(req.params.id),
+        (req as unknown as AuthedRequest).identity.uid,
+        req.body,
+      ),
+    );
+  });
   app.get('/api/admin/payments/purin', async (_req, res) => {
     if (!purin) throw new HttpError(503, 'PAYMENTS_UNAVAILABLE', 'Pagamentos indisponíveis.');
     res.json(await purin.platformStatus());

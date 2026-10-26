@@ -7,7 +7,7 @@ export function reuseNavigationMessage(update: TelegramUpdate, effects: BotEffec
   if (
     !message?.message_id ||
     message.chat.type !== 'private' ||
-    !/^(home|catalog|cart|clear|support|orders|cat:.*|p:.*|add:.*|remove:.*|order:.*|watch.*|wallet:(history|new|type:.*|status:.*)|admin|admin:(wallet|categories|category:.*|edit|editfor:.*|stock|stockfor:.*|notices|payment|support|welcome|banner|stats|orders|pending|buyers:.*|coupon|new))$/.test(
+    !/^(home|catalog|cart|clear|support|orders|cat:.*|p:.*|add:.*|remove:.*|order:.*|watch.*|wallet:(history|new|type:.*|status:.*)|admin|admin:(wallet|subscription|categories|category:.*|edit|editfor:.*|stock|stockfor:.*|notices|payment|support|welcome|banner|stats|orders|pending|buyers:.*|coupon|new))$/.test(
       callback?.data ?? '',
     )
   )

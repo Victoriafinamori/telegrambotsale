@@ -325,6 +325,106 @@ test('Wallet HTTP derives merchant identity, blocks arbitrary account IDs and ha
   }
 });
 
+test('Subscription HTTP derives the account from identity and protects plan prices from merchant changes', async () => {
+  const f = await fixture(),
+    cfg = {
+      ...testConfig(),
+      PLATFORM_DATABASE: 'firestore' as const,
+      API_AUTH_MODE: 'bearer' as const,
+      BOT_TOKEN_ENCRYPTION_KEY: f.key,
+    };
+  const auth = {
+    verifyIdToken: async (token: string) => ({ ...f.identity, uid: token }),
+    verifySession: async () => {
+      throw Error();
+    },
+    createSession: async () => '',
+  };
+  const server = createApp(cfg, f.p, auth, undefined, {
+    onboarding: f.p.onboarding,
+    bots: f.bots,
+  }).listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const origin = 'http://127.0.0.1:' + (server.address() as AddressInfo).port,
+    headers = {
+      Origin: cfg.APP_ORIGIN,
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer merchant',
+    };
+  try {
+    assert.equal((await fetch(origin + '/api/store/subscription')).status, 401);
+    assert.equal(
+      (
+        await fetch(origin + '/api/store/subscription', {
+          headers: { ...headers, Authorization: 'Bearer other' },
+        })
+      ).status,
+      403,
+    );
+    const own = await fetch(origin + '/api/store/subscription', { headers });
+    assert.equal(own.status, 200);
+    assert.equal((await own.json()).plans.length, 3);
+    assert.equal((await fetch(origin + '/api/admin/subscription-plans', { headers })).status, 403);
+    assert.equal(
+      (
+        await fetch(origin + '/api/admin/subscription-plans', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ revision: 0, prices: { monthly: 1, quarterly: 1, annual: 1 } }),
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await fetch(origin + '/api/store/subscription/create', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            plan: 'monthly',
+            requestId: randomUUID(),
+            accountId: randomUUID(),
+            priceCents: 1,
+          }),
+        })
+      ).status,
+      400,
+    );
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
+  }
+});
+
+test('Subscription reminders cover 10, 5, 3, 2, 1 days once, include renewal links and skip obsolete notices', async () => {
+  const f = await fixture(),
+    due = new Date('2026-11-04T12:00:00Z');
+  await f.store.transaction(async (tx) => {
+    const a = (await tx.get('merchant_accounts/' + f.a.id))!;
+    tx.set('merchant_accounts/' + f.a.id, { ...a, paid_through: due });
+  });
+  for (const step of [0, 5, 2, 1, 1]) {
+    f.advance(step * 86400000);
+    await f.bots.tick(f.auth);
+    await f.bots.tick(f.auth);
+  }
+  const reminders = (await f.store.list('bot_shops/' + f.a.id + '/effects', { limit: 100 })).filter(
+    (e) => e.subscription_reminder_due,
+  );
+  assert.equal(reminders.length, 5);
+  const screens = await f.effects(reminders.map((e) => e.id));
+  for (const day of [10, 5, 3, 2, 1])
+    assert(screens.some((e) => String(e.payload.text).includes(`em ${day} dia(s)`)));
+  for (const e of screens)
+    assert((e.payload.reply_markup as any).inline_keyboard[0][0].url.includes('?subscription=1'));
+  f.advance(86400000);
+  await f.bots.tick(f.auth);
+  const expired = (await f.store.list('bot_shops/' + f.a.id + '/effects', { limit: 100 })).find(
+    (e) => e.subscription_reminder_due && e.status === 'pending',
+  )!;
+  await f.bots.renew(f.a.id, 'admin', randomUUID());
+  assert.equal(await f.bots.claim(f.auth, expired.id), null);
+});
+
 test('Store start shows management only to the verified merchant and offers Blackout to buyers', async () => {
   const f = await fixture();
   const keyboard = (effects: BotEffect[]) =>

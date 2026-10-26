@@ -1,5 +1,7 @@
 // Calendar month in the merchant platform's business timezone, clamped at month end.
-export function nextBillingMonth(start: Date): Date {
+export function nextBillingMonth(start: Date, months = 1): Date {
+  if (!Number.isInteger(months) || months < 1 || months > 120)
+    throw Error('Invalid billing period');
   const format = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/Sao_Paulo',
     year: 'numeric',
@@ -18,8 +20,9 @@ export function nextBillingMonth(start: Date): Date {
         .map((v) => [v.type, Number(v.value)]),
     );
   const p = parts(start),
-    month = p.month % 12,
-    year = p.year + (p.month === 12 ? 1 : 0);
+    absoluteMonth = p.year * 12 + p.month - 1 + months,
+    month = absoluteMonth % 12,
+    year = Math.floor(absoluteMonth / 12);
   const day = Math.min(p.day, new Date(Date.UTC(year, month + 1, 0)).getUTCDate());
   const target = Date.UTC(year, month, day, p.hour, p.minute, p.second, start.getUTCMilliseconds());
   let candidate = target;

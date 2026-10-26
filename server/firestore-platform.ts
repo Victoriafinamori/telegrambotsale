@@ -26,6 +26,7 @@ const accountFields = [
   'channel',
   'reference',
   'price_cents',
+  'billing_months',
   'firebase_uid',
   'purchase_confirmed_at',
   'access_status',
@@ -532,7 +533,7 @@ export class FirestorePlatform implements AccountService {
       const account = {
         ...this.summary(a, next),
         billing_started_at: now,
-        paid_through: nextBillingMonth(now),
+        paid_through: nextBillingMonth(now, a.billing_months ?? 1),
       };
       tx.set(path, { account_id: id });
       tx.set(setupPath(id), next);

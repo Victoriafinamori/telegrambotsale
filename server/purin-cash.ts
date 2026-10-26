@@ -149,6 +149,22 @@ export class PurinCashPayments {
       withdrawalsEnabled: pointer?.withdrawals_enabled === true,
     };
   }
+  // Server-only facade. Subscription revenue belongs to the platform, never to a merchant ledger.
+  async subscriptionGateway(generation?: string) {
+    const pointer = await this.store.get(root);
+    const current = generation ?? pointer?.generation;
+    if (!current) throw new HttpError(409, 'PURIN_NOT_CONNECTED', 'Conecte a PurinCash primeiro.');
+    z.uuid().parse(current);
+    const credentials = await this.credentials(current);
+    return {
+      generation: current as string,
+      create: (body: Doc) => this.provider(credentials.token, '/charges', body),
+      read: (id: string) => this.provider(credentials.token, '/charges/' + chargeId.parse(id)),
+      list: () => this.provider(credentials.token, '/charges?limit=100'),
+      verify: (raw: Buffer, signature: string) =>
+        validPurinSignature(raw, signature, credentials.secret),
+    };
+  }
   async setWithdrawals(actor: string, enabled: boolean) {
     await botTransaction(this.store, async (tx) => {
       const settings = await tx.get(root);

@@ -85,6 +85,8 @@ export interface BotEffect {
   stock_watch_id?: string;
   stock_watch_nonce?: string;
   wallet_draft_id?: string;
+  subscription_reminder_due?: string;
+  subscription_owner_id?: string;
 }
 export interface StockUnit {
   id: string;
