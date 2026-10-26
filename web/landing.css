@@ -742,11 +742,10 @@ html.dark .landing-page {
 }
 .lp-bot-image {
   width: min(100%, 340px);
-  aspect-ratio: 1/2;
   overflow: hidden;
-  border: 1px solid #3b5271;
+  border: 1px solid var(--lp-line);
   border-radius: 20px;
-  background: #202020;
+  background: var(--lp-surface);
 }
 .lp-bot-proof .lp-bot-image img {
   width: 100%;
