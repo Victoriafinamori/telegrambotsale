@@ -902,7 +902,7 @@ export class BotStore {
           } else if (action === 'payment') {
             customer.session = null;
             say(
-              `Modo atual: ${shop.payment_mode === 'manual' ? (shop.pix_mode === 'mercadopago' ? 'Pix automático · Mercado Pago' : 'Pix/transferência com aprovação manual') : 'Telegram Stars'}.\n${shop.pix_mode === 'mercadopago' ? 'Gerencie a conexão Mercado Pago na aba Pagamentos do site.' : manualPixText(shop) || 'Dados de pagamento ainda não configurados.'}`,
+              `Modo atual: ${shop.payment_mode === 'manual' ? (shop.pix_mode === 'purincash' ? 'Pix automático · Blackout' : shop.pix_mode === 'mercadopago' ? 'Pix automático · Mercado Pago' : 'Pix/transferência com aprovação manual') : 'Telegram Stars'}.\n${['mercadopago', 'purincash'].includes(shop.pix_mode ?? '') ? 'Gerencie o Pix automático na aba Pagamentos do site.' : manualPixText(shop) || 'Dados de pagamento ainda não configurados.'}`,
               buttons([
                 [['Dados Pix/transferência', 'admin:payment-details']],
                 [
@@ -1430,7 +1430,13 @@ export class BotStore {
             say('O lojista precisa conectar o Mercado Pago antes de receber Pix automático.');
           else if (
             shop.payment_mode === 'manual' &&
-            shop.pix_mode !== 'mercadopago' &&
+            shop.pix_mode === 'purincash' &&
+            (!shop.purin_connection || !shop.purin_subaccount || !this.checkoutOrigin)
+          )
+            say('A Blackout precisa vincular a subconta antes de receber Pix automático.');
+          else if (
+            shop.payment_mode === 'manual' &&
+            !['mercadopago', 'purincash'].includes(shop.pix_mode ?? '') &&
             !manualPixText(shop)
           )
             say('O lojista ainda precisa configurar os dados de pagamento.');
@@ -1462,7 +1468,9 @@ export class BotStore {
               total = Math.max(1, Math.floor((total * (100 - (coupon?.percent ?? 0))) / 100));
               const oid = randomBytes(8).toString('hex'),
                 now = this.now(),
-                automaticPix = shop.payment_mode === 'manual' && shop.pix_mode === 'mercadopago',
+                automaticPix =
+                  shop.payment_mode === 'manual' &&
+                  ['mercadopago', 'purincash'].includes(shop.pix_mode ?? ''),
                 checkoutKey = automaticPix ? randomBytes(32).toString('base64url') : '';
               const order: Order = {
                 id: oid,
@@ -1471,14 +1479,19 @@ export class BotStore {
                 buyer_username: from?.username ?? '',
                 currency: shop.payment_mode === 'manual' ? 'BRL' : 'XTR',
                 payment_method: automaticPix
-                  ? 'mercadopago'
+                  ? (shop.pix_mode as 'mercadopago' | 'purincash')
                   : shop.payment_mode === 'manual'
                     ? 'manual'
                     : 'stars',
                 ...(automaticPix
                   ? {
                       checkout_token_hash: tokenHash(checkoutKey),
-                      mp_connection: shop.mp_connection,
+                      ...(shop.pix_mode === 'purincash'
+                        ? {
+                            purin_connection: shop.purin_connection,
+                            purin_subaccount: shop.purin_subaccount,
+                          }
+                        : { mp_connection: shop.mp_connection }),
                     }
                   : {}),
                 items: reservation,
@@ -1506,7 +1519,7 @@ export class BotStore {
               if (automaticPix) {
                 effect('sendMessage', {
                   chat_id: chatId,
-                  text: `${orderSummary(order)}\n\nPix automático · Mercado Pago\nAbra o pagamento seguro para gerar o QR Code e o copia e cola. A entrega será liberada após a confirmação do Mercado Pago.`,
+                  text: `${orderSummary(order)}\n\nPix automático · ${shop.pix_mode === 'purincash' ? 'Blackout' : 'Mercado Pago'}\nAbra o pagamento seguro para gerar o QR Code e o copia e cola. A entrega será liberada após a confirmação do pagamento.`,
                   reply_markup: {
                     inline_keyboard: [
                       [
@@ -1575,9 +1588,12 @@ export class BotStore {
           }
         } else if (cmd.startsWith('pix-check:')) {
           const order = (await tx.get(orderDoc(cmd.slice(10)))) as Order | null;
-          if (order?.buyer_id === userId && order.payment_method === 'mercadopago')
+          if (
+            order?.buyer_id === userId &&
+            ['mercadopago', 'purincash'].includes(order.payment_method ?? '')
+          )
             say(
-              `Pedido ${order.id}: ${orderLabels[order.status]}. A confirmação é consultada no Mercado Pago; acompanhe também em Meus pedidos.`,
+              `Pedido ${order.id}: ${orderLabels[order.status]}. A confirmação é consultada no sistema de pagamento; acompanhe também em Meus pedidos.`,
             );
           else say('Pedido não encontrado.');
         } else if (cmd.startsWith('history:')) await listOrders(false, cmd.slice(8));

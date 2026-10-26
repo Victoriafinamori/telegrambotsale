@@ -1,4 +1,5 @@
 type Checkout = {
+  provider?: string;
   title: string;
   orderId: string;
   total: number;
@@ -39,7 +40,15 @@ export async function mountPixCheckout(host: HTMLElement, hash: string, request:
   const render = () => {
     if (!root.isConnected) return;
     const paid = ['paid', 'delivered'].includes(data.status);
-    root.innerHTML = `<a class="brand" href="#/">Blackout Create</a><section class="mc-panel"><h1>${esc(data.title)}</h1><p>Pedido ${esc(data.orderId)}</p><ul>${data.items.map((item) => `<li>${item.quantity} × ${esc(item.title)}</li>`).join('')}</ul><p class="pix-total">${(data.total / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p><p role="status">${paid ? 'Pagamento confirmado. Acompanhe a entrega no seu Telegram.' : data.status === 'refund_required' ? 'Pagamento recebido para um pedido encerrado. Fale com o suporte da loja para atendimento/reembolso.' : !data.open ? 'Este pedido está encerrado ou venceu. Retorne ao Telegram para consultar seu histórico.' : 'Pague com Pix pelo Mercado Pago.'}</p>${data.open ? (data.qrCode ? `<div class="pix-qr">${data.qrBase64 && /^[A-Za-z0-9+/=]+$/.test(data.qrBase64) ? `<img src="data:image/png;base64,${data.qrBase64}" alt="QR Code Pix deste pedido">` : ''}</div><label>Pix copia e cola<textarea readonly rows="4" data-pix-code>${esc(data.qrCode)}</textarea></label><div class="mc-shortcuts"><button data-copy-pix>Copiar Pix</button><button class="quiet" data-check-pix>Verificar confirmação</button></div><p>Válido até ${new Date(data.expiresAt).toLocaleString('pt-BR')}. Confira o valor e o recebedor no aplicativo do banco antes de pagar.</p><p>A confirmação é automática. A entrega será enviada ao Telegram vinculado ao pedido.</p>` : `<form data-create-pix><p>Informe os dados do pagador para gerar o Pix. Estes dados serão enviados ao Mercado Pago para processar este pagamento.</p><label>E-mail<input name="email" type="email" autocomplete="email" required maxlength="254"></label><label>Tipo de documento<select name="documentType"><option value="CPF">CPF</option><option value="CNPJ">CNPJ</option></select></label><label>CPF ou CNPJ do pagador<input name="document" inputmode="numeric" autocomplete="off" required minlength="11" maxlength="20"></label><button type="submit">Gerar Pix deste pedido</button></form>`) : ''}<p data-pix-feedback class="feedback" role="status" hidden></p></section>`;
+    root.innerHTML = `<a class="brand" href="#/">Blackout Create</a><section class="mc-panel"><h1>${esc(data.title)}</h1><p>Pedido ${esc(data.orderId)}</p><ul>${data.items.map((item) => `<li>${item.quantity} × ${esc(item.title)}</li>`).join('')}</ul><p class="pix-total">${(data.total / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p><p role="status">${paid ? 'Pagamento confirmado. Acompanhe a entrega no seu Telegram.' : data.status === 'refund_required' ? 'Pagamento recebido para um pedido encerrado. Fale com o suporte da loja para atendimento/reembolso.' : !data.open ? 'Este pedido está encerrado ou venceu. Retorne ao Telegram para consultar seu histórico.' : data.provider === 'purincash' ? 'Pague com Pix pelo sistema Blackout.' : 'Pague com Pix pelo Mercado Pago.'}</p>${data.open ? (data.qrCode ? `<div class="pix-qr">${data.qrBase64 && /^[A-Za-z0-9+/=]+$/.test(data.qrBase64) ? `<img src="data:image/png;base64,${data.qrBase64}" alt="QR Code Pix deste pedido">` : ''}</div><label>Pix copia e cola<textarea readonly rows="4" data-pix-code>${esc(data.qrCode)}</textarea></label><div class="mc-shortcuts"><button data-copy-pix>Copiar Pix</button><button class="quiet" data-check-pix>Verificar confirmação</button></div><p>Válido até ${new Date(data.expiresAt).toLocaleString('pt-BR')}. Confira o valor e o recebedor no aplicativo do banco antes de pagar.</p><p>A confirmação é automática. A entrega será enviada ao Telegram vinculado ao pedido.</p>` : `<form data-create-pix>${data.provider === 'purincash' ? '<p>Gere o Pix deste pedido para pagar pelo aplicativo do seu banco.</p>' : `<p>Informe os dados do pagador para gerar o Pix. Estes dados serão enviados ao Mercado Pago para processar este pagamento.</p><label>E-mail<input name="email" type="email" autocomplete="email" required maxlength="254"></label><label>Tipo de documento<select name="documentType"><option value="CPF">CPF</option><option value="CNPJ">CNPJ</option></select></label><label>CPF ou CNPJ do pagador<input name="document" inputmode="numeric" autocomplete="off" required minlength="11" maxlength="20"></label>`}<button type="submit">Gerar Pix deste pedido</button></form>`) : ''}<p data-pix-feedback class="feedback" role="status" hidden></p></section>`;
+    const imageHost = root.querySelector<HTMLElement>('.pix-qr');
+    if (imageHost && data.provider === 'purincash' && data.qrCode && !data.qrBase64) {
+      const code = data.qrCode;
+      void import('qrcode').then(module => module.default.toDataURL(code, { width: 360, margin: 2 })).then(src => {
+        if (!imageHost.isConnected || data.qrCode !== code) return;
+        const img = document.createElement('img'); img.src = src; img.alt = 'QR Code Pix deste pedido'; imageHost.replaceChildren(img);
+      }).catch(() => feedback('Use o Pix copia e cola para pagar este pedido.'));
+    }
   };
   const work = async (fn: () => Promise<void>) => {
     if (busy) return;
@@ -95,7 +104,7 @@ export async function mountPixCheckout(host: HTMLElement, hash: string, request:
       void work(async () => {
         data = await request('refresh', base);
         render();
-        if (data.open) feedback('O Mercado Pago ainda não confirmou o pagamento.');
+        if (data.open) feedback('O pagamento ainda não foi confirmado.');
       });
   });
   root.innerHTML = '<p role="status">Carregando pagamento…</p>';

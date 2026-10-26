@@ -6,11 +6,13 @@ import type { Identity } from './types.js';
 import type { AccountService } from './platform-contract.js';
 import type { MerchantConsole } from './merchant-console.js';
 import type { MercadoPagoPayments } from './mercado-pago.js';
+import type { PurinCashPayments } from './purin-cash.js';
 export function merchantConsoleRouter(
   console: MerchantConsole,
   accounts: AccountService,
   identity: RequestHandler,
   payments?: MercadoPagoPayments,
+  purin?: PurinCashPayments,
 ) {
   const router = Router(),
     owners = new WeakMap<object, { id: string; uid: string }>();
@@ -28,6 +30,12 @@ export function merchantConsoleRouter(
     }
   });
   const owner = (req: object) => owners.get(req)!;
+  router.post('/payments/purin/request', async (req, res) => {
+    if (!purin) throw new HttpError(503, 'PAYMENTS_UNAVAILABLE', 'Pagamentos indisponíveis.');
+    z.object({}).strict().parse(req.body);
+    const { id, uid } = owner(req);
+    res.json(await purin.requestActivation(id, uid));
+  });
   router.get('/payments', async (req, res) => {
     if (!payments) throw new HttpError(503, 'PAYMENTS_UNAVAILABLE', 'Pagamentos indisponíveis.');
     const { id, uid } = owner(req);

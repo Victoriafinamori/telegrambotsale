@@ -111,7 +111,10 @@ export interface Shop {
   notice_active?: string | null;
   payment_mode?: 'manual' | 'stars';
   payment_instructions?: string;
-  pix_mode?: 'manual' | 'mercadopago';
+  pix_mode?: 'manual' | 'mercadopago' | 'purincash';
+  purin_connection?: string;
+  purin_subaccount?: string;
+  purin_requested?: boolean;
   pix_keys?: {
     type: 'cpf' | 'cnpj' | 'email' | 'phone' | 'random';
     value: string;
@@ -151,7 +154,10 @@ export interface Order {
   buyer_name?: string;
   buyer_username?: string;
   currency?: 'BRL' | 'XTR';
-  payment_method?: 'manual' | 'stars' | 'mercadopago';
+  payment_method?: 'manual' | 'stars' | 'mercadopago' | 'purincash';
+  purin_connection?: string;
+  purin_subaccount?: string;
+  purin_payment_id?: string;
   checkout_token_hash?: string;
   mp_connection?: string;
   mp_payment_id?: string;

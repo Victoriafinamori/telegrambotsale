@@ -2,7 +2,9 @@ import { Router } from 'express';
 import { z } from 'zod';
 import type { MercadoPagoPayments } from './mercado-pago.js';
 import { HttpError } from './types.js';
-export function publicPaymentRouter(payments: MercadoPagoPayments) {
+export function publicPaymentRouter(
+  payments: Pick<MercadoPagoPayments, 'details' | 'create' | 'refresh'>,
+) {
   const router = Router();
   router.use((_req, res, next) => {
     res.set('Cache-Control', 'no-store');

@@ -9,7 +9,7 @@ import type { MercadoPagoPayments } from './mercado-pago.js';
 export function botRuntimeRouter(
   bots: BotStore,
   accounts: AccountService,
-  payments?: MercadoPagoPayments,
+  payments?: Pick<MercadoPagoPayments, 'checkFromBot'>,
 ) {
   const router = Router(),
     accesses = new WeakMap<object, RuntimeAccess>();

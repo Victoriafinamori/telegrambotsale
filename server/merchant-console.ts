@@ -52,7 +52,15 @@ export const settingsInput = z
   })
   .strict();
 const orderPublic = (order: Doc) => {
-  const { items, receipt_ciphertext, checkout_token_hash, mp_connection, ...meta } = order;
+  const {
+    items,
+    receipt_ciphertext,
+    checkout_token_hash,
+    mp_connection,
+    purin_connection,
+    purin_subaccount,
+    ...meta
+  } = order;
   return {
     ...meta,
     hasReceipt: Boolean(receipt_ciphertext),

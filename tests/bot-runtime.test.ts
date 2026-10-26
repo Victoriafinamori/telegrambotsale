@@ -20,6 +20,254 @@ import { TelegramClient, TelegramError } from '../server/telegram-client.js';
 import { botTransaction } from '../server/bot-data.js';
 import { MercadoPagoPayments, validMpSignature } from '../server/mercado-pago.js';
 import { pixKey, manualPixText } from '../server/pix.js';
+import { PurinCashPayments, validPurinSignature } from '../server/purin-cash.js';
+import { PaymentGateway } from '../server/payment-gateway.js';
+
+async function purinFixture(failCreate = false) {
+  const f = await fixture(true, undefined, 'merchant', '123456789', 'manual');
+  let now = new Date('2026-10-25T12:00:00Z'),
+    posts = 0;
+  const charges = new Map<string, any>(),
+    secret = 'WEBHOOK_SYNTHETIC_' + 'a'.repeat(32),
+    token = 'ps_live_' + 'b'.repeat(40);
+  const transport: typeof fetch = async (url, init) => {
+    const address = new URL(String(url));
+    assert.equal(address.origin, 'https://api.purincash.com');
+    if (address.pathname === '/v1/subaccounts') return Response.json({ subaccounts: [] });
+    if (address.pathname.startsWith('/v1/subaccounts/'))
+      return Response.json({
+        subaccountId: address.pathname.split('/').at(-1),
+        active: true,
+        externalId: f.a.id,
+      });
+    if (init?.method === 'POST') {
+      posts++;
+      const body = JSON.parse(String(init.body)),
+        id = 'psc_test' + posts;
+      const payment = {
+        paymentId: id,
+        amountCents: body.valueCents,
+        currency: 'BRL',
+        environment: 'live',
+        status: 'pending',
+        metadata: body.metadata,
+        customer: body.customer,
+        subaccountId: body.subaccountId,
+        pix: { brCode: 'PIX_SIMULADO_NAO_PAGAR' },
+      };
+      assert.equal(body.subaccountFeeCents, 0);
+      charges.set(id, payment);
+      if (failCreate) throw Error('Simulated lost response');
+      return Response.json(payment);
+    }
+    if (address.pathname === '/v1/charges')
+      return Response.json({ charges: [...charges.values()] });
+    const payment = charges.get(address.pathname.split('/').at(-1)!);
+    assert(payment);
+    return Response.json(payment);
+  };
+  const service = new PurinCashPayments(
+    f.store,
+    f.key,
+    f.bots,
+    'https://store.example.test',
+    'https://api.example.test',
+    transport,
+    () => now,
+  );
+  f.bots.checkoutOrigin = 'https://store.example.test';
+  await service.connect('admin', { accessToken: token, webhookSecret: secret });
+  await service.bind(f.a.id, 'admin', { subaccountId: 'sacc_pilot' });
+  const mp = new MercadoPagoPayments(
+    f.store,
+    f.key,
+    f.bots,
+    'https://store.example.test',
+    'https://api.example.test',
+    transport,
+  );
+  const settings = await mp.settings(f.a.id, 'merchant');
+  await mp.saveSettings(f.a.id, 'merchant', {
+    mode: 'purincash',
+    revision: settings.revision,
+    keys: [],
+    instructions: '',
+  });
+  const pid = await f.product();
+  await f.click(222222222, 'add:' + pid);
+  const effects = await f.click(222222222, 'checkout');
+  const effect = effects.find((e) => String(e.payload.text).includes('Pix automático'))!;
+  const url = (effect.payload.reply_markup as any).inline_keyboard[0][0].url;
+  const [, , accountId, orderId, key] = new URL(url).hash.split('/');
+  const base = { accountId, orderId, key };
+  const generation = (await f.store.get('bot_shops/' + f.a.id))!.purin_connection;
+  const notify = async (payment: any) => {
+    const raw = Buffer.from(JSON.stringify({ event: 'charge.paid', paymentId: payment.paymentId }));
+    return service.notify(
+      generation,
+      raw,
+      createHmac('sha256', secret).update(raw).digest('hex'),
+      'charge.paid:' + payment.paymentId,
+    );
+  };
+  return {
+    f,
+    service,
+    mp,
+    base,
+    pid,
+    charges,
+    generation,
+    secret,
+    token,
+    notify,
+    posts: () => posts,
+    advance(ms: number) {
+      now = new Date(now.getTime() + ms);
+      f.advance(ms);
+    },
+  };
+}
+
+test('Purin checkout binds server amount and subaccount, queues delivery once, and protects secrets and capabilities', async () => {
+  const p = await purinFixture(),
+    gateway = new PaymentGateway(p.mp, p.service);
+  await assert.rejects(() => gateway.details({ ...p.base, key: 'x'.repeat(43) }), {
+    code: 'CHECKOUT_NOT_FOUND',
+  });
+  const first = await gateway.create(p.base);
+  assert(first.qrCode);
+  assert.equal(first.qrBase64, ''); // Remote image URLs are never fetched; browser renders BR Code locally.
+  await gateway.create(p.base);
+  assert.equal(p.posts(), 1);
+  const payment = [...p.charges.values()][0];
+  payment.status = 'paid';
+  await p.notify(payment);
+  await p.notify(payment);
+  const order = await p.f.store.get(`bot_shops/${p.f.a.id}/orders/${p.base.orderId}`);
+  assert.equal(order!.status, 'paid');
+  assert.equal(order!.delivery_effects.length, 1);
+  const delivered = await p.f.effects(order!.delivery_effects);
+  assert.equal(delivered.length, 1);
+  assert.equal((await p.f.effects(order!.delivery_effects)).length, 0);
+  const audit =
+    JSON.stringify(await p.service.platformStatus()) +
+    JSON.stringify(await p.mp.settings(p.f.a.id, 'merchant'));
+  assert(!audit.includes(p.token));
+  assert(!audit.includes(p.secret));
+  const privateRows = JSON.stringify(
+    await p.f.store.list('platform_payments/purincash/connections', { limit: 20 }),
+  );
+  assert(!privateRows.includes(p.token));
+  assert(!privateRows.includes(p.secret));
+});
+
+test('Purin rejects forged raw-body signatures, wrong amount/subaccount/environment and sandbox notifications', async () => {
+  const p = await purinFixture();
+  await p.service.create(p.base);
+  const payment = [...p.charges.values()][0];
+  payment.status = 'paid';
+  const body = Buffer.from('{"event":"charge.paid","paymentId":"psc_test1"}');
+  assert(
+    validPurinSignature(body, createHmac('sha256', p.secret).update(body).digest('hex'), p.secret),
+  );
+  assert(
+    !validPurinSignature(
+      Buffer.from(body.toString() + ' '),
+      createHmac('sha256', p.secret).update(body).digest('hex'),
+      p.secret,
+    ),
+  );
+  await assert.rejects(
+    () => p.service.notify(p.generation, body, 'a'.repeat(64), 'charge.paid:psc_test1'),
+    { code: 'PURIN_SIGNATURE_INVALID' },
+  );
+  for (const [field, wrong] of [
+    ['amountCents', 99999],
+    ['subaccountId', 'sacc_other'],
+    ['environment', 'sandbox'],
+  ] as const) {
+    const old = payment[field];
+    payment[field] = wrong;
+    await assert.rejects(() => p.notify(payment), { code: 'PURIN_PAYMENT_MISMATCH' });
+    payment[field] = old;
+  }
+  const order = await p.f.store.get(`bot_shops/${p.f.a.id}/orders/${p.base.orderId}`);
+  assert.equal(order!.status, 'awaiting_payment');
+});
+
+test('Purin lost create response never repeats POST, and paid expired orders do not deliver or duplicate returned stock', async () => {
+  const p = await purinFixture(true);
+  await assert.rejects(() => p.service.create(p.base), { code: 'PURIN_UNAVAILABLE' });
+  await p.service.create(p.base);
+  assert.equal(p.posts(), 1);
+  const payment = [...p.charges.values()][0];
+  payment.status = 'paid';
+  p.advance(3600001);
+  await p.notify(payment);
+  await p.notify(payment);
+  const order = await p.f.store.get(`bot_shops/${p.f.a.id}/orders/${p.base.orderId}`);
+  assert.equal(order!.status, 'refund_required');
+  assert(!order!.delivery_effects?.length);
+  assert.equal((await p.f.store.get(`bot_shops/${p.f.a.id}/products/${p.pid}`))!.units.length, 2);
+});
+
+test('Purin master credentials and subaccount binding cannot be changed by merchants over HTTP', async () => {
+  const p = await purinFixture(),
+    f = p.f,
+    cfg = {
+      ...testConfig(),
+      PLATFORM_DATABASE: 'firestore' as const,
+      API_AUTH_MODE: 'bearer' as const,
+      BOT_TOKEN_ENCRYPTION_KEY: f.key,
+    };
+  const auth = {
+    verifyIdToken: async () => f.identity,
+    verifySession: async () => {
+      throw Error();
+    },
+    createSession: async () => '',
+  };
+  const server = createApp(cfg, f.p, auth, undefined, {
+    onboarding: f.p.onboarding,
+    bots: f.bots,
+    payments: p.mp,
+    purin: p.service,
+  }).listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const origin = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
+  try {
+    for (const path of [
+      '/api/admin/payments/purin/connect',
+      `/api/admin/accounts/${f.a.id}/purin`,
+    ]) {
+      assert.equal(
+        (
+          await fetch(origin + path, {
+            method: 'POST',
+            headers: {
+              Origin: cfg.APP_ORIGIN,
+              'Content-Type': 'application/json',
+              Authorization: 'Bearer merchant',
+            },
+            body: '{}',
+          })
+        ).status,
+        403,
+      );
+    }
+    const response = await fetch(origin + '/payments/purincash/' + p.generation, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(response.status, 401);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
 
 async function pixFixture(failFirst = false) {
   const f = await fixture(true, undefined, 'merchant', '123456789', 'manual');

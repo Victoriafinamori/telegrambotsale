@@ -21,6 +21,8 @@ import { botRuntimeRouter } from './bot-runtime-routes.js';
 import { MerchantConsole } from './merchant-console.js';
 import { merchantConsoleRouter } from './merchant-console-routes.js';
 import { MercadoPagoPayments } from './mercado-pago.js';
+import { PurinCashPayments } from './purin-cash.js';
+import { PaymentGateway } from './payment-gateway.js';
 import { publicPaymentRouter, mercadoPagoWebhook } from './payment-routes.js';
 type AuthedRequest = Request & { identity: Identity; requestId: string };
 const tokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/),
@@ -45,6 +47,7 @@ export function createApp(
     adminMfa?: AdminMfa;
     bots?: BotStore;
     payments?: MercadoPagoPayments;
+    purin?: PurinCashPayments;
   },
 ) {
   const app = express(),
@@ -162,7 +165,24 @@ export function createApp(
             !config.FIREBASE_AUTH_EMULATOR_HOST,
         )
       : undefined);
-  if (services?.bots) app.use('/internal/bot', botRuntimeRouter(services.bots, accounts, payments));
+  const purin =
+    services?.purin ??
+    (payments && services?.bots && config.BOT_TOKEN_ENCRYPTION_KEY
+      ? new PurinCashPayments(
+          services.bots.store,
+          config.BOT_TOKEN_ENCRYPTION_KEY,
+          services.bots,
+          config.APP_ORIGIN,
+          config.API_PUBLIC_ORIGIN ?? config.APP_ORIGIN,
+          fetch,
+          undefined,
+          !config.FIREBASE_PROJECT_ID.startsWith('demo-') &&
+            !config.FIRESTORE_EMULATOR_HOST &&
+            !config.FIREBASE_AUTH_EMULATOR_HOST,
+        )
+      : undefined);
+  const gateway = payments && purin ? new PaymentGateway(payments, purin) : payments;
+  if (services?.bots) app.use('/internal/bot', botRuntimeRouter(services.bots, accounts, gateway));
   app.use('/api', rate('api', 300, 60000));
   app.use('/api', (req, _res, next) => {
     if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
@@ -179,6 +199,23 @@ export function createApp(
     }
     next();
   });
+  if (purin)
+    app.post(
+      '/payments/purincash/:generation',
+      rate('purin-webhook', 300, 60000),
+      express.raw({ type: 'application/json', limit: '16kb' }),
+      async (req, res) => {
+        if (!Buffer.isBuffer(req.body))
+          throw new HttpError(400, 'PURIN_EVENT_INVALID', 'Use JSON.');
+        await purin.notify(
+          String(req.params.generation),
+          req.body,
+          req.get('x-webhook-signature') ?? '',
+          req.get('x-webhook-id') ?? '',
+        );
+        res.json({ ok: true });
+      },
+    );
   app.use((req, res, next) =>
     express.json({
       limit:
@@ -195,7 +232,7 @@ export function createApp(
     app.use(
       '/api/payments/checkout',
       rate('pix-checkout', 30, 60000),
-      publicPaymentRouter(payments),
+      publicPaymentRouter(gateway!),
     );
   }
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
@@ -393,6 +430,7 @@ export function createApp(
         accounts,
         identity,
         payments,
+        purin,
       ),
     );
   app.get('/api/onboarding', identity, async (req, res) => {
@@ -468,6 +506,32 @@ export function createApp(
     res.json(await services.adminMfa.verify(user, binding(req), code));
   });
   app.use('/api/admin', identity, admin);
+  app.get('/api/admin/payments/purin', async (_req, res) => {
+    if (!purin) throw new HttpError(503, 'PAYMENTS_UNAVAILABLE', 'Pagamentos indisponíveis.');
+    res.json(await purin.platformStatus());
+  });
+  app.post(
+    '/api/admin/payments/purin/connect',
+    rate('purin-connect', 5, 60000),
+    async (req, res) => {
+      if (!purin) throw new HttpError(503, 'PAYMENTS_UNAVAILABLE', 'Pagamentos indisponíveis.');
+      res.json(await purin.connect((req as unknown as AuthedRequest).identity.uid, req.body));
+    },
+  );
+  app.get('/api/admin/accounts/:id/purin', async (req, res) => {
+    if (!purin) throw new HttpError(503, 'PAYMENTS_UNAVAILABLE', 'Pagamentos indisponíveis.');
+    res.json(await purin.binding(idSchema.parse(req.params.id)));
+  });
+  app.post('/api/admin/accounts/:id/purin', async (req, res) => {
+    if (!purin) throw new HttpError(503, 'PAYMENTS_UNAVAILABLE', 'Pagamentos indisponíveis.');
+    res.json(
+      await purin.bind(
+        idSchema.parse(req.params.id),
+        (req as unknown as AuthedRequest).identity.uid,
+        req.body,
+      ),
+    );
+  });
   app.get('/api/admin/accounts', async (req, res) => {
     const offset = z.coerce.number().int().min(0).max(100000).default(0).parse(req.query.offset);
     const queue = z.enum(['all', 'activation']).default('all').parse(req.query.queue);

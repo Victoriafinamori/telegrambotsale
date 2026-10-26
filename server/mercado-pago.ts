@@ -187,6 +187,8 @@ export class MercadoPagoPayments {
         instructions: shop.payment_instructions ?? '',
         revision: shop.portal_revision ?? 0,
         connected: Boolean(connection),
+        purinConnected: Boolean(shop.purin_connection && shop.purin_subaccount),
+        purinRequested: shop.purin_requested === true,
         merchantName: connection?.merchant_name ?? '',
         merchantId: connection?.merchant_id ?? '',
         webhookUrl: `${this.apiOrigin}/payments/mercadopago/${id}/current`,
@@ -232,7 +234,7 @@ export class MercadoPagoPayments {
   async saveSettings(id: string, uid: string, input: unknown) {
     const parsed = z
       .object({
-        mode: z.enum(['manual', 'mercadopago', 'stars']),
+        mode: z.enum(['manual', 'mercadopago', 'purincash', 'stars']),
         keys: z.array(pixKey).max(3),
         instructions: z.string().trim().max(1000),
         revision: z.number().int().nonnegative(),
@@ -250,6 +252,12 @@ export class MercadoPagoPayments {
     await botTransaction(this.store, async (tx) => {
       const shop = await this.owner(tx, id, uid);
       this.revision(shop, value.revision);
+      if (value.mode === 'purincash' && (!shop.purin_connection || !shop.purin_subaccount))
+        throw new HttpError(
+          409,
+          'PURIN_NOT_BOUND',
+          'Solicite a ativação do Pix Blackout. A equipe precisa vincular sua subconta.',
+        );
       if (
         value.mode === 'mercadopago' &&
         (!shop.mp_connection || !(await tx.get(connectionPath(id, shop.mp_connection))))
@@ -274,7 +282,8 @@ export class MercadoPagoPayments {
       tx.set(botRoot(id), {
         ...shop,
         payment_mode: value.mode === 'stars' ? 'stars' : 'manual',
-        pix_mode: value.mode === 'mercadopago' ? 'mercadopago' : 'manual',
+        pix_mode:
+          value.mode === 'mercadopago' || value.mode === 'purincash' ? value.mode : 'manual',
         pix_keys: value.keys,
         payment_instructions: value.instructions,
         portal_revision: value.revision + 1,
