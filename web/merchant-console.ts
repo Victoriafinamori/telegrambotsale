@@ -175,7 +175,7 @@ export async function mountMerchantConsole(
       toggle.setAttribute('aria-label', label);
       toggle.title = label;
       toggle.setAttribute('aria-expanded', String(mobile.matches ? mobileOpen : !collapsed));
-      toggle.innerHTML = icon(mobile.matches ? 'menu' : collapsed ? 'expand' : 'collapse');
+      toggle.innerHTML = `${icon(mobile.matches ? 'menu' : collapsed ? 'expand' : 'collapse')}<span class="mc-toggle-label">${collapsed ? 'Abrir menu' : 'Recolher menu'}</span>`;
     }
   };
   const closeNavigation = (restoreFocus = true) => {
@@ -355,7 +355,7 @@ export async function mountMerchantConsole(
       })
       .join(
         '',
-      )}</nav><div class="mc-sidebar-footer"><a href="https://t.me/${esc(data.botUsername)}" target="_blank" rel="noopener noreferrer" aria-label="Abrir meu bot no Telegram" title="Abrir meu bot no Telegram">${icon('external')}<span class="mc-nav-label">Abrir meu bot</span></a><a href="#/configuracao" class="mc-back" aria-label="Ativação e conexão" title="Ativação e conexão">${icon('back')}<span class="mc-nav-label">Ativação e conexão</span></a></div></aside><div class="mc-main"><div class="mc-title"><div class="mc-page-heading"><button class="mc-icon-button" data-action="toggle-navigation" aria-controls="mc-sidebar">${icon('menu')}</button><h2 tabindex="-1">${navigation.find(([id]) => id === section)?.[1] ?? (section === 'product-edit' && !selected ? 'Novo produto' : 'Editar produto')}</h2></div><button class="quiet" data-action="refresh">Atualizar</button></div><p id="mc-feedback" class="feedback" role="status" hidden></p>${body}</div></div>`;
+      )}</nav><div class="mc-sidebar-footer"><a href="https://t.me/${esc(data.botUsername)}" target="_blank" rel="noopener noreferrer" aria-label="Abrir meu bot no Telegram" title="Abrir meu bot no Telegram">${icon('external')}<span class="mc-nav-label">Abrir meu bot</span></a><a href="#/configuracao" class="mc-back" aria-label="Ativação e conexão" title="Ativação e conexão">${icon('back')}<span class="mc-nav-label">Ativação e conexão</span></a></div></aside><div class="mc-main"><div class="mc-title"><div class="mc-page-heading"><button class="mc-icon-button mc-menu-toggle" data-action="toggle-navigation" aria-controls="mc-sidebar">${icon('menu')}</button><h2 tabindex="-1">${navigation.find(([id]) => id === section)?.[1] ?? (section === 'product-edit' && !selected ? 'Novo produto' : 'Editar produto')}</h2></div><button class="quiet" data-action="refresh">Atualizar</button></div><p id="mc-feedback" class="feedback" role="status" hidden></p>${body}</div></div>`;
     if (listLoading || listError) {
       const main = host.querySelector('.mc-main')!;
       if (listLoading && !listLoaded.has(section))
