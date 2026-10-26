@@ -23,6 +23,6 @@ Nenhuma URL global precisa ser alterada: cada cobrança recebe `callbackUrl` HTT
 - Se a resposta original de criação for perdida, o GET pode não retornar o QR; a confirmação continua conciliável, mas não prometemos reconstrução do código. Conferir a cobrança na PurinCash, aguardar expiração e atender o comprador antes de uma nova compra.
 - Rotação mantém versões privadas anteriores para pedidos pendentes. Vincule novamente as lojas à conexão atual após conferir que a chave pertence à mesma conta. IDs de subcontas já usados permanecem reservados ao lojista original.
 
-Não foram implementados saques, repasses automáticos, gestão de contestações/MED nem comissão configurável. Essas operações exigem um fluxo próprio; não estão implícitas na confirmação de pagamento.
+A carteira e os saques das subcontas têm fluxo próprio, descrito em WALLET.md. Gestão de contestações/MED e comissão configurável não foram implementadas.
 
 Documentação: https://docs.purincash.com/guias/subcontas e https://docs.purincash.com/webhooks/assinatura.

@@ -7,12 +7,14 @@ import type { AccountService } from './platform-contract.js';
 import type { MerchantConsole } from './merchant-console.js';
 import type { MercadoPagoPayments } from './mercado-pago.js';
 import type { PurinCashPayments } from './purin-cash.js';
+import type { PurinWallet } from './purin-wallet.js';
 export function merchantConsoleRouter(
   console: MerchantConsole,
   accounts: AccountService,
   identity: RequestHandler,
   payments?: MercadoPagoPayments,
   purin?: PurinCashPayments,
+  wallet?: PurinWallet,
 ) {
   const router = Router(),
     owners = new WeakMap<object, { id: string; uid: string }>();
@@ -30,6 +32,41 @@ export function merchantConsoleRouter(
     }
   });
   const owner = (req: object) => owners.get(req)!;
+  router.get('/wallet', async (req, res) => {
+    if (!wallet) throw new HttpError(503, 'WALLET_UNAVAILABLE', 'Carteira indisponível.');
+    const { id, uid } = owner(req);
+    res.json(await wallet.read(id, { uid }));
+  });
+  router.get('/wallet/drafts/:id', async (req, res) => {
+    if (!wallet) throw new HttpError(503, 'WALLET_UNAVAILABLE', 'Carteira indisponível.');
+    const { id, uid } = owner(req);
+    res.json(await wallet.draft(id, { uid }, z.uuid().parse(req.params.id)));
+  });
+  router.post('/wallet/prepare', async (req, res) => {
+    if (!wallet) throw new HttpError(503, 'WALLET_UNAVAILABLE', 'Carteira indisponível.');
+    const { id, uid } = owner(req);
+    await accounts.consumeRate('wallet-prepare:' + id, 10, 60000);
+    res.json(await wallet.prepare(id, { uid }, req.body));
+  });
+  router.post('/wallet/approve', async (req, res) => {
+    if (!wallet) throw new HttpError(503, 'WALLET_UNAVAILABLE', 'Carteira indisponível.');
+    const { id, uid } = owner(req);
+    await accounts.consumeRate('wallet-approve:' + id, 10, 60000);
+    res.json(await wallet.requestApproval(id, uid, req.body));
+  });
+  router.post('/wallet/cancel', async (req, res) => {
+    if (!wallet) throw new HttpError(503, 'WALLET_UNAVAILABLE', 'Carteira indisponível.');
+    const { id, uid } = owner(req),
+      body = z.object({ draftId: z.uuid() }).strict().parse(req.body);
+    await wallet.cancel(id, { uid }, body.draftId);
+    res.json({ ok: true });
+  });
+  router.post('/wallet/status', async (req, res) => {
+    if (!wallet) throw new HttpError(503, 'WALLET_UNAVAILABLE', 'Carteira indisponível.');
+    const { id, uid } = owner(req),
+      body = z.object({ draftId: z.uuid() }).strict().parse(req.body);
+    res.json(await wallet.sync(id, { uid }, body.draftId));
+  });
   router.post('/payments/purin/request', async (req, res) => {
     if (!purin) throw new HttpError(503, 'PAYMENTS_UNAVAILABLE', 'Pagamentos indisponíveis.');
     z.object({}).strict().parse(req.body);

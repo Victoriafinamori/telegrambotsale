@@ -23,6 +23,7 @@ import { merchantConsoleRouter } from './merchant-console-routes.js';
 import { MercadoPagoPayments } from './mercado-pago.js';
 import { PurinCashPayments } from './purin-cash.js';
 import { PaymentGateway } from './payment-gateway.js';
+import { PurinWallet } from './purin-wallet.js';
 import { publicPaymentRouter, mercadoPagoWebhook } from './payment-routes.js';
 type AuthedRequest = Request & { identity: Identity; requestId: string };
 const tokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/),
@@ -48,6 +49,7 @@ export function createApp(
     bots?: BotStore;
     payments?: MercadoPagoPayments;
     purin?: PurinCashPayments;
+    wallet?: PurinWallet;
   },
 ) {
   const app = express(),
@@ -182,6 +184,21 @@ export function createApp(
         )
       : undefined);
   const gateway = payments && purin ? new PaymentGateway(payments, purin) : payments;
+  const wallet =
+    services?.wallet ??
+    (services?.bots && config.BOT_TOKEN_ENCRYPTION_KEY
+      ? new PurinWallet(
+          services.bots.store,
+          config.BOT_TOKEN_ENCRYPTION_KEY,
+          config.APP_ORIGIN,
+          fetch,
+          undefined,
+          !config.FIREBASE_PROJECT_ID.startsWith('demo-') &&
+            !config.FIRESTORE_EMULATOR_HOST &&
+            !config.FIREBASE_AUTH_EMULATOR_HOST,
+        )
+      : undefined);
+  if (services?.bots) services.bots.wallet = wallet;
   if (services?.bots) app.use('/internal/bot', botRuntimeRouter(services.bots, accounts, gateway));
   app.use('/api', rate('api', 300, 60000));
   app.use('/api', (req, _res, next) => {
@@ -431,6 +448,7 @@ export function createApp(
         identity,
         payments,
         purin,
+        wallet,
       ),
     );
   app.get('/api/onboarding', identity, async (req, res) => {
@@ -508,6 +526,12 @@ export function createApp(
   app.use('/api/admin', identity, admin);
   app.get('/api/admin/payments/purin', async (_req, res) => {
     if (!purin) throw new HttpError(503, 'PAYMENTS_UNAVAILABLE', 'Pagamentos indisponíveis.');
+    res.json(await purin.platformStatus());
+  });
+  app.post('/api/admin/payments/purin/withdrawals', async (req, res) => {
+    if (!purin) throw new HttpError(503, 'WALLET_UNAVAILABLE', 'Carteira indisponível.');
+    const { enabled } = z.object({ enabled: z.boolean() }).strict().parse(req.body);
+    await purin.setWithdrawals((req as unknown as AuthedRequest).identity.uid, enabled);
     res.json(await purin.platformStatus());
   });
   app.post(

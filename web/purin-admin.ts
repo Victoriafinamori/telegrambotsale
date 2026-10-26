@@ -7,17 +7,25 @@ const esc = (value: unknown) =>
 export async function mountPurinAdmin(host: HTMLElement, api: Api, merchantId?: string) {
   const base = merchantId ? '/admin/accounts/' + merchantId + '/purin' : '/admin/payments/purin';
   const render = async () => {
-    const status = await api<{ connected: boolean; subaccountId?: string; requested?: boolean }>(
-      base,
-    );
+    const status = await api<{
+      connected: boolean;
+      subaccountId?: string;
+      requested?: boolean;
+      withdrawalsEnabled?: boolean;
+    }>(base);
     if (!host.isConnected) return;
     host.innerHTML = merchantId
       ? `<h3>Pix automático Blackout</h3><p>${status.connected ? 'Subconta vinculada: ' + esc(status.subaccountId) : status.requested ? 'Este lojista solicitou a ativação.' : 'Sem subconta vinculada.'}</p><p>Crie a subconta na PurinCash e use este identificador externo:</p><input aria-label="Identificador externo do lojista" readonly value="${esc(merchantId)}"><form><label>ID da subconta<input name="subaccountId" required pattern="sacc_[A-Za-z0-9_-]+" maxlength="125" placeholder="sacc_…" value="${esc(status.subaccountId)}"></label><button type="submit">Verificar e vincular subconta</button></form>`
-      : `<h2>Pix automático Blackout · PurinCash</h2><p>${status.connected ? 'Conta principal conectada. Preencha somente para atualizar a conexão.' : 'Conecte a conta principal para ativar os lojistas.'}</p><p>Comissão Blackout: R$ 0,00 por venda nesta integração. As tarifas da PurinCash continuam valendo. O dinheiro permanece na carteira principal, atribuído às subcontas. Os repasses são gerenciados por você na PurinCash.</p><details ${status.connected ? '' : 'open'}><summary>${status.connected ? 'Atualizar credenciais' : 'Configurar conexão'}</summary><p>Na PurinCash, crie uma chave de produção com Criar cobranças, Consultar cobranças e Gerenciar subcontas. Cole também o Webhook Secret da conta. Não habilite saques.</p><form><label>API Key de produção<input name="accessToken" type="password" autocomplete="off" required pattern="ps_live_[A-Za-z0-9_-]+" maxlength="520" placeholder="ps_live_…"></label><label>Webhook Secret da conta<input name="webhookSecret" type="password" autocomplete="off" required minlength="16" maxlength="512"></label><button type="submit">Validar e conectar PurinCash</button></form></details>`;
+      : `<h2>Pix automático Blackout · PurinCash</h2><p>${status.connected ? 'Conta principal conectada. Preencha somente para atualizar a conexão.' : 'Conecte a conta principal para ativar os lojistas.'}</p><p>Comissão Blackout: R$ 0,00 por venda nesta integração. As tarifas da PurinCash continuam valendo. O dinheiro permanece na carteira principal, atribuído às subcontas. Os lojistas consultam o saldo e solicitam saques na carteira Blackout após a habilitação.</p><details ${status.connected ? '' : 'open'}><summary>${status.connected ? 'Atualizar credenciais' : 'Configurar conexão'}</summary><p>Na PurinCash, crie uma chave de produção com Criar cobranças, Consultar cobranças e Gerenciar subcontas. Cole também o Webhook Secret da conta. A permissão Sacar de subconta é habilitada separadamente. Saques da conta principal não são necessários.</p><form><label>API Key de produção<input name="accessToken" type="password" autocomplete="off" required pattern="ps_live_[A-Za-z0-9_-]+" maxlength="520" placeholder="ps_live_…"></label><label>Webhook Secret da conta<input name="webhookSecret" type="password" autocomplete="off" required minlength="16" maxlength="512"></label><button type="submit">Validar e conectar PurinCash</button></form></details>`;
     host.insertAdjacentHTML(
       'beforeend',
       '<p class="feedback" role="status" data-purin-feedback hidden></p>',
     );
+    if (!merchantId && status.connected)
+      host.insertAdjacentHTML(
+        'beforeend',
+        `<h3>Saques das subcontas</h3><p>Para habilitar, a chave de produção precisa da permissão <strong>Sacar de subconta</strong> na PurinCash. A API enviará Pix apenas do saldo da subconta de cada lojista, após conferência no site e confirmação no Telegram vinculado. O primeiro saque, os valores mínimos, as tarifas e os limites dependem da PurinCash.</p><form data-withdrawals><label class="check-label"><input name="enabled" type="checkbox" ${status.withdrawalsEnabled ? 'checked' : ''}><span>Habilitar os saques dos lojistas pelo site e Telegram</span></label><button type="submit">Salvar habilitação de saques</button></form>`,
+      );
   };
   host.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -27,15 +35,21 @@ export async function mountPurinAdmin(host: HTMLElement, api: Api, merchantId?: 
     button.disabled = true;
     try {
       const data = Object.fromEntries(new FormData(form));
-      await api(merchantId ? base : base + '/connect', data);
+      const withdrawals = form.hasAttribute('data-withdrawals');
+      await api(
+        withdrawals ? base + '/withdrawals' : merchantId ? base : base + '/connect',
+        withdrawals ? { enabled: data.enabled === 'on' } : data,
+      );
       form.reset();
       await render();
       const feedback = host.querySelector<HTMLElement>('[data-purin-feedback]');
       if (feedback) {
         feedback.hidden = false;
-        feedback.textContent = merchantId
-          ? 'Subconta verificada e vinculada. O lojista já pode escolher Pix automático Blackout em Pagamentos.'
-          : 'Conta PurinCash conectada. Selecione um lojista para vincular sua subconta.';
+        feedback.textContent = withdrawals
+          ? 'Habilitação de saques atualizada.'
+          : merchantId
+            ? 'Subconta verificada e vinculada. O lojista já pode escolher Pix automático Blackout em Pagamentos.'
+            : 'Conta PurinCash conectada. Selecione um lojista para vincular sua subconta.';
       }
     } catch (error) {
       const feedback = host.querySelector<HTMLElement>('[data-purin-feedback]');

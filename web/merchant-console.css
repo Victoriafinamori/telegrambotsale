@@ -415,6 +415,50 @@ body:has(#merchant-console-host) > #app > header {
   gap: 12px;
   padding-bottom: 24px;
 }
+.mc-wallet-balances {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px 48px;
+  margin: 28px 0;
+}
+.mc-wallet-balances div {
+  min-width: 150px;
+}
+.mc-wallet-balances dt {
+  color: var(--muted);
+}
+.mc-wallet-balances dd {
+  margin: 8px 0 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.mc-wallet-confirm {
+  margin: 24px 0;
+}
+.mc-wallet-key {
+  overflow-wrap: anywhere;
+}
+.mc-wallet-history article {
+  padding: 20px 0;
+  border-bottom: 1px solid var(--line);
+}
+.mc-wallet-movements {
+  list-style: none;
+  padding: 0;
+}
+.mc-wallet-movements li {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+.mc-wallet-movements small {
+  display: block;
+  margin-top: 6px;
+}
 .mc-category-form label {
   flex: 1;
   min-width: 0;

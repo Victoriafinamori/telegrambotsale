@@ -1,5 +1,6 @@
 import './merchant-console.css';
 import { mountPaymentSettings } from './payment-settings.js';
+import { mountWallet } from './wallet.js';
 import type { Product, ShopStats, Announcement } from '../server/bot-types.js';
 type Data = {
   title: string;
@@ -64,6 +65,7 @@ const navigation = [
   ['products', 'Produtos'],
   ['stock', 'Estoque'],
   ['orders', 'Pedidos'],
+  ['wallet', 'Carteira'],
   ['appearance', 'Aparência'],
   ['support', 'Suporte'],
   ['payments', 'Pagamentos'],
@@ -72,6 +74,7 @@ const navigation = [
 ] as const;
 const icon = (name: string) => {
   const paths: Record<string, string> = {
+    wallet: '<path d="M3 6h16v3H3zM3 9v11h18V9M16 13h5v4h-5z"/>',
     up: '<path d="m6 10 6-6 6 6M12 4v16"/>',
     down: '<path d="m6 14 6 6 6-6M12 20V4"/>',
     trash: '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/>',
@@ -109,7 +112,7 @@ export async function mountMerchantConsole(
   privateFile: (path: string) => Promise<Blob>,
 ) {
   let data: Data,
-    section = 'overview',
+    section = location.hash.includes('?wallet=') ? 'wallet' : 'overview',
     category: string | null = null,
     selected: Product | undefined,
     orders: Order[] = [],
@@ -348,7 +351,7 @@ export async function mountMerchantConsole(
     host.innerHTML = `<div class="mc-layout"><button class="mc-backdrop" data-action="close-navigation" tabindex="-1" aria-label="Fechar menu da loja"></button><aside id="mc-sidebar" class="mc-sidebar" aria-label="Menu da loja"><div class="mc-store"><span class="mc-store-mark" aria-hidden="true">${esc(data.title.trim().slice(0, 1).toUpperCase() || 'B')}</span><div class="mc-store-info"><h1>${esc(data.title)}</h1><span>@${esc(data.botUsername)}</span></div><button class="mc-icon-button mc-mobile-close" data-action="close-navigation" aria-label="Fechar menu da loja">${icon('close')}</button></div><nav aria-label="Gestão da loja">${navigation
       .map(([id, title], index) => {
         const active = section === id || (section === 'product-edit' && id === 'products');
-        return `${index === 0 ? '<span class="mc-nav-group">Operação</span>' : index === 4 ? '<span class="mc-nav-group">Personalização</span>' : ''}<button class="mc-nav-item ${active ? 'active' : ''}" data-section="${id}" aria-label="${title}" title="${title}" ${active ? 'aria-current="page"' : ''}>${icon(id)}<span class="mc-nav-label">${title}</span></button>`;
+        return `${index === 0 ? '<span class="mc-nav-group">Operação</span>' : id === 'wallet' ? '<span class="mc-nav-group">Financeiro</span>' : id === 'appearance' ? '<span class="mc-nav-group">Personalização</span>' : ''}<button class="mc-nav-item ${active ? 'active' : ''}" data-section="${id}" aria-label="${title}" title="${title}" ${active ? 'aria-current="page"' : ''}>${icon(id)}<span class="mc-nav-label">${title}</span></button>`;
       })
       .join(
         '',
@@ -365,6 +368,12 @@ export async function mountMerchantConsole(
     }
     syncNavigation();
     mountLivePreview();
+    if (section === 'wallet') {
+      const wallet = document.createElement('div');
+      host.querySelector('.mc-main')!.append(wallet);
+      wallet.innerHTML = '<p role="status">Carregando sua carteira…</p>';
+      void mountWallet(wallet, api);
+    }
     if (section === 'payments') {
       const main = host.querySelector<HTMLElement>('.mc-main')!;
       main.querySelectorAll('.mc-panel').forEach((panel) => panel.remove());

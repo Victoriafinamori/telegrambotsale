@@ -2,6 +2,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { reuseNavigationMessage } from './bot-navigation.js';
 import { categoryEmoji } from './category-emoji.js';
 import { queueStockAlerts } from './stock-alerts.js';
+import type { PurinWallet } from './purin-wallet.js';
 import { tokenHash } from './accounts.js';
 import type { Doc, DocumentStore, DocumentTransaction } from './document-store.js';
 import { SecretVault } from './secret-vault.js';
@@ -44,6 +45,7 @@ const isOpen = (order: Order) =>
   ['awaiting_payment', 'precheckout', 'awaiting_review'].includes(order.status);
 
 export class BotStore {
+  wallet?: PurinWallet;
   checkoutOrigin?: string;
   private vault: SecretVault;
   private notices: BotAnnouncements;
@@ -288,6 +290,7 @@ export class BotStore {
     web?: { uid: string; requestId: string; reason?: string },
   ) {
     const update = telegramUpdate.parse(input);
+    const walletScreen = !web ? await this.wallet?.telegram(auth, update) : null;
     return buffered(this.store, async (tx) => {
       const { runtime, account, setup, shop } = await this.access(tx, auth),
         id = auth.accountId;
@@ -378,6 +381,7 @@ export class BotStore {
             ],
           ],
           ...(owner ? [[['⚙️ Gerenciar loja', 'admin']] as [string, string][]] : []),
+          ...(owner ? [[['Carteira', 'admin:wallet']] as [string, string][]] : []),
         ]);
       const adminMenu = () =>
         buttons([
@@ -410,6 +414,7 @@ export class BotStore {
             ['🏪 Abrir loja', 'catalog'],
           ],
           [['Categorias e emojis', 'admin:categories']],
+          [['Carteira', 'admin:wallet']],
         ]);
       const release = async (order: Order, status: 'expired' | 'cancelled' | 'rejected') => {
         for (const item of order.items) {
@@ -814,7 +819,13 @@ export class BotStore {
           }
           this.audit(tx, id, 'store.command_web', web.uid);
         }
-        if (await this.receipts.action(receiptContext, cmd)) {
+        if (walletScreen) {
+          effect('sendMessage', {
+            chat_id: chatId,
+            text: walletScreen.text,
+            reply_markup: walletScreen.markup,
+          });
+        } else if (await this.receipts.action(receiptContext, cmd)) {
           if (web?.reason && cmd.startsWith('admin:review-reject:'))
             await this.receipts.input(receiptContext, web.reason);
           saveCustomer();
@@ -1864,6 +1875,19 @@ export class BotStore {
         target = path(auth.accountId, 'effects', effectId),
         out = (await tx.get(target)) as (BotEffect & { lease_at?: Date }) | null;
       if (!out || !['pending', 'sending'].includes(out.status)) return null;
+      if (out.wallet_draft_id && out.status === 'pending') {
+        const draft = await tx.get(
+          'merchant_wallets/' + auth.accountId + '/withdrawals/' + out.wallet_draft_id,
+        );
+        if (
+          !draft ||
+          !['prepared', 'awaiting_confirmation'].includes(draft.status) ||
+          draft.expires_at <= this.now()
+        ) {
+          tx.set(target, { ...out, status: 'skipped', finished_at: this.now() });
+          return null;
+        }
+      }
       if (out.stock_watch_id) {
         const watch = await tx.get(path(auth.accountId, 'stock_watchers', out.stock_watch_id));
         if (!watch || watch.cancelled || watch.nonce !== out.stock_watch_nonce) {

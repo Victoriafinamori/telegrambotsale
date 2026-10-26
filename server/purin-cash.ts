@@ -146,7 +146,22 @@ export class PurinCashPayments {
         ? this.apiOrigin + '/payments/purincash/' + pointer.generation
         : '',
       commissionCents: 0,
+      withdrawalsEnabled: pointer?.withdrawals_enabled === true,
     };
+  }
+  async setWithdrawals(actor: string, enabled: boolean) {
+    await botTransaction(this.store, async (tx) => {
+      const settings = await tx.get(root);
+      if (!settings?.generation)
+        throw new HttpError(409, 'PURIN_NOT_CONNECTED', 'Conecte a PurinCash primeiro.');
+      tx.set(root, { ...settings, withdrawals_enabled: enabled });
+      this.audit(
+        tx,
+        'platform',
+        actor,
+        enabled ? 'platform.withdrawals_enabled' : 'platform.withdrawals_disabled',
+      );
+    });
   }
   async connect(actor: string, raw: unknown) {
     const input = z
@@ -171,7 +186,8 @@ export class PurinCashPayments {
         ),
         created_at: this.now(),
       });
-      tx.set(root, { generation, updated_at: this.now() });
+      const settings = await tx.get(root);
+      tx.set(root, { ...settings, generation, updated_at: this.now(), withdrawals_enabled: false });
       this.audit(tx, 'platform', actor, 'platform.purincash_connected');
     });
     return this.platformStatus();

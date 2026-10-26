@@ -23,6 +23,332 @@ import { pixKey, manualPixText } from '../server/pix.js';
 import { PurinCashPayments, validPurinSignature } from '../server/purin-cash.js';
 import { PaymentGateway } from '../server/payment-gateway.js';
 import { tokenHash } from '../server/accounts.js';
+import { PurinWallet } from '../server/purin-wallet.js';
+import { SecretVault } from '../server/secret-vault.js';
+import { randomUUID } from 'node:crypto';
+
+async function walletFixture() {
+  const f = await fixture(true, undefined, 'merchant', '123456789', 'manual');
+  let now = new Date('2026-10-25T12:00:00Z'),
+    balance = 5000,
+    mode = 'completed';
+  const generation = randomUUID(),
+    subaccount = 'sacc_wallet',
+    vault = new SecretVault(f.key),
+    token = 'ps_live_' + 'W'.repeat(40),
+    payments = new Map<string, any>(),
+    posts: any[] = [];
+  await botTransaction(f.store, async (tx) => {
+    const shop = (await tx.get('bot_shops/' + f.a.id))!;
+    tx.set('bot_shops/' + f.a.id, {
+      ...shop,
+      purin_connection: generation,
+      purin_subaccount: subaccount,
+    });
+    tx.set('platform_payments/purincash', { generation, withdrawals_enabled: true });
+    tx.set('platform_payments/purincash/connections/' + generation, {
+      ciphertext: vault.seal(
+        JSON.stringify({ token, secret: 'TEST_SECRET_ONLY' }),
+        'purin:' + generation,
+      ),
+    });
+  });
+  const transport: typeof fetch = async (url, init) => {
+    const address = new URL(String(url));
+    assert.equal(address.origin, 'https://api.purincash.com');
+    assert(address.pathname.startsWith('/v1/subaccounts/' + subaccount));
+    if (init?.method === 'POST') {
+      const body = JSON.parse(String(init.body));
+      posts.push(body);
+      if (mode === 'reject')
+        return Response.json({ error: 'permission required' }, { status: 403 });
+      if (!payments.has(body.idempotencyKey)) {
+        balance -= body.amountCents;
+        payments.set(body.idempotencyKey, {
+          subaccountId: subaccount,
+          amountCents: body.amountCents,
+          status: mode === 'timeout' ? 'processing' : 'completed',
+          reversed: false,
+          feeCents: 0,
+          platformFeeCents: 100,
+          netAmountCents: body.amountCents - 100,
+          code: 'TURBO-TEST',
+        });
+      }
+      if (mode === 'timeout') throw Error('Simulated network timeout after bank submission');
+      return Response.json({ success: true });
+    }
+    if (address.pathname.includes('/payouts/')) {
+      const key = address.pathname.split('/').at(-1)!.slice(9),
+        payment = payments.get(key);
+      return payment
+        ? Response.json(payment)
+        : Response.json({ error: 'not found' }, { status: 404 });
+    }
+    if (address.pathname.endsWith('/transactions'))
+      return Response.json({
+        transactions: [
+          {
+            id: 'sale-test',
+            type: 'sale',
+            amountCents: 5000,
+            description: 'Venda teste',
+            createdAt: now.toISOString(),
+          },
+        ],
+      });
+    return Response.json({
+      subaccountId: subaccount,
+      active: true,
+      balanceCents: balance,
+      medBlockedCents: 1000,
+      availableCents: Math.max(0, balance - 1000),
+      totalReceivedCents: 5000,
+      payoutFeePercent: 0,
+      payoutFeeFixedCents: 0,
+    });
+  };
+  const wallet = new PurinWallet(
+    f.store,
+    f.key,
+    'https://store.example.test',
+    transport,
+    () => now,
+  );
+  f.bots.wallet = wallet;
+  const actor = { telegram: '111111111', auth: f.auth };
+  const prepare = (amountCents = 1000) =>
+    wallet.prepare(
+      f.a.id,
+      { uid: 'merchant' },
+      { requestId: randomUUID(), amountCents, pixType: 'email', pixKey: 'merchant@example.test' },
+    );
+  return {
+    f,
+    wallet,
+    actor,
+    prepare,
+    posts,
+    payments,
+    token,
+    setMode(value: string) {
+      mode = value;
+    },
+    advance(ms: number) {
+      now = new Date(now.getTime() + ms);
+      f.advance(ms);
+    },
+  };
+}
+
+test('Wallet exposes only the merchant subaccount available balance, rejects other identities and overdraws', async () => {
+  const p = await walletFixture();
+  const data = await p.wallet.read(p.f.a.id, { uid: 'merchant' });
+  assert.equal(data.availableCents, 4000);
+  assert.equal(data.blockedCents, 1000);
+  await assert.rejects(() => p.wallet.read(p.f.a.id, { uid: 'other' }), {
+    code: 'WALLET_OWNER_REQUIRED',
+  });
+  await assert.rejects(() => p.wallet.read(p.f.a.id, { telegram: '222222222', auth: p.f.auth }), {
+    code: 'WALLET_OWNER_REQUIRED',
+  });
+  await assert.rejects(() => p.prepare(4001), { code: 'WALLET_BALANCE' });
+  assert.equal(p.posts.length, 0);
+  assert(!JSON.stringify(data).includes(p.token));
+});
+
+test('Withdrawal requires matching web authorization and Telegram owner, sends once under concurrent/replayed confirmations', async () => {
+  const p = await walletFixture(),
+    draft = await p.prepare();
+  await assert.rejects(() => p.wallet.execute(p.f.a.id, p.actor, draft.id), {
+    code: 'WITHDRAWAL_WEB_CONFIRM_REQUIRED',
+  });
+  await assert.rejects(() => p.wallet.requestApproval(p.f.a.id, 'other', { draftId: draft.id }), {
+    code: 'WALLET_OWNER_REQUIRED',
+  });
+  await p.wallet.requestApproval(p.f.a.id, 'merchant', { draftId: draft.id });
+  await p.wallet.requestApproval(p.f.a.id, 'merchant', { draftId: draft.id });
+  assert.equal(
+    (await p.f.store.list(`bot_shops/${p.f.a.id}/effects`, { limit: 1000 })).filter((e) =>
+      e.id.startsWith('wallet_approval_'),
+    ).length,
+    1,
+  );
+  await Promise.all([
+    p.wallet.execute(p.f.a.id, p.actor, draft.id),
+    p.wallet.execute(p.f.a.id, p.actor, draft.id),
+  ]);
+  const result = await p.wallet.execute(p.f.a.id, p.actor, draft.id);
+  assert.equal(result.status, 'completed');
+  assert.equal(result.netAmountCents, 900);
+  assert.equal(result.feeCents, 100);
+  assert.equal(p.posts.length, 1);
+  assert(p.posts[0].idempotencyKey.startsWith('blackout_'));
+  assert.equal(p.posts[0].pixKey, 'merchant@example.test');
+  const row = await p.f.store.get(`merchant_wallets/${p.f.a.id}/withdrawals/${draft.id}`);
+  assert(!JSON.stringify(row).includes('merchant@example.test'));
+});
+
+test('Uncertain withdrawal never repeats POST or releases its lock until authoritative reconciliation', async () => {
+  const p = await walletFixture();
+  p.setMode('timeout');
+  const draft = await p.prepare();
+  await p.wallet.requestApproval(p.f.a.id, 'merchant', { draftId: draft.id });
+  assert.equal((await p.wallet.execute(p.f.a.id, p.actor, draft.id)).status, 'processing');
+  await p.wallet.execute(p.f.a.id, p.actor, draft.id);
+  assert.equal(p.posts.length, 1);
+  const second = await p.prepare(500);
+  await p.wallet.requestApproval(p.f.a.id, 'merchant', { draftId: second.id });
+  await assert.rejects(() => p.wallet.execute(p.f.a.id, p.actor, second.id), {
+    code: 'WITHDRAWAL_BUSY',
+  });
+  const payment = [...p.payments.values()][0];
+  payment.status = 'completed';
+  assert.equal((await p.wallet.sync(p.f.a.id, { uid: 'merchant' }, draft.id)).status, 'completed');
+  assert.equal((await p.f.store.get('platform_payments/purincash'))!.active_withdrawal, null);
+  assert.equal(p.posts.length, 1);
+});
+
+test('Cancelled, expired or revoked withdrawal approvals cannot transfer funds; definite provider refusal releases the lock', async () => {
+  const p = await walletFixture(),
+    cancelled = await p.prepare();
+  await p.wallet.cancel(p.f.a.id, { uid: 'merchant' }, cancelled.id);
+  assert.equal((await p.wallet.execute(p.f.a.id, p.actor, cancelled.id)).status, 'cancelled');
+  assert.equal(p.posts.length, 0);
+  const expired = await p.prepare();
+  await p.wallet.requestApproval(p.f.a.id, 'merchant', { draftId: expired.id });
+  p.advance(300001);
+  await assert.rejects(() => p.wallet.execute(p.f.a.id, p.actor, expired.id));
+  assert.equal(p.posts.length, 0);
+  const next = await p.prepare();
+  await p.wallet.requestApproval(p.f.a.id, 'merchant', { draftId: next.id });
+  p.setMode('reject');
+  assert.equal((await p.wallet.execute(p.f.a.id, p.actor, next.id)).status, 'failed');
+  assert.equal(p.posts.length, 1);
+  assert.equal((await p.f.store.get('platform_payments/purincash'))!.active_withdrawal, null);
+  const revoked = await p.prepare();
+  await p.wallet.requestApproval(p.f.a.id, 'merchant', { draftId: revoked.id });
+  await p.f.store.transaction(async (tx) => {
+    const runtime = (await tx.get('bot_runtimes/' + p.f.a.id))!;
+    tx.set('bot_runtimes/' + p.f.a.id, { ...runtime, generation: randomUUID() });
+  });
+  await assert.rejects(() => p.wallet.execute(p.f.a.id, p.actor, revoked.id), {
+    code: 'WALLET_OWNER_REQUIRED',
+  });
+  assert.equal(p.posts.length, 1);
+});
+
+test('Wallet HTTP derives merchant identity, blocks arbitrary account IDs and has no browser execution endpoint', async () => {
+  const p = await walletFixture(),
+    f = p.f,
+    cfg = {
+      ...testConfig(),
+      PLATFORM_DATABASE: 'firestore' as const,
+      API_AUTH_MODE: 'bearer' as const,
+      BOT_TOKEN_ENCRYPTION_KEY: f.key,
+    };
+  const auth = {
+    verifyIdToken: async (token: string) => ({ ...f.identity, uid: token }),
+    verifySession: async () => {
+      throw Error();
+    },
+    createSession: async () => '',
+  };
+  const server = createApp(cfg, f.p, auth, undefined, {
+    onboarding: f.p.onboarding,
+    bots: f.bots,
+    wallet: p.wallet,
+  }).listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const origin = 'http://127.0.0.1:' + (server.address() as AddressInfo).port,
+    headers = {
+      Origin: cfg.APP_ORIGIN,
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer merchant',
+    };
+  try {
+    assert.equal((await fetch(origin + '/api/store/manage/wallet')).status, 401);
+    assert.equal(
+      (
+        await fetch(origin + '/api/store/manage/wallet', {
+          headers: { ...headers, Authorization: 'Bearer other' },
+        })
+      ).status,
+      403,
+    );
+    const own = await fetch(origin + '/api/store/manage/wallet', { headers });
+    assert.equal(own.status, 200);
+    const data = await own.json();
+    assert.equal(data.availableCents, 4000);
+    assert(!JSON.stringify(data).includes(p.token));
+    assert.equal(
+      (
+        await fetch(origin + '/api/store/manage/wallet/prepare', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            accountId: 'other',
+            requestId: randomUUID(),
+            amountCents: 1000,
+            pixType: 'email',
+            pixKey: 'merchant@example.test',
+          }),
+        })
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await fetch(origin + '/api/store/manage/wallet/execute', {
+          method: 'POST',
+          headers,
+          body: '{}',
+        })
+      ).status,
+      404,
+    );
+    assert.equal(
+      (
+        await fetch(origin + '/api/admin/payments/purin/withdrawals', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ enabled: true }),
+        })
+      ).status,
+      403,
+    );
+    assert.equal(p.posts.length, 0);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
+test('Telegram wallet wizard uses owner binding, web review and explicit confirmation; buyer gets no wallet', async () => {
+  const p = await walletFixture();
+  const denied = await p.f.click(222222222, 'admin:wallet');
+  assert(denied.some((e) => String(e.payload.text).includes('exclusiva')));
+  const view = await p.f.send(111111111, '/carteira');
+  assert(view.some((e) => String(e.payload.text).includes('Disponível para saque')));
+  await p.f.click(111111111, 'wallet:new');
+  await p.f.send(111111111, '10,00');
+  await p.f.click(111111111, 'wallet:type:email');
+  const preview = await p.f.send(111111111, 'merchant@example.test');
+  const screen = preview.find((e) => String(e.payload.text).includes('Confirmar saque'))!;
+  assert(screen);
+  const buttons = (screen.payload.reply_markup as any).inline_keyboard.flat();
+  assert(buttons.some((b: any) => b.url?.includes('/#/minha-loja?wallet=')));
+  const confirm = buttons.find((b: any) =>
+      b.callback_data?.startsWith('wallet:confirm:'),
+    ).callback_data,
+    draftId = confirm.slice(15);
+  await p.f.click(111111111, confirm);
+  assert.equal(p.posts.length, 0);
+  await p.wallet.requestApproval(p.f.a.id, 'merchant', { draftId });
+  await p.f.click(111111111, confirm);
+  assert.equal(p.posts.length, 1);
+});
 
 test('Buyer navigation edits existing text/media screens instead of adding a message per click', async () => {
   const f = await fixture(),
