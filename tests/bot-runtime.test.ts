@@ -191,6 +191,8 @@ async function purinFixture(failCreate = false) {
   const f = await fixture(true, undefined, 'merchant', '123456789', 'manual');
   let now = new Date('2026-10-25T12:00:00Z'),
     posts = 0;
+  let rejectNext = false,
+    failPreflight = false;
   const charges = new Map<string, any>(),
     secret = 'WEBHOOK_SYNTHETIC_' + 'a'.repeat(32),
     token = 'ps_live_' + 'b'.repeat(40);
@@ -198,14 +200,26 @@ async function purinFixture(failCreate = false) {
     const address = new URL(String(url));
     assert.equal(address.origin, 'https://api.purincash.com');
     if (address.pathname === '/v1/subaccounts') return Response.json({ subaccounts: [] });
-    if (address.pathname.startsWith('/v1/subaccounts/'))
+    if (address.pathname.startsWith('/v1/subaccounts/')) {
+      if (failPreflight) {
+        failPreflight = false;
+        throw Error('Simulated read failure');
+      }
       return Response.json({
         subaccountId: address.pathname.split('/').at(-1),
         active: true,
         externalId: f.a.id,
       });
+    }
     if (init?.method === 'POST') {
       posts++;
+      if (rejectNext) {
+        rejectNext = false;
+        return Response.json(
+          { error: 'Antes de receber pagamentos, acesse Carteira → Verificar Chave PIX.' },
+          { status: 403 },
+        );
+      }
       const body = JSON.parse(String(init.body)),
         id = 'psc_test' + posts;
       const payment = {
@@ -286,12 +300,51 @@ async function purinFixture(failCreate = false) {
     token,
     notify,
     posts: () => posts,
+    rejectNext: () => {
+      rejectNext = true;
+    },
+    failPreflight: () => {
+      failPreflight = true;
+    },
     advance(ms: number) {
       now = new Date(now.getTime() + ms);
       f.advance(ms);
     },
   };
 }
+
+test('Purin receiver verification rejection remains actionable and permits retry only after a definite rejection', async () => {
+  const p = await purinFixture();
+  p.rejectNext();
+  await assert.rejects(() => p.service.create(p.base), {
+    code: 'PURIN_RECEIVER_UNVERIFIED',
+    providerStatus: 403,
+  });
+  const before = await p.service.details(p.base);
+  assert.equal(before.chargeState, 'rejected');
+  assert(before.paymentError.includes('Verificar Chave PIX'));
+  assert.equal(p.charges.size, 0);
+  const refresh = await p.service.refresh(p.base);
+  assert.equal(refresh.chargeState, 'rejected');
+  assert.equal(p.posts(), 1);
+  const created = await p.service.create(p.base);
+  assert(created.qrCode);
+  assert.equal(p.charges.size, 1);
+  assert.equal(p.posts(), 2);
+  await p.service.create(p.base);
+  assert.equal(p.posts(), 2);
+});
+
+test('Purin preflight failure does not consume the creation attempt, and concurrent clicks send one POST', async () => {
+  const p = await purinFixture();
+  p.failPreflight();
+  await assert.rejects(() => p.service.create(p.base), { code: 'PURIN_UNAVAILABLE' });
+  assert.equal((await p.service.details(p.base)).chargeState, 'not_created');
+  assert.equal(p.posts(), 0);
+  await Promise.all([p.service.create(p.base), p.service.create(p.base)]);
+  assert.equal(p.posts(), 1);
+  assert.equal(p.charges.size, 1);
+});
 
 test('Purin checkout binds server amount and subaccount, queues delivery once, and protects secrets and capabilities', async () => {
   const p = await purinFixture(),

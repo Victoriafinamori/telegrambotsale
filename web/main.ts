@@ -269,15 +269,26 @@ async function load() {
   const route = location.hash.split('?')[0];
   if (route.startsWith('#/pagar/')) {
     await mountPixCheckout(app, route, async (path, body) => {
-      const response = await fetch(serviceUrl('/api/payments/checkout/' + path), {
-        method: 'POST',
-        cache: 'no-store',
-        credentials: 'omit',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(20000),
+      let response: Response;
+      try {
+        response = await fetch(serviceUrl('/api/payments/checkout/' + path), {
+          method: 'POST',
+          cache: 'no-store',
+          credentials: 'omit',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(40000),
+        });
+      } catch {
+        throw new Error(
+          'A conexão com o pagamento foi interrompida. Use Verificar confirmação para conferir este mesmo pedido.',
+        );
+      }
+      const value = await response.json().catch(() => {
+        throw new Error(
+          'O serviço de pagamento não respondeu corretamente. Use Verificar confirmação antes de tentar novamente.',
+        );
       });
-      const value = await response.json();
       if (!response.ok)
         throw new Error(
           value.message ?? value.error?.message ?? 'Pagamento indisponível. Tente novamente.',

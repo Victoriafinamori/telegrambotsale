@@ -24,6 +24,20 @@ const uncertain = () =>
     'PURIN_RECONCILIATION',
     'A cobrança está em conferência. Não gere outro pedido nem pague duas vezes. Use Verificar confirmação ou fale com o suporte da loja.',
   );
+const verificationMessage =
+  'A loja precisa concluir “Verificar Chave PIX” na Carteira da PurinCash antes de receber pagamentos. Avise o responsável pela loja.';
+export class PurinProviderError extends HttpError {
+  constructor(
+    readonly providerStatus: number,
+    code: string,
+    message: string,
+  ) {
+    super(providerStatus < 500 ? 409 : 502, code, message);
+  }
+  get definitiveRejection() {
+    return [400, 401, 403, 404, 422].includes(this.providerStatus);
+  }
+}
 
 export function validPurinSignature(raw: Buffer, signature: string, secret: string) {
   return (
@@ -80,15 +94,24 @@ export class PurinCashPayments {
         'PurinCash indisponível. A cobrança será conferida antes de qualquer nova tentativa.',
       );
     }
-    if (!response.ok)
-      throw new HttpError(
-        502,
+    const text = await response.text();
+    if (!response.ok) {
+      let message = '';
+      try {
+        if (text.length <= 16000) message = String(JSON.parse(text).error ?? '');
+      } catch {
+        /* Never expose untrusted response bodies. */
+      }
+      if (response.status === 403 && message.includes('Verificar Chave PIX'))
+        throw new PurinProviderError(403, 'PURIN_RECEIVER_UNVERIFIED', verificationMessage);
+      throw new PurinProviderError(
+        response.status,
         'PURIN_REJECTED',
         [401, 403].includes(response.status)
           ? 'Confira a chave e as permissões PurinCash na administração da Blackout.'
           : 'A PurinCash não concluiu a solicitação. Confira a subconta e a habilitação da conta.',
       );
-    const text = await response.text();
+    }
     if (text.length > 2000000)
       throw new HttpError(502, 'PURIN_RESPONSE_INVALID', 'Resposta de pagamento inválida.');
     try {
@@ -119,7 +142,9 @@ export class PurinCashPayments {
     const pointer = await this.store.get(root);
     return {
       connected: Boolean(pointer?.generation),
-      webhookUrl: pointer?.generation ? this.apiOrigin + '/payments/purincash/' + pointer.generation : '',
+      webhookUrl: pointer?.generation
+        ? this.apiOrigin + '/payments/purincash/' + pointer.generation
+        : '',
       commissionCents: 0,
     };
   }
@@ -251,6 +276,13 @@ export class PurinCashPayments {
         status: order.status,
         expiresAt: order.expires_at.toISOString(),
         open,
+        chargeState:
+          attempt?.state === 'creating' &&
+          this.now().getTime() - attempt.started_at.getTime() >= 60000
+            ? 'uncertain'
+            : (attempt?.state ?? (attempt ? 'uncertain' : 'not_created')),
+        paymentError:
+          attempt?.last_failure === 'PURIN_RECEIVER_UNVERIFIED' ? verificationMessage : '',
         qrCode: qr.code ?? '',
         qrBase64: qr.image ?? '',
       };
@@ -285,18 +317,17 @@ export class PurinCashPayments {
           'O mínimo para Pix automático Blackout é R$ 0,80.',
         );
       if (!order.purin_connection || !order.purin_subaccount) throw missing();
-      if (!attempt)
-        tx.set(attemptPath(base.accountId, base.orderId), {
-          generation: order.purin_connection,
-          subaccount: order.purin_subaccount,
-          started_at: this.now(),
-        });
-      return { order, first: !attempt, attempt };
+      return { order, first: !attempt || attempt.state === 'rejected', attempt };
     });
     const order = prepared.order,
       credentials = await this.credentials(order.purin_connection!);
     if (!prepared.first) {
       if (order.purin_payment_id) await this.checkFromBot(base.accountId, order.buyer_id, order.id);
+      else if (
+        prepared.attempt?.state === 'creating' &&
+        this.now().getTime() - prepared.attempt.started_at.getTime() < 60000
+      )
+        return this.details(base);
       else await this.reconcile(base.accountId, order, credentials.token);
       return this.details(base);
     }
@@ -310,24 +341,60 @@ export class PurinCashPayments {
         'PURIN_SUBACCOUNT_INACTIVE',
         'Subconta indisponível. Fale com o suporte da loja.',
       );
-    // No charge idempotency is documented by PurinCash. The durable attempt above permits ONE POST only.
-    const payment = await this.provider(credentials.token, '/charges', {
-      valueCents: order.total,
-      description: 'Pedido Blackout ' + order.id,
-      expiresIn: Math.max(
-        60,
-        Math.floor((order.expires_at.getTime() - this.now().getTime()) / 1000) - 30,
-      ),
-      callbackUrl: `${this.apiOrigin}/payments/purincash/${order.purin_connection}`,
-      customer: { externalId: `blackout:${base.accountId}:${order.id}` },
-      metadata: JSON.stringify({
-        accountId: base.accountId,
-        orderId: order.id,
-        subaccountId: order.purin_subaccount,
-      }),
-      subaccountId: order.purin_subaccount,
-      subaccountFeeCents: 0,
+    // Preflight cannot create a charge. Claim the single POST only AFTER it succeeds.
+    const claim = randomUUID();
+    const acquired = await botTransaction(this.store, async (tx) => {
+      const [current, attempt] = await Promise.all([
+        tx.get(botPath(base.accountId, 'orders', order.id)),
+        tx.get(attemptPath(base.accountId, order.id)),
+      ]);
+      if (!current || current.status !== 'awaiting_payment' || current.expires_at <= this.now())
+        throw new HttpError(409, 'ORDER_CLOSED', 'Pedido encerrado. Consulte o Telegram.');
+      if (current.purin_payment_id || (attempt && attempt.state !== 'rejected')) return false;
+      tx.set(attemptPath(base.accountId, order.id), {
+        generation: order.purin_connection,
+        subaccount: order.purin_subaccount,
+        started_at: this.now(),
+        state: 'creating',
+        claim,
+      });
+      return true;
     });
+    if (!acquired) return this.details(base);
+    let payment: Doc;
+    try {
+      payment = await this.provider(credentials.token, '/charges', {
+        valueCents: order.total,
+        description: 'Pedido Blackout ' + order.id,
+        expiresIn: Math.max(
+          60,
+          Math.floor((order.expires_at.getTime() - this.now().getTime()) / 1000) - 30,
+        ),
+        callbackUrl: `${this.apiOrigin}/payments/purincash/${order.purin_connection}`,
+        customer: { externalId: `blackout:${base.accountId}:${order.id}` },
+        metadata: JSON.stringify({
+          accountId: base.accountId,
+          orderId: order.id,
+          subaccountId: order.purin_subaccount,
+        }),
+        subaccountId: order.purin_subaccount,
+        subaccountFeeCents: 0,
+      });
+    } catch (error) {
+      await botTransaction(this.store, async (tx) => {
+        const attempt = await tx.get(attemptPath(base.accountId, order.id));
+        if (!attempt || attempt.claim !== claim || attempt.payment_id) return;
+        const definitive = error instanceof PurinProviderError && error.definitiveRejection;
+        tx.set(attemptPath(base.accountId, order.id), {
+          ...attempt,
+          state: definitive ? 'rejected' : 'uncertain',
+          last_failure: error instanceof HttpError ? error.code : 'PURIN_UNAVAILABLE',
+          ...(error instanceof PurinProviderError ? { provider_status: error.providerStatus } : {}),
+          failed_at: this.now(),
+        });
+      });
+      throw error;
+    }
     chargeId.parse(payment.paymentId);
     if (
       payment.environment !== 'live' ||
@@ -338,7 +405,10 @@ export class PurinCashPayments {
       throw new HttpError(409, 'PURIN_PAYMENT_MISMATCH', 'Cobrança não corresponde ao pedido.');
     const code = z.string().min(1).max(4000).parse(payment.pix?.brCode);
     // Render locally from BR Code. Never fetch provider-supplied image URLs (SSRF/tracking).
-    const encoded = typeof payment.pix?.qrCodeImage === 'string' ? /^data:image\/png;base64,([A-Za-z0-9+/=]{1,400000})$/.exec(payment.pix.qrCodeImage)?.[1] : '';
+    const encoded =
+      typeof payment.pix?.qrCodeImage === 'string'
+        ? /^data:image\/png;base64,([A-Za-z0-9+/=]{1,400000})$/.exec(payment.pix.qrCodeImage)?.[1]
+        : '';
     const image = encoded ?? '';
     await botTransaction(this.store, async (tx) => {
       const savedOrder = (await tx.get(botPath(base.accountId, 'orders', order.id))) as Order;
@@ -354,6 +424,7 @@ export class PurinCashPayments {
       });
       tx.set(attemptPath(base.accountId, order.id), {
         ...attempt,
+        state: 'created',
         payment_id: payment.paymentId,
         live: true,
         qr_ciphertext: this.vault.seal(
@@ -362,7 +433,6 @@ export class PurinCashPayments {
         ),
       });
     });
-    await this.checkFromBot(base.accountId, order.buyer_id, order.id);
     return this.details(base);
   }
   private async reconcile(id: string, order: Order, token: string) {
@@ -389,7 +459,17 @@ export class PurinCashPayments {
     const c = await this.credentials(order.purin_connection!);
     if (order.purin_payment_id)
       await this.confirm(id, oid, order.purin_connection!, c.token, order.purin_payment_id);
-    else if (await this.store.get(attemptPath(id, oid))) await this.reconcile(id, order, c.token);
+    else {
+      const attempt = await this.store.get(attemptPath(id, oid));
+      if (
+        !attempt ||
+        attempt.state === 'rejected' ||
+        (attempt.state === 'creating' &&
+          this.now().getTime() - attempt.started_at.getTime() < 60000)
+      )
+        return;
+      await this.reconcile(id, order, c.token);
+    }
   }
   async refresh(raw: unknown) {
     const base = checkoutInput.parse(raw),
