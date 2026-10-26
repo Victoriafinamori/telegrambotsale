@@ -21,6 +21,7 @@ import { botGuide } from './onboarding.js';
 import { adminBotCard, activationLabels } from './admin-bot.js';
 import { mountPurinAdmin } from './purin-admin.js';
 import { mountSubscriptionAdmin } from './subscription.js';
+import { mountPurchaseCheckout } from './purchase-checkout.js';
 import { mountMerchantConsole } from './merchant-console.js';
 import { mountPixCheckout } from './pix-checkout.js';
 const app = document.querySelector<HTMLDivElement>('#app')!;
@@ -193,7 +194,7 @@ function renderAuth() {
     reset = authMode === 'reset',
     verify = authMode === 'verify';
   shell(
-    `<main class="auth-shell"><section class="card auth-card"><span class="eyebrow">${inviteToken() ? 'Convite de acesso' : 'Sua loja no Telegram'}</span><h1>${verify ? 'Confirme seu e-mail' : reset ? 'Recuperar acesso' : signup ? 'Crie seu acesso' : 'Bem-vindo de volta'}</h1><p>${verify ? 'Abra o link de confirmação enviado ao seu e-mail. Depois, continue aqui.' : reset ? 'Enviaremos as instruções de recuperação se houver uma conta com esse e-mail.' : signup ? 'Use o mesmo e-mail informado na contratação.' : 'Entre para acompanhar a ativação do bot e sua assinatura.'}</p>${verify ? `<div class="inline-actions"><button id="verified">Já confirmei meu e-mail</button><button class="quiet" id="resend">Reenviar confirmação</button></div><button class="text-button" data-auth-mode="login">Voltar para entrar</button>` : `<form id="auth-form"><label for="email">E-mail</label><input id="email" name="email" type="email" required maxlength="254" autocomplete="email" value="${esc(authEmail)}">${reset ? '' : `<label for="password">Senha</label><input id="password" name="password" type="password" minlength="${signup ? 12 : 1}" maxlength="128" required autocomplete="${signup ? 'new-password' : 'current-password'}">${signup ? '<small>Use pelo menos 12 caracteres e uma senha exclusiva.</small>' : ''}`}<button type="submit">${reset ? 'Enviar instruções' : signup ? 'Criar acesso' : 'Entrar'}</button></form><div class="auth-links"><button class="text-button" data-auth-mode="${signup || reset ? 'login' : 'signup'}">${signup || reset ? 'Já tenho acesso' : 'Primeiro acesso? Criar conta'}</button>${!reset && !signup ? '<button class="text-button" data-auth-mode="reset">Esqueci minha senha</button>' : ''}</div>`}${config?.emulatorHost && !verify ? '<details class="local-accounts"><summary>Contas locais de teste</summary><p>Senha: <code>BlackoutLocal!2026</code></p><button class="quiet" data-local-account="admin@blackout.test">Administrador local</button><button class="quiet" data-local-account="lojista@blackout.test">Lojista local</button></details>' : ''}<small class="auth-note">A contratação pode ocorrer pelo WhatsApp, Telegram, Discord ou outro canal. A Blackout Create cadastra sua loja e libera o convite.</small></section></main>`,
+    `<main class="auth-shell"><section class="card auth-card"><span class="eyebrow">${inviteToken() ? 'Convite de acesso' : 'Sua loja no Telegram'}</span><h1>${verify ? 'Confirme seu e-mail' : reset ? 'Recuperar acesso' : signup ? 'Crie seu acesso' : 'Bem-vindo de volta'}</h1><p>${verify ? 'Abra o link de confirmação enviado ao seu e-mail. Depois, continue aqui.' : reset ? 'Enviaremos as instruções de recuperação se houver uma conta com esse e-mail.' : signup ? (new URLSearchParams(location.hash.split('?')[1] ?? '').get('checkout') === '1' ? 'Crie seu acesso para vincular o pagamento e a loja ao seu e-mail.' : 'Use o mesmo e-mail informado na contratação.') : 'Entre para acompanhar a ativação do bot e sua assinatura.'}</p>${verify ? `<div class="inline-actions"><button id="verified">Já confirmei meu e-mail</button><button class="quiet" id="resend">Reenviar confirmação</button></div><button class="text-button" data-auth-mode="login">Voltar para entrar</button>` : `<form id="auth-form"><label for="email">E-mail</label><input id="email" name="email" type="email" required maxlength="254" autocomplete="email" value="${esc(authEmail)}">${reset ? '' : `<label for="password">Senha</label><input id="password" name="password" type="password" minlength="${signup ? 12 : 1}" maxlength="128" required autocomplete="${signup ? 'new-password' : 'current-password'}">${signup ? '<small>Use pelo menos 12 caracteres e uma senha exclusiva.</small>' : ''}`}<button type="submit">${reset ? 'Enviar instruções' : signup ? 'Criar acesso' : 'Entrar'}</button></form><div class="auth-links"><button class="text-button" data-auth-mode="${signup || reset ? 'login' : 'signup'}">${signup || reset ? 'Já tenho acesso' : 'Primeiro acesso? Criar conta'}</button>${!reset && !signup ? '<button class="text-button" data-auth-mode="reset">Esqueci minha senha</button>' : ''}</div>`}${config?.emulatorHost && !verify ? '<details class="local-accounts"><summary>Contas locais de teste</summary><p>Senha: <code>BlackoutLocal!2026</code></p><button class="quiet" data-local-account="admin@blackout.test">Administrador local</button><button class="quiet" data-local-account="lojista@blackout.test">Lojista local</button></details>' : ''}<small class="auth-note">A contratação pode ocorrer pelo WhatsApp, Telegram, Discord ou outro canal. A Blackout Create cadastra sua loja e libera o convite.</small></section></main>`,
   );
 }
 function accountRow(a: AdminMerchantAccount) {
@@ -318,9 +319,15 @@ async function load() {
   }
   if (
     !inviteToken() &&
-    !['#/entrar', '#/conta', '#/convite', '#/minha-loja', '#/gestao', '#/configuracao'].includes(
-      route,
-    )
+    ![
+      '#/comprar',
+      '#/entrar',
+      '#/conta',
+      '#/convite',
+      '#/minha-loja',
+      '#/gestao',
+      '#/configuracao',
+    ].includes(route)
   ) {
     renderLanding();
     return;
@@ -335,9 +342,33 @@ async function load() {
     me = await api<Me>('/me');
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) me = null;
-    else throw e;
+    else if (
+      e instanceof ApiError &&
+      e.code === 'EMAIL_UNVERIFIED' &&
+      (route === '#/comprar' ||
+        new URLSearchParams(location.hash.split('?')[1] ?? '').get('checkout') === '1')
+    ) {
+      me = null;
+      authMode = 'verify';
+      renderAuth();
+      return;
+    } else throw e;
   }
   const token = inviteToken();
+  if (route === '#/comprar') {
+    shell(
+      '<main class="purchase-checkout"><p role="status">Carregando planos e pagamento…</p></main>',
+    );
+    document.title = 'Contratar meu bot · Blackout Create';
+    await mountPurchaseCheckout(
+      document.querySelector<HTMLElement>('.purchase-checkout')!,
+      api,
+      me?.user.email ?? null,
+      publicContactUrl(import.meta.env.VITE_CONTACT_URL) ??
+        'https://t.me/blackoutshopbrbot?start=duvidas',
+    );
+    return;
+  }
   if (token) {
     const info = await api<{ storeName: string; emailHint: string }>('/invitations/inspect', {
       token,
@@ -536,7 +567,16 @@ async function exchange() {
   const check = await api<Me>('/me');
   me = check;
   feedback = '';
-  if (!inviteToken()) history.replaceState(null, '', location.pathname + '#/conta');
+  if (!inviteToken())
+    history.replaceState(
+      null,
+      '',
+      location.pathname +
+        (location.hash.startsWith('#/comprar') ||
+        new URLSearchParams(location.hash.split('?')[1] ?? '').get('checkout') === '1'
+          ? '#/comprar'
+          : '#/conta'),
+    );
   await load();
 }
 document.addEventListener('submit', (event) => {

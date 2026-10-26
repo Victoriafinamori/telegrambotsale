@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { DocumentStore, Doc } from './document-store.js';
+import type { DocumentStore, DocumentTransaction, Doc } from './document-store.js';
 import { botTransaction, botPath } from './bot-data.js';
 import { SecretVault } from './secret-vault.js';
-import { HttpError } from './types.js';
+import { HttpError, type Identity } from './types.js';
+import { tokenHash } from './accounts.js';
 import { nextBillingMonth } from './billing-period.js';
 import { PurinCashPayments, PurinProviderError } from './purin-cash.js';
 
@@ -123,7 +124,161 @@ export class PlatformSubscriptions {
       expiresAt: clock(invoice.expires_at),
       paidThrough: clock(invoice.paid_through),
       qrCode,
+      purpose: invoice.purpose ?? 'renewal',
     };
+  }
+  private buyer(identity: Identity) {
+    if (!identity.emailVerified || !identity.email)
+      throw new HttpError(403, 'EMAIL_UNVERIFIED', 'Entre e confirme seu e-mail antes de pagar.');
+    return { uid: identity.uid, email: identity.email.trim().toLowerCase() };
+  }
+  async purchaseRead(identity: Identity) {
+    const buyer = this.buyer(identity),
+      link = await this.store.get('platform_uids/' + tokenHash(buyer.uid));
+    const pointer = await this.store.get('platform_subscription_signups/' + tokenHash(buyer.uid));
+    const invoice = pointer?.invoice_id
+      ? await this.store.get(invoicePath(pointer.invoice_id))
+      : null;
+    return {
+      plans: (await this.settings()).plans,
+      hasStore: Boolean(link),
+      invoice: invoice?.uid === buyer.uid ? this.safe(invoice) : null,
+    };
+  }
+  async purchaseCreate(identity: Identity, raw: unknown) {
+    const buyer = this.buyer(identity),
+      input = z
+        .object({
+          plan: planId,
+          requestId: z.uuid(),
+          expectedPriceCents: z.number().int().positive(),
+          name: z.string().trim().min(2).max(80),
+          storeName: z.string().trim().min(2).max(80),
+        })
+        .strict()
+        .parse(raw);
+    const plan = (await this.settings()).plans.find((p) => p.id === input.plan)!;
+    if (!plan.enabled || plan.priceCents !== input.expectedPriceCents)
+      throw new HttpError(
+        409,
+        'PLAN_PRICE_CHANGED',
+        'Atualize os planos para conferir o preço atual.',
+      );
+    const gateway = await this.purin.subscriptionGateway(),
+      invoiceId = randomUUID(),
+      accountId = randomUUID();
+    const signupPath = 'platform_subscription_signups/' + tokenHash(buyer.uid),
+      emailReservation = 'platform_checkout_emails/' + tokenHash(buyer.email);
+    const claim = await botTransaction(this.store, async (tx) => {
+      const [link, emailLink, reservation, pointer] = await Promise.all([
+        tx.get('platform_uids/' + tokenHash(buyer.uid)),
+        tx.get('platform_emails/' + tokenHash(buyer.email)),
+        tx.get(emailReservation),
+        tx.get(signupPath),
+      ]);
+      if (link || emailLink)
+        throw new HttpError(
+          409,
+          'EXISTING_CONTRACT',
+          'Já existe uma contratação para esta conta ou e-mail. Entre no painel para continuar ou fale com o atendimento antes de pagar.',
+        );
+      if (reservation && reservation.uid !== buyer.uid)
+        throw new HttpError(
+          409,
+          'CHECKOUT_REVIEW',
+          'Esta contratação precisa de conferência. Fale com a Blackout antes de pagar.',
+        );
+      const previous = pointer?.invoice_id ? await tx.get(invoicePath(pointer.invoice_id)) : null;
+      if (
+        previous &&
+        (['creating', 'uncertain', 'review_required', 'paid'].includes(previous.status) ||
+          (previous.status === 'awaiting_payment' && previous.expires_at > this.now()))
+      )
+        return { invoice: previous, created: false };
+      const requestPath =
+          'platform_purchase_requests/' + tokenHash(buyer.uid + ':' + input.requestId),
+        receipt = await tx.get(requestPath);
+      if (receipt)
+        return { invoice: (await tx.get(invoicePath(receipt.invoice_id)))!, created: false };
+      const invoice = {
+        id: invoiceId,
+        account_id: accountId,
+        uid: buyer.uid,
+        purpose: 'initial',
+        email: buyer.email,
+        name: input.name,
+        store_name: input.storeName,
+        plan: plan.id,
+        label: plan.label,
+        months: plan.months,
+        total: plan.priceCents,
+        generation: gateway.generation,
+        status: 'creating',
+        created_at: this.now(),
+        expires_at: new Date(this.now().getTime() + 3600000),
+        payment_id: null,
+      };
+      tx.set(invoicePath(invoiceId), invoice);
+      tx.set(signupPath, { invoice_id: invoiceId });
+      tx.set(emailReservation, { uid: buyer.uid, invoice_id: invoiceId });
+      tx.set(requestPath, { invoice_id: invoiceId });
+      return { invoice, created: true };
+    });
+    if (!claim.created) return this.safe(claim.invoice);
+    const invoice = claim.invoice;
+    let payment: Doc;
+    try {
+      payment = await gateway.create({
+        valueCents: invoice.total,
+        description: `Contratação Blackout ${invoice.label} — ${invoice.id}`,
+        expiresIn: 3600,
+        callbackUrl: this.apiOrigin + '/payments/subscriptions/' + gateway.generation,
+        customer: { externalId: 'blackout-subscription:' + invoice.id },
+        metadata: JSON.stringify({
+          kind: 'blackout_subscription',
+          invoiceId: invoice.id,
+          accountId: invoice.account_id,
+        }),
+      });
+    } catch (e) {
+      await botTransaction(this.store, async (tx) => {
+        const current = await tx.get(invoicePath(invoice.id));
+        if (current?.status === 'creating')
+          tx.set(invoicePath(invoice.id), {
+            ...current,
+            status:
+              e instanceof PurinProviderError && e.definitiveRejection ? 'failed' : 'uncertain',
+            failure: e instanceof HttpError ? e.code : 'PROVIDER_UNAVAILABLE',
+          });
+      });
+      throw e;
+    }
+    this.validate(invoice, payment);
+    const code = z.string().min(1).max(4000).parse(payment.pix?.brCode);
+    await botTransaction(this.store, async (tx) => {
+      const current = await tx.get(invoicePath(invoice.id));
+      if (!current) throw Error('Missing invoice');
+      tx.set(invoicePath(invoice.id), {
+        ...current,
+        payment_id: payment.paymentId,
+        ...(['paid', 'review_required'].includes(current.status)
+          ? {}
+          : {
+              status: 'awaiting_payment',
+              qr_ciphertext: this.vault.seal(code, 'subscription-qr:' + invoice.id),
+            }),
+      });
+    });
+    if (payment.status === 'paid') await this.settle(invoice.id, gateway.generation, payment);
+    return this.safe((await this.store.get(invoicePath(invoice.id)))!);
+  }
+  async purchaseCheck(identity: Identity, raw: unknown) {
+    const buyer = this.buyer(identity),
+      { invoiceId } = z.object({ invoiceId: z.uuid() }).strict().parse(raw),
+      invoice = await this.store.get(invoicePath(invoiceId));
+    if (!invoice || invoice.uid !== buyer.uid || invoice.purpose !== 'initial')
+      throw new HttpError(404, 'INVOICE_NOT_FOUND', 'Cobrança não encontrada.');
+    return this.checkInvoice(invoice);
   }
   async read(id: string, uid: string) {
     const { account, setup } = await this.context(id, uid),
@@ -274,6 +429,10 @@ export class PlatformSubscriptions {
     let invoice = await this.store.get(invoicePath(invoiceId));
     if (!invoice || invoice.account_id !== id || invoice.uid !== uid)
       throw new HttpError(404, 'INVOICE_NOT_FOUND', 'Cobrança não encontrada.');
+    return this.checkInvoice(invoice);
+  }
+  private async checkInvoice(invoice: Doc) {
+    const invoiceId = invoice.id;
     if (['paid', 'review_required', 'failed'].includes(invoice.status)) return this.safe(invoice);
     const gateway = await this.purin.subscriptionGateway(invoice.generation);
     let payment: Doc | undefined;
@@ -341,6 +500,10 @@ export class PlatformSubscriptions {
         throw new HttpError(404, 'INVOICE_NOT_FOUND', 'Cobrança não encontrada.');
       this.validate(invoice, payment);
       if (invoice.status === 'paid' || invoice.status === 'review_required') return;
+      if (invoice.purpose === 'initial') {
+        await this.settlePurchase(tx, invoice, payment);
+        return;
+      }
       const a = await tx.get(accountPath(invoice.account_id)),
         setup = await tx.get('merchant_bot_setup/' + invoice.account_id),
         receipt = await tx.get('platform_subscription_payments/' + payment.paymentId),
@@ -440,6 +603,94 @@ export class PlatformSubscriptions {
           ),
         });
       }
+    });
+  }
+  private async settlePurchase(tx: DocumentTransaction, invoice: Doc, payment: Doc) {
+    const uidPath = 'platform_uids/' + tokenHash(invoice.uid),
+      emailPath = 'platform_emails/' + tokenHash(invoice.email);
+    const [uidLink, emailLink, receipt, existing] = await Promise.all([
+      tx.get(uidPath),
+      tx.get(emailPath),
+      tx.get('platform_subscription_payments/' + payment.paymentId),
+      tx.get(accountPath(invoice.account_id)),
+    ]);
+    if (receipt && receipt.invoice_id !== invoice.id)
+      throw new HttpError(409, 'PAYMENT_ALREADY_USED', 'Pagamento já vinculado.');
+    if (payment.status !== 'paid') {
+      tx.set(invoicePath(invoice.id), {
+        ...invoice,
+        payment_id: payment.paymentId,
+        status:
+          payment.status === 'expired'
+            ? 'expired'
+            : ['creating', 'uncertain'].includes(invoice.status)
+              ? 'awaiting_payment'
+              : invoice.status,
+      });
+      return;
+    }
+    const paidAt = payment.paidAt ? new Date(payment.paidAt) : this.now();
+    if (
+      uidLink ||
+      emailLink ||
+      existing ||
+      receipt ||
+      !Number.isFinite(paidAt.getTime()) ||
+      paidAt > invoice.expires_at ||
+      paidAt > this.now()
+    ) {
+      tx.set(invoicePath(invoice.id), {
+        ...invoice,
+        payment_id: payment.paymentId,
+        status: 'review_required',
+      });
+      return;
+    }
+    const now = this.now(),
+      account = {
+        id: invoice.account_id,
+        name: invoice.name,
+        email: invoice.email,
+        store_name: invoice.store_name,
+        channel: 'site',
+        reference: 'Checkout Blackout ' + invoice.id,
+        price_cents: invoice.total,
+        billing_months: invoice.months,
+        firebase_uid: invoice.uid,
+        purchase_confirmed_at: now,
+        access_status: 'approved',
+        created_at: now,
+        approved_at: now,
+        suspension_reason: null,
+        billing_started_at: null,
+        paid_through: null,
+        invitation_generation: 0,
+        activation_pending: false,
+      };
+    tx.set(accountPath(invoice.account_id), account);
+    tx.set(uidPath, { account_id: invoice.account_id });
+    tx.set(emailPath, { account_id: invoice.account_id });
+    tx.set(invoicePath(invoice.id), {
+      ...invoice,
+      payment_id: payment.paymentId,
+      status: 'paid',
+      paid_at: now,
+    });
+    tx.set('platform_subscription_payments/' + payment.paymentId, {
+      invoice_id: invoice.id,
+      account_id: invoice.account_id,
+      purpose: 'initial',
+      months: invoice.months,
+      total: invoice.total,
+      created_at: now,
+    });
+    tx.set('platform_audit/' + invoice.id, {
+      id: invoice.id,
+      account_id: invoice.account_id,
+      actor_uid: 'purincash',
+      subject_uid: invoice.uid,
+      action: 'checkout.purchase_confirmed',
+      created_at: now,
     });
   }
 }

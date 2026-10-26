@@ -455,6 +455,44 @@ export function createApp(
     const o = await subscriptionOwner(req);
     res.json(await o.service.read(o.id, o.uid));
   });
+  app.get('/api/checkout/plans', rate('public-plans', 120, 60000), async (_req, res) => {
+    if (!subscriptions)
+      throw new HttpError(
+        503,
+        'SUBSCRIPTION_UNAVAILABLE',
+        'Checkout temporariamente indisponível.',
+      );
+    res.json({ plans: (await subscriptions.settings()).plans });
+  });
+  app.get('/api/checkout/purchase', identity, async (req, res) => {
+    if (!subscriptions)
+      throw new HttpError(503, 'SUBSCRIPTION_UNAVAILABLE', 'Checkout indisponível.');
+    res.json(await subscriptions.purchaseRead((req as unknown as AuthedRequest).identity));
+  });
+  app.post(
+    '/api/checkout/purchase/create',
+    identity,
+    rate('purchase-create', 5, 600000),
+    async (req, res) => {
+      if (!subscriptions)
+        throw new HttpError(503, 'SUBSCRIPTION_UNAVAILABLE', 'Checkout indisponível.');
+      const user = (req as unknown as AuthedRequest).identity;
+      await accounts.consumeRate('purchase-user:' + user.uid, 5, 600000);
+      res.json(await subscriptions.purchaseCreate(user, req.body));
+    },
+  );
+  app.post(
+    '/api/checkout/purchase/check',
+    identity,
+    rate('purchase-check', 30, 60000),
+    async (req, res) => {
+      if (!subscriptions)
+        throw new HttpError(503, 'SUBSCRIPTION_UNAVAILABLE', 'Checkout indisponível.');
+      res.json(
+        await subscriptions.purchaseCheck((req as unknown as AuthedRequest).identity, req.body),
+      );
+    },
+  );
   app.post(
     '/api/store/subscription/create',
     identity,

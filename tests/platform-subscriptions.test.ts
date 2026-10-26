@@ -218,3 +218,95 @@ test('Quarterly and annual periods clamp calendar month ends in Sao Paulo', () =
     '2025-02-28T12:00:00.000Z',
   );
 });
+
+test('Initial checkout requires verified identity, freezes prices and creates exactly one paid merchant without starting the period', async () => {
+  const f = await fixture(),
+    buyer = { uid: 'new-buyer', email: 'new@example.test', emailVerified: true, authTime: 1 };
+  const input = {
+    name: 'Novo lojista',
+    storeName: 'Nova loja',
+    plan: 'quarterly',
+    expectedPriceCents: 2450,
+    requestId: randomUUID(),
+  };
+  await assert.rejects(() => f.service.purchaseCreate({ ...buyer, emailVerified: false }, input), {
+    code: 'EMAIL_UNVERIFIED',
+  });
+  await assert.rejects(() => f.service.purchaseCreate(buyer, { ...input, expectedPriceCents: 1 }), {
+    code: 'PLAN_PRICE_CHANGED',
+  });
+  assert.equal(f.posts(), 0);
+  const [a, b] = await Promise.all([
+    f.service.purchaseCreate(buyer, input),
+    f.service.purchaseCreate(buyer, { ...input, requestId: randomUUID() }),
+  ]);
+  assert.equal(a.id, b.id);
+  assert.equal(a.total, 2450);
+  assert.equal(f.posts(), 1);
+  assert.equal((await f.service.purchaseRead(buyer)).hasStore, false);
+  assert.equal((await f.store.list('merchant_accounts', { limit: 100 })).length, 1);
+  await assert.rejects(
+    () => f.service.purchaseCheck({ ...buyer, uid: 'other' }, { invoiceId: a.id }),
+    { status: 404 },
+  );
+  const p = [...f.charges.values()][0];
+  await f.notify(p);
+  assert.equal((await f.service.purchaseRead(buyer)).hasStore, false);
+  p.status = 'paid';
+  p.paidAt = '2026-10-26T12:00:00Z';
+  await Promise.all([
+    f.notify(p),
+    f.notify(p),
+    f.service.purchaseCheck(buyer, { invoiceId: a.id }),
+  ]);
+  const { tokenHash } = await import('../server/accounts.js');
+  const link = (await f.store.get('platform_uids/' + tokenHash(buyer.uid)))!;
+  const account = (await f.store.get('merchant_accounts/' + link.account_id))!;
+  assert.equal(account.email, buyer.email);
+  assert.equal(account.firebase_uid, buyer.uid);
+  assert.equal(account.access_status, 'approved');
+  assert.equal(account.billing_months, 3);
+  assert.equal(account.price_cents, 2450);
+  assert.equal(account.billing_started_at, null);
+  assert.equal(account.paid_through, null);
+  assert(account.purchase_confirmed_at instanceof Date);
+  assert.equal(
+    (await f.store.get('platform_emails/' + tokenHash(buyer.email)))!.account_id,
+    account.id,
+  );
+  assert.equal((await f.store.list('merchant_accounts', { limit: 100 })).length, 2);
+  assert.equal((await f.service.purchaseRead(buyer)).invoice!.status, 'paid');
+  await assert.rejects(
+    () => f.service.purchaseCreate(buyer, { ...input, requestId: randomUUID() }),
+    { code: 'EXISTING_CONTRACT' },
+  );
+  assert.equal(f.posts(), 1);
+});
+
+test('Initial checkout lost creation response never repeats POST; late or conflicting paid purchase goes to review', async () => {
+  const f = await fixture(),
+    buyer = { uid: 'new-buyer', email: 'new@example.test', emailVerified: true, authTime: 1 };
+  const input = {
+    name: 'Novo lojista',
+    storeName: 'Nova loja',
+    plan: 'annual',
+    expectedPriceCents: 8490,
+    requestId: randomUUID(),
+  };
+  f.fail();
+  await assert.rejects(() => f.service.purchaseCreate(buyer, input));
+  const invoice = (await f.service.purchaseRead(buyer)).invoice!;
+  assert.equal(invoice.status, 'uncertain');
+  await f.service.purchaseCreate(buyer, { ...input, requestId: randomUUID() });
+  assert.equal(f.posts(), 1);
+  await f.service.purchaseCheck(buyer, { invoiceId: invoice.id });
+  assert.equal((await f.service.purchaseRead(buyer)).invoice!.status, 'awaiting_payment');
+  const p = [...f.charges.values()][0];
+  p.status = 'paid';
+  p.paidAt = '2026-10-26T14:00:00Z';
+  f.advance(7200000);
+  await f.notify(p);
+  assert.equal((await f.service.purchaseRead(buyer)).invoice!.status, 'review_required');
+  assert.equal((await f.service.purchaseRead(buyer)).hasStore, false);
+  assert.equal(f.posts(), 1);
+});

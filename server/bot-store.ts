@@ -887,7 +887,12 @@ export class BotStore {
               : 'Você não receberá novos avisos desta loja. Seus pedidos e atendimento continuam disponíveis.',
             menu(),
           );
-        } else if (cmd === '/paysupport' || cmd === '/suporte' || cmd === 'support') {
+        } else if (
+          cmd === '/paysupport' ||
+          cmd === '/suporte' ||
+          cmd === 'support' ||
+          (cmd === '/start' && argument === 'duvidas')
+        ) {
           const details = supportDetails(shop);
           effect('sendMessage', {
             chat_id: chatId,

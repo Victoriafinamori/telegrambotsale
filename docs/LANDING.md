@@ -1,6 +1,6 @@
 # Página pública Blackout Create
 
-A home mantém a identidade azul-noite da Blackout e apresenta o painel e o bot já implementados. O CTA de contratação/demonstração abre https://t.me/blackoutshopbrbot, conforme solicitado. VITE_CONTACT_URL pode substituir esse destino quando definido com HTTPS válido.
+A home mantém a identidade azul-noite da Blackout e apresenta o painel e o bot já implementados. O CTA Quero meu bot abre /#/comprar, com planos e Pix da contratação. O link de demonstração continua em https://t.me/blackoutshopbrbot. VITE_CONTACT_URL pode definir o atendimento HTTPS de dúvidas.
 
 ## Conteúdo e provas
 
@@ -9,7 +9,7 @@ A home mantém a identidade azul-noite da Blackout e apresenta o painel e o bot 
 - Gestão de catálogo, estoque, pedidos, aparência, suporte, cupons, avisos e carteira pelo painel.
 - Pix integrado Blackout via PurinCash, sujeito à ativação, taxas e liberações; entrega depende da confirmação e do estoque.
 - BotFather e confirmações de identidade/saque ainda exigem participação no Telegram. A página não promete dispensar essas etapas.
-- Esta mudança não cria um checkout de contratação da plataforma nem define preços ou comissões.
+- A contratação da plataforma passou a ter checkout próprio por Pix, com preços definidos pela dona. Comissões das vendas dos lojistas continuam separadas.
 
 ## Publicação e SEO
 

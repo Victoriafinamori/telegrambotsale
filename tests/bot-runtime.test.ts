@@ -353,6 +353,38 @@ test('Subscription HTTP derives the account from identity and protects plan pric
     };
   try {
     assert.equal((await fetch(origin + '/api/store/subscription')).status, 401);
+    const publicPlans = await fetch(origin + '/api/checkout/plans');
+    assert.equal(publicPlans.status, 200);
+    assert.equal((await publicPlans.json()).plans.length, 3);
+    assert.equal((await fetch(origin + '/api/checkout/purchase')).status, 401);
+    assert.equal(
+      (
+        await fetch(origin + '/api/checkout/purchase/create', {
+          method: 'POST',
+          headers: { Origin: cfg.APP_ORIGIN, 'Content-Type': 'application/json' },
+          body: '{}',
+        })
+      ).status,
+      401,
+    );
+    assert.equal((await fetch(origin + '/api/checkout/purchase', { headers })).status, 200);
+    assert.equal(
+      (
+        await fetch(origin + '/api/checkout/purchase/create', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            name: 'Test',
+            storeName: 'Test store',
+            plan: 'monthly',
+            expectedPriceCents: 999,
+            requestId: randomUUID(),
+            uid: 'someone-else',
+          }),
+        })
+      ).status,
+      400,
+    );
     assert.equal(
       (
         await fetch(origin + '/api/store/subscription', {
