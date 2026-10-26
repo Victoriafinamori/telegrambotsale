@@ -20,6 +20,7 @@ import type { BotSetup } from '../server/bot-onboarding.js';
 import { botGuide } from './onboarding.js';
 import { adminBotCard, activationLabels } from './admin-bot.js';
 import { mountMerchantConsole } from './merchant-console.js';
+import { mountPixCheckout } from './pix-checkout.js';
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const esc = (v: unknown) =>
   String(v ?? '').replace(
@@ -252,6 +253,25 @@ function merchantView() {
 }
 async function load() {
   const route = location.hash.split('?')[0];
+  if (route.startsWith('#/pagar/')) {
+    await mountPixCheckout(app, route, async (path, body) => {
+      const response = await fetch(serviceUrl('/api/payments/checkout/' + path), {
+        method: 'POST',
+        cache: 'no-store',
+        credentials: 'omit',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(20000),
+      });
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(
+          value.message ?? value.error?.message ?? 'Pagamento indisponível. Tente novamente.',
+        );
+      return value;
+    });
+    return;
+  }
   if (
     !inviteToken() &&
     !['#/entrar', '#/conta', '#/convite', '#/minha-loja', '#/gestao', '#/configuracao'].includes(

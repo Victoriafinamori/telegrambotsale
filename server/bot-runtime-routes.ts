@@ -4,8 +4,13 @@ import type { BotStore } from './bot-store.js';
 import type { RuntimeAccess } from './bot-types.js';
 import { HttpError } from './types.js';
 import type { AccountService } from './platform-contract.js';
+import type { MercadoPagoPayments } from './mercado-pago.js';
 
-export function botRuntimeRouter(bots: BotStore, accounts: AccountService) {
+export function botRuntimeRouter(
+  bots: BotStore,
+  accounts: AccountService,
+  payments?: MercadoPagoPayments,
+) {
   const router = Router(),
     accesses = new WeakMap<object, RuntimeAccess>();
   router.use((_req, res, next) => {
@@ -28,9 +33,24 @@ export function botRuntimeRouter(bots: BotStore, accounts: AccountService) {
   });
   router.use(json({ limit: '48kb', strict: true }));
   router.get('/config', async (req, res) => res.json(await bots.configuration(accesses.get(req)!)));
-  router.post('/updates', async (req, res) =>
-    res.json(await bots.process(accesses.get(req)!, req.body)),
-  );
+  router.post('/updates', async (req, res) => {
+    const access = accesses.get(req)!;
+    const result = await bots.process(access, req.body);
+    const callback = req.body?.callback_query;
+    if (payments && typeof callback?.data === 'string' && callback.data.startsWith('pix-check:')) {
+      await accounts.consumeRate(
+        'pix-check:' + access.accountId + ':' + String(callback.from?.id),
+        10,
+        60000,
+      );
+      await payments.checkFromBot(
+        access.accountId,
+        String(callback.from?.id),
+        callback.data.slice(10),
+      );
+    }
+    res.json(result);
+  });
   router.post('/heartbeat', async (req, res) => {
     const body = z
       .object({ botName: z.string().trim().min(1).max(128).optional() })

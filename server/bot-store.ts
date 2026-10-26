@@ -20,6 +20,7 @@ import {
   parsePrice,
 } from './bot-appearance.js';
 import { BotReceipts } from './bot-receipts.js';
+import { manualPixText } from './pix.js';
 import { stats, orderSummary, orderLabels, recordPaid, buyerSummary } from './bot-orders.js';
 import {
   telegramUpdate,
@@ -40,6 +41,7 @@ const isOpen = (order: Order) =>
   ['awaiting_payment', 'precheckout', 'awaiting_review'].includes(order.status);
 
 export class BotStore {
+  checkoutOrigin?: string;
   private vault: SecretVault;
   private notices: BotAnnouncements;
   private receipts: BotReceipts;
@@ -900,7 +902,7 @@ export class BotStore {
           } else if (action === 'payment') {
             customer.session = null;
             say(
-              `Modo atual: ${shop.payment_mode === 'manual' ? 'Pix/transferência com aprovação manual' : 'Telegram Stars'}.\n${shop.payment_instructions || 'Dados de pagamento ainda não configurados.'}`,
+              `Modo atual: ${shop.payment_mode === 'manual' ? (shop.pix_mode === 'mercadopago' ? 'Pix automático · Mercado Pago' : 'Pix/transferência com aprovação manual') : 'Telegram Stars'}.\n${shop.pix_mode === 'mercadopago' ? 'Gerencie a conexão Mercado Pago na aba Pagamentos do site.' : manualPixText(shop) || 'Dados de pagamento ainda não configurados.'}`,
               buttons([
                 [['Dados Pix/transferência', 'admin:payment-details']],
                 [
@@ -924,6 +926,7 @@ export class BotStore {
               );
             else {
               shop.payment_mode = mode as 'manual' | 'stars';
+              shop.pix_mode = 'manual';
               say('Modo de pagamento atualizado.');
             }
           } else if (action === 'stats') {
@@ -1419,7 +1422,17 @@ export class BotStore {
           if (!selling) say('A loja não está recebendo novos pedidos.');
           else if (!hasSupport(shop))
             say('O lojista precisa configurar o atendimento antes de receber pagamentos.');
-          else if (shop.payment_mode === 'manual' && !shop.payment_instructions)
+          else if (
+            shop.payment_mode === 'manual' &&
+            shop.pix_mode === 'mercadopago' &&
+            (!shop.mp_connection || !this.checkoutOrigin)
+          )
+            say('O lojista precisa conectar o Mercado Pago antes de receber Pix automático.');
+          else if (
+            shop.payment_mode === 'manual' &&
+            shop.pix_mode !== 'mercadopago' &&
+            !manualPixText(shop)
+          )
             say('O lojista ainda precisa configurar os dados de pagamento.');
           else if (!customer.items.length) say('Adicione um produto ao carrinho.');
           else if (shop.open_orders.length >= 25)
@@ -1448,19 +1461,31 @@ export class BotStore {
             else {
               total = Math.max(1, Math.floor((total * (100 - (coupon?.percent ?? 0))) / 100));
               const oid = randomBytes(8).toString('hex'),
-                now = this.now();
+                now = this.now(),
+                automaticPix = shop.payment_mode === 'manual' && shop.pix_mode === 'mercadopago',
+                checkoutKey = automaticPix ? randomBytes(32).toString('base64url') : '';
               const order: Order = {
                 id: oid,
                 buyer_id: userId,
                 buyer_name: [from?.first_name, from?.last_name].filter(Boolean).join(' ') || userId,
                 buyer_username: from?.username ?? '',
                 currency: shop.payment_mode === 'manual' ? 'BRL' : 'XTR',
-                payment_method: shop.payment_mode === 'manual' ? 'manual' : 'stars',
+                payment_method: automaticPix
+                  ? 'mercadopago'
+                  : shop.payment_mode === 'manual'
+                    ? 'manual'
+                    : 'stars',
+                ...(automaticPix
+                  ? {
+                      checkout_token_hash: tokenHash(checkoutKey),
+                      mp_connection: shop.mp_connection,
+                    }
+                  : {}),
                 items: reservation,
                 total,
                 coupon: customer.coupon,
                 created_at: now,
-                expires_at: new Date(now.getTime() + 1200000),
+                expires_at: new Date(now.getTime() + (automaticPix ? 60 : 20) * 60000),
                 status: 'awaiting_payment',
               };
               for (const item of reservation) {
@@ -1478,7 +1503,23 @@ export class BotStore {
               customer.items = [];
               customer.coupon = '';
               saveCustomer();
-              if (shop.payment_mode === 'manual') {
+              if (automaticPix) {
+                effect('sendMessage', {
+                  chat_id: chatId,
+                  text: `${orderSummary(order)}\n\nPix automático · Mercado Pago\nAbra o pagamento seguro para gerar o QR Code e o copia e cola. A entrega será liberada após a confirmação do Mercado Pago.`,
+                  reply_markup: {
+                    inline_keyboard: [
+                      [
+                        {
+                          text: '💠 Gerar Pix',
+                          url: `${this.checkoutOrigin}/#/pagar/${id}/${oid}/${checkoutKey}`,
+                        },
+                      ],
+                      [{ text: '🔄 Verificar pagamento', callback_data: 'pix-check:' + oid }],
+                    ],
+                  },
+                });
+              } else if (shop.payment_mode === 'manual') {
                 const single =
                   reservation.length === 1 && reservation[0].quantity === 1
                     ? shop.products.find((p) => p.id === reservation[0].product_id)
@@ -1503,7 +1544,7 @@ export class BotStore {
                   });
                 else
                   say(
-                    `${orderSummary(order)}\n\nPix/transferência\n${shop.payment_instructions}\n\nEnvie o comprovante pelo botão abaixo. A entrega depende da aprovação do lojista.`,
+                    `${orderSummary(order)}\n\nPix/transferência\n${manualPixText(shop)}\n\nEnvie o comprovante pelo botão abaixo. A entrega depende da aprovação do lojista.`,
                     markup,
                   );
               } else
@@ -1526,12 +1567,19 @@ export class BotStore {
                   order,
                 );
               say(
-                `Pedido ${oid}. Estoque reservado por 20 minutos.`,
+                `Pedido ${oid}. Estoque reservado por ${automaticPix ? 60 : 20} minutos.`,
                 buttons([[['Cancelar pedido', 'cancel:' + oid]]]),
               );
               this.audit(tx, id, 'bot_order.created', userId);
             }
           }
+        } else if (cmd.startsWith('pix-check:')) {
+          const order = (await tx.get(orderDoc(cmd.slice(10)))) as Order | null;
+          if (order?.buyer_id === userId && order.payment_method === 'mercadopago')
+            say(
+              `Pedido ${order.id}: ${orderLabels[order.status]}. A confirmação é consultada no Mercado Pago; acompanhe também em Meus pedidos.`,
+            );
+          else say('Pedido não encontrado.');
         } else if (cmd.startsWith('history:')) await listOrders(false, cmd.slice(8));
         else if (cmd === 'orders' || cmd === '/pedidos') await listOrders();
         else if (cmd.startsWith('order:')) {

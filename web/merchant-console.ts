@@ -1,4 +1,5 @@
 import './merchant-console.css';
+import { mountPaymentSettings } from './payment-settings.js';
 import type { Product, ShopStats, Announcement } from '../server/bot-types.js';
 type Data = {
   title: string;
@@ -322,7 +323,7 @@ export async function mountMerchantConsole(
         )
         .join(
           '',
-        )}</select></label>${input('price', data.payment_mode === 'manual' ? 'Preço · R$' : 'Preço · Stars', p ? (data.payment_mode === 'manual' ? p.price / 100 : p.price) : '', 'type="number" required min="0.01" max="100000" step="' + (data.payment_mode === 'manual' ? '0.01' : '1') + '"')}</div>${picture('banner', p?.banner ?? '', 'Foto do produto · opcional')}${data.payment_mode === 'manual' ? picture('pix_qr', p?.pix_qr ?? '', 'QR Code Pix deste produto · opcional') + '<p class="mc-note">Envie o QR gerado no seu banco para o preço deste produto. Usado somente para uma unidade, sem cupom. Carrinhos com vários itens ou quantidade maior recebem os dados Pix manuais. Ao mudar o preço, envie um QR atualizado; o anterior não será usado para o novo valor.</p>' : ''}<label class="mc-check"><input type="checkbox" name="enabled" ${p?.enabled !== false ? 'checked' : ''}> Disponível no catálogo</label><button type="submit">Salvar produto</button></form></section>`;
+        )}</select></label>${input('price', data.payment_mode === 'manual' ? 'Preço · R$' : 'Preço · Stars', p ? (data.payment_mode === 'manual' ? p.price / 100 : p.price) : '', 'type="number" required min="0.01" max="100000" step="' + (data.payment_mode === 'manual' ? '0.01' : '1') + '"')}</div>${picture('banner', p?.banner ?? '', 'Foto do produto · opcional')}${data.payment_mode === 'manual' ? picture('pix_qr', p?.pix_qr ?? '', 'QR Code Pix deste produto · opcional') + '<p class="mc-note">Envie o QR gerado no seu banco para o preço deste produto. Usado no Pix manual para uma unidade, sem cupom. Carrinhos com vários itens ou quantidade maior recebem os dados Pix manuais. Ao mudar o preço, envie um QR atualizado; o anterior não será usado para o novo valor.</p>' : ''}<label class="mc-check"><input type="checkbox" name="enabled" ${p?.enabled !== false ? 'checked' : ''}> Disponível no catálogo</label><button type="submit">Salvar produto</button></form></section>`;
     }
     if (section === 'stock')
       body = `<section class="mc-panel"><h2>Adicionar estoque</h2><p>Cada linha é uma unidade exclusiva. O conteúdo é cifrado e entregue após a aprovação do pagamento.</p>${data.products.length ? `<form data-form="stock"><input type="hidden" name="requestId" value="${crypto.randomUUID()}"><label>Produto<select name="productId">${data.products.map((p) => `<option value="${p.id}">${esc(p.title)} · ${p.stock} disponíveis</option>`).join('')}</select></label>${area('units', 'Uma unidade por linha', '', 20020)}<small>Até 20 unidades por envio · 100 disponíveis por produto. Os códigos existentes não são exibidos neste painel.</small><button type="submit">Adicionar unidades</button></form><p>Para adicionar arquivos digitais ao estoque, envie o arquivo em <b>/admin → Estoque</b> no bot. Fotos da vitrine podem ser enviadas pelo próprio site.</p>` : empty('Cadastre um produto primeiro', 'Depois ele aparecerá aqui para receber estoque.')}</section>`;
@@ -332,8 +333,6 @@ export async function mountMerchantConsole(
       body = `<section class="mc-panel"><h2>Entrada da loja</h2><p>O nome <b>${esc(data.title)}</b> acompanha o BotFather. Aqui você altera a mensagem e a imagem de entrada.</p><form data-form="appearance">${settingsFields()}${area('welcome', 'Mensagem de boas-vindas', data.welcome, 600)}${picture('banner', data.banner, 'Banner de entrada · opcional')}<button type="submit">Salvar aparência</button></form></section>`;
     if (section === 'support')
       body = `<section class="mc-panel"><h2>Atendimento</h2><p>Esses dados aparecem para o comprador ao abrir Suporte no bot.</p><form data-form="support">${settingsFields()}${input('support_name', 'Nome do suporte', data.support_name, 'maxlength="80"')}${input('support_phone', 'Telefone com DDD', data.support_phone, 'maxlength="32" type="tel"')}${input('support_url', 'Link de atendimento', data.support_url, 'type="url" maxlength="500" placeholder="https://wa.me/…"')}${input('support', 'Usuário Telegram · opcional', data.support, 'maxlength="33" placeholder="@seu_atendimento"')}<button type="submit">Salvar suporte</button></form></section>`;
-    if (section === 'payments')
-      body = `<section class="mc-panel"><h2>Pagamento dos pedidos</h2><span class="badge">${data.payment_mode === 'manual' ? 'Pix/transferência · aprovação manual' : 'Telegram Stars'}</span><p>${data.payment_mode === 'manual' ? 'O comprador recebe as instruções abaixo e envia o comprovante no Telegram. A entrega aguarda sua aprovação.' : 'O Telegram confirma o pagamento automaticamente. Estes dados não são usados no checkout Stars.'}</p><form data-form="payments">${settingsFields()}${area('payment_instructions', 'Chave Pix/dados e instruções ao comprador', data.payment_instructions, 1000)}<button type="submit">Salvar instruções</button></form><p class="mc-note">A imagem de um comprovante não confirma o recebimento. Confira seu extrato antes de aprovar.</p></section>`;
     if (section === 'coupons')
       body = `<section class="mc-panel"><h2>Cupons de desconto</h2>${
         Object.entries(data.coupons)
@@ -365,6 +364,14 @@ export async function mountMerchantConsole(
     }
     syncNavigation();
     mountLivePreview();
+    if (section === 'payments') {
+      const main = host.querySelector<HTMLElement>('.mc-main')!;
+      main.querySelectorAll('.mc-panel').forEach((panel) => panel.remove());
+      const settings = document.createElement('div');
+      main.append(settings);
+      settings.innerHTML = '<p role="status">Carregando opções de pagamento…</p>';
+      void mountPaymentSettings(settings, api, get);
+    }
     void loadImages();
   };
   const loadImages = async () => {

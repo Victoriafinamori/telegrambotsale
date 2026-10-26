@@ -5,6 +5,7 @@ const schema = z.object({
   HOST: z.enum(['127.0.0.1', '0.0.0.0']).default('127.0.0.1'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   APP_ORIGIN: z.url(),
+  API_PUBLIC_ORIGIN: z.url().optional(),
   FIREBASE_PROJECT_ID: z.string().min(3),
   FIREBASE_WEB_API_KEY: z.string().min(1),
   FIREBASE_AUTH_DOMAIN: z.string().min(1),
@@ -64,6 +65,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       );
   }
   const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(origin.hostname);
+  if (v.API_PUBLIC_ORIGIN) {
+    const apiOrigin = new URL(v.API_PUBLIC_ORIGIN);
+    if (
+      apiOrigin.origin !== v.API_PUBLIC_ORIGIN ||
+      apiOrigin.username ||
+      apiOrigin.password ||
+      (v.NODE_ENV === 'production' && apiOrigin.protocol !== 'https:')
+    )
+      throw Error('API_PUBLIC_ORIGIN deve ser uma origem HTTPS exata em produção.');
+  }
   if (v.NODE_ENV === 'production' && v.FIREBASE_HOSTING && !v.SESSION_COOKIE_SIGNING_KEY)
     throw new Error(
       'Firebase Hosting em produção exige SESSION_COOKIE_SIGNING_KEY no gerenciador de segredos.',

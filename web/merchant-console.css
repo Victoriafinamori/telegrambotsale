@@ -356,6 +356,59 @@ body:has(#merchant-console-host) > #app > header {
   max-height: calc(100dvh - 40px);
   overflow-y: auto;
 }
+.mc-pix-key {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+  margin: 18px 0;
+  min-width: 0;
+}
+.mc-pix-key legend {
+  font-weight: 600;
+  padding: 0 6px;
+}
+.mc-pix-instructions-preview {
+  border-top: 1px solid var(--line);
+  margin-top: 24px;
+  padding-top: 20px;
+}
+.mc-pix-instructions-preview p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+}
+.pix-checkout {
+  width: min(100% - 32px, 620px);
+  margin: 32px auto;
+}
+.pix-checkout > .brand {
+  margin-bottom: 24px;
+}
+.pix-checkout label {
+  display: grid;
+  gap: 6px;
+  margin-top: 18px;
+  font-weight: 600;
+}
+.pix-checkout textarea {
+  width: 100%;
+  resize: vertical;
+}
+.pix-total {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.pix-qr {
+  padding: 20px 0;
+}
+.pix-qr img {
+  display: block;
+  width: min(100%, 280px);
+  height: auto;
+  margin: auto;
+  background: #fff;
+}
 .mc-category-form {
   display: flex;
   align-items: end;

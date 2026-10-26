@@ -111,6 +111,13 @@ export interface Shop {
   notice_active?: string | null;
   payment_mode?: 'manual' | 'stars';
   payment_instructions?: string;
+  pix_mode?: 'manual' | 'mercadopago';
+  pix_keys?: {
+    type: 'cpf' | 'cnpj' | 'email' | 'phone' | 'random';
+    value: string;
+    holder: string;
+  }[];
+  mp_connection?: string;
   review_orders?: string[];
   stats?: ShopStats;
 }
@@ -144,7 +151,10 @@ export interface Order {
   buyer_name?: string;
   buyer_username?: string;
   currency?: 'BRL' | 'XTR';
-  payment_method?: 'manual' | 'stars';
+  payment_method?: 'manual' | 'stars' | 'mercadopago';
+  checkout_token_hash?: string;
+  mp_connection?: string;
+  mp_payment_id?: string;
   items: { product_id: string; title: string; quantity: number; units: StockUnit[] }[];
   total: number;
   coupon: string;

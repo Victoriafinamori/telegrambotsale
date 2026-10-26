@@ -12,7 +12,7 @@ Foram localizadas referências antigas da Blackout, mas não um código completo
 - **Pedidos:** consultar itens, comprador, situação, valor e comprovante, filtrar os que aguardam análise e aprovar ou recusar com motivo. A aprovação exige confirmação do recebimento e usa as mesmas regras transacionais do Telegram.
 - **Aparência:** editar mensagem de entrada e banner opcional. O nome do bot continua vindo do BotFather.
 - **Suporte:** nome, telefone, link HTTPS e usuário Telegram.
-- **Pagamentos:** salvar instruções de Pix/transferência usadas pelo checkout manual. Não há consulta bancária automática. A regra Telegram para bens digitais e o método manual escolhido pela proprietária continuam documentados em `COMPROVANTES-E-AVISOS.md`.
+- **Pagamentos:** cadastrar até três chaves Pix com tipo e recebedor, manter instruções e prévia para o comprador, ou conectar a conta Mercado Pago do próprio lojista para Pix automático. O automático gera QR/copia e cola na página web e libera a entrega após validação do provedor. Credenciais são preenchidas em campos protegidos e cifradas no servidor. Configuração, confirmação e limites estão em `MERCADO-PAGO.md`.
 - **Cupons:** criar código, percentual e limite de usos, mantendo registros anteriores.
 - **Avisos:** salvar texto/foto em rascunho, rever e confirmar o envio aos inscritos da própria loja, acompanhar o estado ou cancelar próximos envios. Salvar rascunho não envia mensagens.
 

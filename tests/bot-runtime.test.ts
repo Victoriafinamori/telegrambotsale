@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHmac } from 'node:crypto';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { MemoryDocuments } from './document-memory.js';
@@ -18,6 +18,436 @@ import {
 } from '../server/bot-runner.js';
 import { TelegramClient, TelegramError } from '../server/telegram-client.js';
 import { botTransaction } from '../server/bot-data.js';
+import { MercadoPagoPayments, validMpSignature } from '../server/mercado-pago.js';
+import { pixKey, manualPixText } from '../server/pix.js';
+
+async function pixFixture(failFirst = false) {
+  const f = await fixture(true, undefined, 'merchant', '123456789', 'manual');
+  let time = new Date('2026-10-25T12:00:00Z'),
+    fail = failFirst,
+    sent = 0;
+  const token = 'APP_USR_' + 'PRIVATE_TEST_VALUE'.repeat(3),
+    secret = 'WEBHOOK_PRIVATE_' + 'a'.repeat(32);
+  const payments = new Map<string, Record<string, any>>(),
+    posts: { key: string; body: any }[] = [];
+  const transport: typeof fetch = async (url, init) => {
+    const address = String(url);
+    if (address.startsWith('https://api.telegram.org/')) {
+      sent++;
+      return new Response(JSON.stringify({ ok: true, result: { message_id: sent } }));
+    }
+    assert(address.startsWith('https://api.mercadopago.com/'));
+    if (address.endsWith('/users/me'))
+      return new Response(
+        JSON.stringify({ id: 998877, site_id: 'MLB', nickname: 'Loja teste simulado', tags: [] }),
+      );
+    if (init?.method === 'POST') {
+      const body = JSON.parse(String(init.body)),
+        key = new Headers(init.headers).get('X-Idempotency-Key')!;
+      posts.push({ key, body });
+      let payment = [...payments.values()].find(
+        (p) => p.external_reference === body.external_reference,
+      );
+      if (!payment) {
+        payment = {
+          id: String(1000 + payments.size),
+          live_mode: true,
+          external_reference: body.external_reference,
+          collector_id: 998877,
+          currency_id: 'BRL',
+          payment_method_id: 'pix',
+          transaction_amount: body.transaction_amount,
+          status: 'pending',
+          point_of_interaction: {
+            transaction_data: { qr_code: 'PIX_SIMULADO_NAO_PAGAR', qr_code_base64: 'iVBORw0KGgo=' },
+          },
+        };
+        payments.set(String(payment.id), payment);
+      }
+      if (fail) {
+        fail = false;
+        throw Error('Simulated network loss');
+      }
+      return new Response(JSON.stringify(payment));
+    }
+    const payment = payments.get(address.split('/').at(-1)!);
+    assert(payment);
+    return new Response(JSON.stringify(payment));
+  };
+  const service = new MercadoPagoPayments(
+    f.store,
+    f.key,
+    f.bots,
+    'https://store.example.test',
+    'https://api.example.test',
+    transport,
+    () => time,
+  );
+  let settings = await service.settings(f.a.id, 'merchant');
+  await service.connect(f.a.id, 'merchant', {
+    accessToken: token,
+    webhookSecret: secret,
+    revision: settings.revision,
+  });
+  settings = await service.settings(f.a.id, 'merchant');
+  await service.saveSettings(f.a.id, 'merchant', {
+    mode: 'mercadopago',
+    keys: [],
+    instructions: '',
+    revision: settings.revision,
+  });
+  const pid = await f.product();
+  await f.click(222222222, 'add:' + pid);
+  const effects = await f.click(222222222, 'checkout');
+  const row = effects.find((e) => String(e.payload.text).includes('Pix automático'))!;
+  const url = (row.payload.reply_markup as any).inline_keyboard[0][0].url as string;
+  const [, , accountId, orderId, key] = new URL(url).hash.split('/');
+  const base = { accountId, orderId, key },
+    payer = { email: 'payer@example.test', documentType: 'CPF', document: '52998224725' };
+  const generation = (await f.store.get('bot_shops/' + f.a.id))!.mp_connection as string;
+  const signature = (
+    id: string,
+    signatureSecret = secret,
+    timestamp = String(Math.floor(time.getTime() / 1000)),
+  ) =>
+    'ts=' +
+    timestamp +
+    ',v1=' +
+    createHmac('sha256', signatureSecret)
+      .update(`id:${id};request-id:request-1;ts:${timestamp};`)
+      .digest('hex');
+  return {
+    f,
+    service,
+    token,
+    secret,
+    base,
+    payer,
+    pid,
+    payments,
+    posts,
+    generation,
+    signature,
+    sent: () => sent,
+    advance: (ms: number) => {
+      time = new Date(time.getTime() + ms);
+      f.advance(ms);
+    },
+  };
+}
+
+test('Payment HTTP protects owner settings and capability checkout, while signed webhooks work without browser origin', async () => {
+  const p = await pixFixture(),
+    f = p.f;
+  const cfg = {
+    ...testConfig(),
+    PLATFORM_DATABASE: 'firestore' as const,
+    API_AUTH_MODE: 'bearer' as const,
+    BOT_TOKEN_ENCRYPTION_KEY: f.key,
+  };
+  const auth = {
+    verifyIdToken: async (token: string) => {
+      if (token !== 'merchant') throw Error();
+      return f.identity;
+    },
+    verifySession: async () => {
+      throw Error();
+    },
+    createSession: async () => '',
+  };
+  const server = createApp(cfg, f.p, auth, undefined, {
+    onboarding: f.p.onboarding,
+    bots: f.bots,
+    payments: p.service,
+  }).listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const origin = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
+  const headers = { Origin: cfg.APP_ORIGIN, 'Content-Type': 'application/json' };
+  try {
+    assert.equal((await fetch(origin + '/api/store/manage/payments')).status, 401);
+    const options = await fetch(origin + '/api/store/manage/payments', {
+      headers: { ...headers, Authorization: 'Bearer merchant' },
+    });
+    assert.equal(options.status, 200);
+    const json = JSON.stringify(await options.json());
+    assert(!json.includes(p.token));
+    assert(!json.includes(p.secret));
+    assert.equal(
+      (
+        await fetch(origin + '/api/payments/checkout/details', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(p.base),
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await fetch(origin + '/api/payments/checkout/details', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(p.base),
+        })
+      ).status,
+      200,
+    );
+    assert.equal(
+      (
+        await fetch(origin + '/api/payments/checkout/details', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ ...p.base, key: 'a'.repeat(43) }),
+        })
+      ).status,
+      404,
+    );
+    assert.equal(
+      (
+        await fetch(origin + '/api/payments/checkout/create', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ ...p.base, payer: p.payer, total: 1 }),
+        })
+      ).status,
+      400,
+    );
+    const created = await fetch(origin + '/api/payments/checkout/create', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ...p.base, payer: p.payer }),
+    });
+    assert.equal(created.status, 200);
+    const payment = [...p.payments.values()][0];
+    payment.status = 'approved';
+    const url = `${origin}/payments/mercadopago/${f.a.id}/${p.generation}?data.id=${payment.id}`;
+    const body = JSON.stringify({ type: 'payment', data: { id: payment.id } });
+    assert.equal(
+      (await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }))
+        .status,
+      401,
+    );
+    assert.equal(
+      (
+        await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-signature': p.signature(payment.id),
+            'x-request-id': 'request-1',
+          },
+          body,
+        })
+      ).status,
+      200,
+    );
+    assert.equal((await p.service.details(p.base)).status, 'delivered');
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
+test('Pending Pix keeps its original credential generation after the merchant updates the connection', async () => {
+  const p = await pixFixture();
+  await p.service.create({ ...p.base, payer: p.payer });
+  const settings = await p.service.settings(p.f.a.id, 'merchant');
+  await p.service.connect(p.f.a.id, 'merchant', {
+    accessToken: 'APP_USR_' + 'NEW_PRIVATE_VALUE'.repeat(3),
+    webhookSecret: 'NEW_SECRET_' + 'b'.repeat(32),
+    revision: settings.revision,
+  });
+  const payment = [...p.payments.values()][0];
+  payment.status = 'approved';
+  await p.service.notify(p.f.a.id, p.generation, payment.id, p.signature(payment.id), 'request-1');
+  assert.equal((await p.service.details(p.base)).status, 'delivered');
+});
+
+test('Structured Pix keys validate CPF/CNPJ, email, phone and random key types', () => {
+  for (const key of [
+    { type: 'cpf', value: '529.982.247-25' },
+    { type: 'cnpj', value: '11.222.333/0001-81' },
+    { type: 'email', value: 'loja@example.test' },
+    { type: 'phone', value: '+55 (11) 99999-9999' },
+    { type: 'random', value: '12345678-1234-4234-8234-123456789012' },
+  ])
+    assert(pixKey.safeParse({ ...key, holder: 'Loja' }).success, key.type);
+  assert(!pixKey.safeParse({ type: 'cpf', value: '11111111111', holder: '' }).success);
+  assert(!pixKey.safeParse({ type: 'email', value: 'not-email', holder: '' }).success);
+  assert(
+    manualPixText({
+      pix_keys: [{ type: 'email', value: 'loja@example.test', holder: 'Minha loja' }],
+      payment_instructions: 'Envie comprovante',
+    } as any).includes('E-mail: loja@example.test'),
+  );
+});
+
+test('Automatic Pix uses a private capability and idempotency; provider credentials and payer data stay encrypted', async () => {
+  const p = await pixFixture(true);
+  const disabled = new MercadoPagoPayments(
+    p.f.store,
+    p.f.key,
+    p.f.bots,
+    'https://store.example.test',
+    'https://api.example.test',
+    async () => {
+      throw Error('Network must not be used');
+    },
+    undefined,
+    false,
+  );
+  await assert.rejects(
+    async () =>
+      disabled.connect(p.f.a.id, 'merchant', {
+        accessToken: p.token,
+        webhookSecret: p.secret,
+        revision: (await p.service.settings(p.f.a.id, 'merchant')).revision,
+      }),
+    { code: 'PAYMENT_DEMO_ONLY' },
+  );
+  await assert.rejects(() => p.service.create({ ...p.base, payer: p.payer }), {
+    code: 'MP_UNAVAILABLE',
+  });
+  const result = await p.service.create({
+    ...p.base,
+    payer: { ...p.payer, email: 'different@example.test' },
+  });
+  assert.equal(result.qrCode, 'PIX_SIMULADO_NAO_PAGAR');
+  assert.equal(p.payments.size, 1);
+  assert.equal(p.posts.length, 2);
+  assert.equal(p.posts[0].key, p.posts[1].key);
+  assert.deepEqual(p.posts[0].body, p.posts[1].body);
+  assert(
+    new Date(p.posts[0].body.date_of_expiration).getTime() - Date.parse('2026-10-25T12:00:00Z') >=
+      1800000,
+  );
+  const settings = JSON.stringify(await p.service.settings(p.f.a.id, 'merchant'));
+  assert(!settings.includes(p.token));
+  assert(!settings.includes(p.secret));
+  const stored = JSON.stringify(
+    await p.f.store.get(`merchant_payment_secrets/${p.base.accountId}/payments/${p.base.orderId}`),
+  );
+  assert(!stored.includes(p.payer.email));
+  assert(!stored.includes(p.payer.document));
+  await assert.rejects(() => p.service.details({ ...p.base, key: 'a'.repeat(43) }), {
+    code: 'CHECKOUT_NOT_FOUND',
+  });
+  await assert.rejects(() => p.service.settings(p.f.a.id, 'other'), { code: 'STORE_NOT_APPROVED' });
+  const connection = JSON.stringify(
+    await p.f.store.get(`merchant_payment_secrets/${p.f.a.id}/connections/${p.generation}`),
+  );
+  assert(!connection.includes(p.token));
+  assert(!connection.includes(p.secret));
+});
+
+test('Signed Mercado Pago confirmation verifies amount and collector and delivers exactly once', async () => {
+  const p = await pixFixture();
+  await p.service.create({ ...p.base, payer: p.payer });
+  const payment = [...p.payments.values()][0];
+  payment.status = 'approved';
+  await assert.rejects(
+    () =>
+      p.service.notify(
+        p.f.a.id,
+        p.generation,
+        payment.id,
+        p.signature(payment.id, 'bad-secret'),
+        'request-1',
+      ),
+    { code: 'MP_SIGNATURE_INVALID' },
+  );
+  payment.transaction_amount++;
+  await assert.rejects(
+    () =>
+      p.service.notify(p.f.a.id, p.generation, payment.id, p.signature(payment.id), 'request-1'),
+    { code: 'MP_PAYMENT_MISMATCH' },
+  );
+  payment.transaction_amount--;
+  payment.collector_id = 1;
+  await assert.rejects(
+    () =>
+      p.service.notify(p.f.a.id, p.generation, payment.id, p.signature(payment.id), 'request-1'),
+    { code: 'MP_PAYMENT_MISMATCH' },
+  );
+  payment.collector_id = 998877;
+  payment.currency_id = 'USD';
+  await assert.rejects(
+    () =>
+      p.service.notify(p.f.a.id, p.generation, payment.id, p.signature(payment.id), 'request-1'),
+    { code: 'MP_PAYMENT_MISMATCH' },
+  );
+  payment.currency_id = 'BRL';
+  payment.live_mode = false;
+  await assert.rejects(
+    () =>
+      p.service.notify(p.f.a.id, p.generation, payment.id, p.signature(payment.id), 'request-1'),
+    { code: 'MP_PAYMENT_MISMATCH' },
+  );
+  payment.live_mode = true;
+  await p.service.notify(p.f.a.id, p.generation, payment.id, p.signature(payment.id), 'request-1');
+  const order = await p.f.store.get(`bot_shops/${p.f.a.id}/orders/${p.base.orderId}`);
+  assert.equal(order!.status, 'delivered');
+  const sent = p.sent();
+  await p.service.notify(p.f.a.id, p.generation, payment.id, p.signature(payment.id), 'request-1');
+  assert.equal(p.sent(), sent);
+  assert.equal((await p.f.store.get('bot_shops/' + p.f.a.id))!.stats.paid_orders, 1);
+  assert(
+    !validMpSignature(
+      p.signature(payment.id, p.secret, '1000000000'),
+      'request-1',
+      payment.id,
+      p.secret,
+      new Date('2026-10-25T12:00:00Z'),
+    ),
+  );
+});
+
+test('Late or cancelled automatic Pix goes to review without delivery or duplicate stock; reversals do not deliver', async () => {
+  for (const state of [
+    'late',
+    'cancelled',
+    'refunded',
+    'provider-cancelled',
+    'partial-refund',
+  ] as const) {
+    const p = await pixFixture();
+    await p.service.create({ ...p.base, payer: p.payer });
+    const payment = [...p.payments.values()][0];
+    if (state === 'partial-refund') payment.transaction_amount_refunded = 0.5;
+    if (state === 'late') p.advance(61 * 60000);
+    if (state === 'cancelled') await p.f.click(222222222, 'cancel:' + p.base.orderId);
+    payment.status =
+      state === 'refunded' ? 'refunded' : state === 'provider-cancelled' ? 'cancelled' : 'approved';
+    await p.service.notify(
+      p.f.a.id,
+      p.generation,
+      payment.id,
+      p.signature(payment.id),
+      'request-1',
+    );
+    const order = await p.f.store.get(`bot_shops/${p.f.a.id}/orders/${p.base.orderId}`);
+    assert.equal(
+      order!.status,
+      state === 'refunded'
+        ? 'refunded'
+        : state === 'provider-cancelled'
+          ? 'cancelled'
+          : 'refund_required',
+    );
+    assert(!order!.delivery_effects?.length);
+    const stockKey = `bot_shops/${p.f.a.id}/products/${p.pid}`;
+    assert.equal((await p.f.store.get(stockKey))!.units.length, 2);
+    await p.service.notify(
+      p.f.a.id,
+      p.generation,
+      payment.id,
+      p.signature(payment.id),
+      'request-1',
+    );
+    assert.equal((await p.f.store.get(stockKey))!.units.length, 2);
+  }
+});
 
 test('Category rename and deletion move products atomically while preserving stock and existing orders', async () => {
   const f = await fixture(true, undefined, 'merchant', '123456789', 'manual');

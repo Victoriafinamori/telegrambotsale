@@ -6,9 +6,9 @@ Em Produtos → editar/criar, lojas no modo manual podem enviar um QR Code Pix o
 
 O checkout envia o QR junto ao resumo e aos botões de comprovante somente para um produto, uma unidade, sem cupom e com total igual ao preço associado ao QR. Vários produtos, quantidade maior, cupom, QR ausente ou preço alterado usam as instruções Pix/transferência da loja. Mudar o preço não autoriza reutilizar um QR antigo para outro total. É necessário enviar um QR atualizado. O pedido continua aguardando comprovante e aprovação manual; uma imagem QR não confirma pagamento.
 
-## Pix automático / Mercado Pago — requisito pendente
+## Pix automático / Mercado Pago
 
-Solicitado pela proprietária em 26/10/2026. Ainda não implementado nem ativado. Não apresentar o checkout manual como integração automática.
+Solicitado pela proprietária em 26/10/2026 e implementado na entrega seguinte. A aba Pagamentos agora oferece conexão individual e Pix automático. A configuração privada das credenciais e o teste de uma conta real continuam dependendo do lojista. Consulte MERCADO-PAGO.md para o fluxo implementado, validação e limites. O checkout manual permanece separado da integração automática.
 
 A integração deve conectar a conta de cada lojista separadamente, armazenar credenciais cifradas apenas no servidor e nunca retornar Access Tokens ao frontend ou ao bot. Deve criar uma cobrança por pedido para o total calculado pelo servidor, inclusive carrinhos com vários itens, quantidades e cupons, usando chave de idempotência estável. Webhooks autenticados devem provocar consulta do pagamento na API oficial; valor, moeda, loja, referência e status precisam corresponder ao pedido. Confirmações repetidas ou fora de ordem não podem duplicar entrega. Expiração, falhas, cancelamentos, pagamentos tardios e reembolsos precisam de tratamento explícito. A ativação depende dessa implementação e da conexão privada da conta de pagamento, sem envio de tokens pelo chat.
 

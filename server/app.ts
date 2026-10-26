@@ -20,6 +20,8 @@ import type { BotStore } from './bot-store.js';
 import { botRuntimeRouter } from './bot-runtime-routes.js';
 import { MerchantConsole } from './merchant-console.js';
 import { merchantConsoleRouter } from './merchant-console-routes.js';
+import { MercadoPagoPayments } from './mercado-pago.js';
+import { publicPaymentRouter, mercadoPagoWebhook } from './payment-routes.js';
 type AuthedRequest = Request & { identity: Identity; requestId: string };
 const tokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   idSchema = z.uuid();
@@ -38,7 +40,12 @@ export function createApp(
   accounts: AccountService,
   auth: IdentityProvider,
   verifyBot?: BotVerifier,
-  services?: { onboarding?: OnboardingService; adminMfa?: AdminMfa; bots?: BotStore },
+  services?: {
+    onboarding?: OnboardingService;
+    adminMfa?: AdminMfa;
+    bots?: BotStore;
+    payments?: MercadoPagoPayments;
+  },
 ) {
   const app = express(),
     sessions = new SessionTransport(config),
@@ -139,7 +146,23 @@ export function createApp(
         next(e);
       }
     };
-  if (services?.bots) app.use('/internal/bot', botRuntimeRouter(services.bots, accounts));
+  const payments =
+    services?.payments ??
+    (services?.bots && config.BOT_TOKEN_ENCRYPTION_KEY
+      ? new MercadoPagoPayments(
+          services.bots.store,
+          config.BOT_TOKEN_ENCRYPTION_KEY,
+          services.bots,
+          config.APP_ORIGIN,
+          config.API_PUBLIC_ORIGIN ?? config.APP_ORIGIN,
+          fetch,
+          undefined,
+          !config.FIREBASE_PROJECT_ID.startsWith('demo-') &&
+            !config.FIRESTORE_EMULATOR_HOST &&
+            !config.FIREBASE_AUTH_EMULATOR_HOST,
+        )
+      : undefined);
+  if (services?.bots) app.use('/internal/bot', botRuntimeRouter(services.bots, accounts, payments));
   app.use('/api', rate('api', 300, 60000));
   app.use('/api', (req, _res, next) => {
     if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
@@ -167,6 +190,14 @@ export function createApp(
       strict: true,
     })(req, res, next),
   );
+  if (payments) {
+    app.use('/payments/mercadopago', rate('mp-webhook', 1000, 60000), mercadoPagoWebhook(payments));
+    app.use(
+      '/api/payments/checkout',
+      rate('pix-checkout', 30, 60000),
+      publicPaymentRouter(payments),
+    );
+  }
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
   app.get('/api/config', (_req, res) =>
     res.json({
@@ -361,6 +392,7 @@ export function createApp(
         new MerchantConsole(services.bots.store, config.BOT_TOKEN_ENCRYPTION_KEY, services.bots),
         accounts,
         identity,
+        payments,
       ),
     );
   app.get('/api/onboarding', identity, async (req, res) => {
