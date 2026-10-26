@@ -29,6 +29,7 @@ config.hosting = {
       ],
     },
     { source: '/index.html', headers: [{ key: 'Cache-Control', value: 'no-store' }] },
+    { source: '/', headers: [{ key: 'Cache-Control', value: 'no-store' }] },
   ],
 };
 await mkdir('.local', { recursive: true });
