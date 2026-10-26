@@ -111,6 +111,22 @@ export async function mountMerchantConsole(
     pendingOnly = false,
     busy = false;
   const blobs = new Set<string>();
+  const mediaCache = new Map<string, Promise<Blob>>();
+  const listLoaded = new Set<string>();
+  let navigationRequest = 0;
+  let listLoading = false;
+  let listError = '';
+  const media = (path: string) => {
+    let request = mediaCache.get(path);
+    if (!request) {
+      request = privateFile(path).catch((error) => {
+        mediaCache.delete(path);
+        throw error;
+      });
+      mediaCache.set(path, request);
+    }
+    return request;
+  };
   let collapsed = false,
     mobileOpen = false;
   try {
@@ -214,6 +230,54 @@ export async function mountMerchantConsole(
   const empty = (title: string, text: string) =>
     `<div class="mc-empty"><h3>${title}</h3><p>${text}</p></div>`;
   const settingsFields = () => `<input type="hidden" name="revision" value="${data.revision}">`;
+  const updateLivePreview = () => {
+    const form = host.querySelector<HTMLFormElement>('form[data-live-preview]');
+    const preview = host.querySelector<HTMLElement>('.mc-live-preview');
+    if (!form || !preview) return;
+    const fields = new FormData(form);
+    const value = (name: string) => String(fields.get(name) ?? '').trim();
+    const kind = form.dataset.form;
+    const photo = kind === 'notice' ? 'photo' : 'banner';
+    const image = !fields.has(photo + 'Remove')
+      ? form.querySelector<HTMLImageElement>(`[data-preview="${photo}"] img`)
+      : null;
+    const title =
+      kind === 'product'
+        ? value('title') || 'Nome do produto'
+        : kind === 'support'
+          ? value('support_name') || 'Suporte'
+          : data.title;
+    const text =
+      kind === 'product'
+        ? value('description')
+        : kind === 'appearance'
+          ? value('welcome')
+          : kind === 'notice'
+            ? value('text')
+            : kind === 'payments'
+              ? value('payment_instructions')
+              : [value('support_phone'), value('support_url'), value('support')]
+                  .filter(Boolean)
+                  .join('\n');
+    preview.innerHTML = `<h3>Prévia no Telegram</h3><p class="mc-preview-note">Atualiza enquanto você edita. As mudanças só entram no bot depois de salvar.</p><div class="mc-telegram-preview"><div class="mc-preview-media"></div><strong>${esc(title)}</strong><p class="mc-preview-message">${esc(text || 'Seu texto aparecerá aqui.')}</p>${kind === 'product' ? `<b>${Number.isFinite(Number(value('price'))) ? esc(money(Math.round(Number(value('price')) * (data.payment_mode === 'manual' ? 100 : 1)), data.payment_mode === 'manual' ? 'BRL' : 'XTR')) : 'Preço do produto'}</b>` : ''}</div><div class="mc-preview-controls" aria-hidden="true">${(kind === 'appearance' ? ['Produtos', 'Minhas compras', 'Suporte'] : kind === 'product' ? ['Comprar', 'Voltar'] : kind === 'support' ? ['Falar com o suporte'] : kind === 'payments' ? ['Enviar comprovante'] : []).map((label) => `<span>${label}</span>`).join('')}</div><small>Representação aproximada; o Telegram adapta fontes e botões ao aparelho.</small>`;
+    if (image) preview.querySelector('.mc-preview-media')!.append(image.cloneNode());
+  };
+  const mountLivePreview = () => {
+    const form = host.querySelector<HTMLFormElement>('form[data-form]');
+    if (
+      !form ||
+      !['product', 'appearance', 'support', 'payments', 'notice'].includes(form.dataset.form!)
+    )
+      return;
+    form.dataset.livePreview = 'true';
+    const panel = form.closest<HTMLElement>('.mc-panel')!;
+    panel.classList.add('mc-editor-panel');
+    const preview = document.createElement('aside');
+    preview.className = 'mc-live-preview';
+    preview.setAttribute('aria-label', 'Prévia das alterações');
+    panel.append(preview);
+    updateLivePreview();
+  };
   const render = () => {
     revoke();
     let body = '';
@@ -254,38 +318,95 @@ export async function mountMerchantConsole(
       .join(
         '',
       )}</nav><div class="mc-sidebar-footer"><a href="https://t.me/${esc(data.botUsername)}" target="_blank" rel="noopener noreferrer" aria-label="Abrir meu bot no Telegram" title="Abrir meu bot no Telegram">${icon('external')}<span class="mc-nav-label">Abrir meu bot</span></a><a href="#/configuracao" class="mc-back" aria-label="Ativação e conexão" title="Ativação e conexão">${icon('back')}<span class="mc-nav-label">Ativação e conexão</span></a></div></aside><div class="mc-main"><div class="mc-title"><div class="mc-page-heading"><button class="mc-icon-button" data-action="toggle-navigation" aria-controls="mc-sidebar">${icon('menu')}</button><h2 tabindex="-1">${navigation.find(([id]) => id === section)?.[1] ?? 'Editar produto'}</h2></div><button class="quiet" data-action="refresh">Atualizar</button></div><p id="mc-feedback" class="feedback" role="status" hidden></p>${body}</div></div>`;
+    if (listLoading || listError) {
+      const main = host.querySelector('.mc-main')!;
+      if (listLoading && !listLoaded.has(section))
+        main.querySelectorAll('.mc-panel').forEach((el) => el.remove());
+      const status = document.createElement('p');
+      status.className = 'mc-list-status';
+      status.setAttribute('role', listError ? 'alert' : 'status');
+      status.textContent = listError || 'Carregando registros…';
+      main.querySelector('.mc-title')!.after(status);
+    }
     syncNavigation();
+    mountLivePreview();
     void loadImages();
   };
   const loadImages = async () => {
-    for (const el of host.querySelectorAll<HTMLElement>('[data-asset]')) {
-      try {
-        const blob = await privateFile(
-          '/store/manage/media/' + encodeURIComponent(el.dataset.asset!),
-        );
-        if (!el.isConnected) return;
-        const url = URL.createObjectURL(blob);
-        blobs.add(url);
-        const img = new Image();
-        img.src = url;
-        img.alt = 'Imagem do produto ou aviso';
-        el.replaceChildren(img);
-      } catch {
-        el.textContent = 'Imagem salva';
-      }
-    }
+    await Promise.all(
+      Array.from(host.querySelectorAll<HTMLElement>('[data-asset]'), async (el) => {
+        try {
+          const blob = await media('/store/manage/media/' + encodeURIComponent(el.dataset.asset!));
+          if (!el.isConnected) return;
+          const url = URL.createObjectURL(blob);
+          blobs.add(url);
+          const img = new Image();
+          img.src = url;
+          img.alt = 'Imagem do produto ou aviso';
+          el.replaceChildren(img);
+          updateLivePreview();
+        } catch {
+          el.textContent = 'Imagem salva';
+        }
+      }),
+    );
   };
   const refreshSection = async () => {
-    await get();
-    if (section === 'orders') {
-      const page = await api<{ orders: Order[]; next: string | null }>(
-        '/store/manage/orders?cursor=' + cursor + '&pending=' + pendingOnly,
-      );
-      orders = page.orders;
-      next = page.next;
+    const target = section;
+    const request = ++navigationRequest;
+    const loadList = async () => {
+      if (target === 'orders') {
+        const page = await api<{ orders: Order[]; next: string | null }>(
+          '/store/manage/orders?cursor=' + cursor + '&pending=' + pendingOnly,
+        );
+        if (request !== navigationRequest) return;
+        orders = page.orders;
+        next = page.next;
+      }
+      if (target === 'notices')
+        notices = (await api<{ notices: Announcement[] }>('/store/manage/notices')).notices;
+    };
+    await Promise.all([get(), loadList()]);
+    if (request !== navigationRequest) return;
+    listLoaded.add(target);
+    listLoading = false;
+    listError = '';
+    render();
+  };
+  const openSection = async (target: string) => {
+    if (target === 'orders' && cursor) listLoaded.delete('orders');
+    section = target;
+    selected = undefined;
+    cursor = '';
+    const request = ++navigationRequest;
+    listError = '';
+    listLoading = ['orders', 'notices'].includes(target) && !listLoaded.has(target);
+    render();
+    host.querySelector<HTMLElement>('.mc-title h2')?.focus();
+    if (!listLoading) return;
+    try {
+      if (target === 'orders') {
+        const page = await api<{ orders: Order[]; next: string | null }>(
+          '/store/manage/orders?cursor=&pending=' + pendingOnly,
+        );
+        if (request !== navigationRequest || !host.isConnected) return;
+        orders = page.orders;
+        next = page.next;
+      } else {
+        const result = await api<{ notices: Announcement[] }>('/store/manage/notices');
+        if (request !== navigationRequest || !host.isConnected) return;
+        notices = result.notices;
+      }
+      listLoaded.add(target);
+    } catch (error) {
+      if (request !== navigationRequest) return;
+      listError =
+        error instanceof Error
+          ? error.message
+          : 'Não foi possível carregar. Use Atualizar para tentar novamente.';
     }
-    if (section === 'notices')
-      notices = (await api<{ notices: Announcement[] }>('/store/manage/notices')).notices;
+    if (request !== navigationRequest) return;
+    listLoading = false;
     render();
   };
   const run = async (work: () => Promise<void>) => {
@@ -373,14 +494,9 @@ export async function mountMerchantConsole(
       return;
     }
     if (button.dataset.section) {
+      if (busy) return;
       closeNavigation(false);
-      section = button.dataset.section;
-      selected = undefined;
-      cursor = '';
-      void run(async () => {
-        await refreshSection();
-        host.querySelector<HTMLElement>('.mc-title h2')?.focus();
-      });
+      void openSection(button.dataset.section);
       return;
     }
     if (button.dataset.edit) {
@@ -465,8 +581,10 @@ export async function mountMerchantConsole(
       );
     }
   });
+  host.addEventListener('input', () => updateLivePreview());
   host.addEventListener('change', (event) => {
     const field = event.target as HTMLInputElement;
+    updateLivePreview();
     if (!field.matches('[data-image]') || !field.files?.[0]) return;
     event.stopPropagation();
     void run(async () => {
@@ -487,6 +605,7 @@ export async function mountMerchantConsole(
       const url = URL.createObjectURL(file);
       blobs.add(url);
       preview.innerHTML = `<img src="${url}" alt="Prévia da imagem escolhida">`;
+      updateLivePreview();
       alert('Imagem enviada. Salve o formulário para aplicá-la.');
     });
   });
