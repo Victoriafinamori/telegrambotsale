@@ -749,7 +749,7 @@ html.dark .landing-page {
   background: #202020;
 }
 .lp-bot-proof .lp-bot-image img {
-  width: 125%;
+  width: 100%;
   max-width: none;
   height: auto;
   border: 0;
