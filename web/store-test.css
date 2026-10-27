@@ -1,0 +1,127 @@
+.st-intro > p {
+  max-width: 72ch;
+  line-height: 1.8;
+}
+.st-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+.st-layout > *,
+.st-controls {
+  min-width: 0;
+}
+.st-session-info {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+  margin: 20px 0;
+}
+.st-intro details {
+  margin: 20px 0;
+}
+.st-intro summary {
+  min-height: 44px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.st-intro form {
+  max-width: 420px;
+}
+.st-chat {
+  display: grid;
+  gap: 16px;
+  margin-top: 24px;
+  max-height: 680px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.st-message {
+  padding: 18px;
+  background: var(--soft);
+  border-radius: 12px;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.st-message > p {
+  white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.7;
+  margin: 10px 0;
+}
+.st-message-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.st-delivery {
+  border: 1px solid var(--accent);
+}
+.st-buttons,
+.st-payment-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+.st-buttons button,
+.st-payment-actions button {
+  white-space: normal;
+  line-height: 1.5;
+  min-height: 44px;
+}
+.st-photo {
+  margin-top: 12px;
+}
+.st-photo img {
+  width: 100%;
+  max-height: 300px;
+  object-fit: contain;
+  border-radius: 8px;
+}
+.st-text-form {
+  margin-top: 24px;
+}
+.st-text-form button {
+  width: 100%;
+}
+.st-order {
+  border-top: 1px solid var(--line);
+  padding: 18px 0;
+  overflow-wrap: anywhere;
+}
+.st-order p {
+  font-size: 13px;
+  line-height: 1.7;
+}
+.st-stock {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+.st-stock > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.st-stock small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+}
+.st-feedback {
+  padding: 18px;
+  background: var(--soft);
+  border-radius: 12px;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 1050px) {
+  .st-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -1,3 +1,4 @@
+import { mountStoreTest } from './store-test.js';
 import { renderSetupProgress } from './setup-progress.js';
 import type { SetupProgress } from '../server/setup-progress.js';
 import './merchant-console.css';
@@ -70,6 +71,7 @@ const navigation = [
   ['products', 'Produtos'],
   ['stock', 'Estoque'],
   ['orders', 'Pedidos'],
+  ['test', 'Testar loja'],
   ['wallet', 'Carteira'],
   ['subscription', 'Assinatura'],
   ['appearance', 'Aparência'],
@@ -80,6 +82,7 @@ const navigation = [
 ] as const;
 const icon = (name: string) => {
   const paths: Record<string, string> = {
+    test: '<path d="M9 3h6M10 3v7l-6 9a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-6-9V3M7 16h10"/>',
     subscription:
       '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M7 3v4M17 3v4M3 11h18m-14 5 3 3 6-6"/>',
     buyers:
@@ -128,7 +131,7 @@ export async function mountMerchantConsole(
       ? 'subscription'
       : location.hash.includes('?wallet=')
         ? 'wallet'
-        : ['overview', 'products', 'stock', 'appearance', 'support', 'payments'].includes(
+        : ['overview', 'products', 'stock', 'appearance', 'support', 'payments', 'test'].includes(
               new URLSearchParams(location.hash.split('?')[1] ?? '').get('section') ?? '',
             )
           ? new URLSearchParams(location.hash.split('?')[1] ?? '').get('section')!
@@ -313,7 +316,7 @@ export async function mountMerchantConsole(
     revoke();
     let body = '';
     if (section === 'overview')
-      body = `${data.setupProgress ? renderSetupProgress(data.setupProgress, 'console') : ''}<div class="mc-metrics">${metric('Vendas aprovadas', money(data.stats.gross_brl), 'sales', 'wallet')}${metric('Compradores', data.stats.buyers, 'buyers', 'buyers')}${metric('Pedidos entregues', data.stats.delivered_orders, 'delivered', 'delivered')}${metric('Para aprovar', data.pendingReview, 'pending', 'pending')}</div><section class="mc-panel mc-overview-panel"><div class="mc-overview-intro"><div><h2>Seu próximo passo</h2><p>Configure a vitrine e o atendimento. As alterações salvas aqui são usadas pelo seu bot no Telegram.</p></div><button data-section="orders">Conferir pedidos ${icon('chevron')}</button></div><div class="mc-quicklinks"><button data-section="products">${icon('products')}<span><b>Produtos e fotos</b><small>Organize seu catálogo</small></span>${icon('chevron')}</button><button data-section="appearance">${icon('appearance')}<span><b>Mensagem de entrada</b><small>Dê a sua cara à loja</small></span>${icon('chevron')}</button><button data-section="payments">${icon('payments')}<span><b>Dados de pagamento</b><small>Configure como receber</small></span>${icon('chevron')}</button></div><dl><div><dt>Pedidos criados</dt><dd>${data.stats.orders}</dd></div><div><dt>Aguardando pagamento</dt><dd>${data.pendingPayment}</dd></div><div><dt>Recusados</dt><dd>${data.stats.rejected_orders}</dd></div><div><dt>Vendas em Stars</dt><dd>${money(data.stats.gross_stars, 'XTR')}</dd></div></dl></section>`;
+      body = `${data.setupProgress ? renderSetupProgress(data.setupProgress, 'console') : ''}<div class="mc-metrics">${metric('Vendas aprovadas', money(data.stats.gross_brl), 'sales', 'wallet')}${metric('Compradores', data.stats.buyers, 'buyers', 'buyers')}${metric('Pedidos entregues', data.stats.delivered_orders, 'delivered', 'delivered')}${metric('Para aprovar', data.pendingReview, 'pending', 'pending')}</div><section class="mc-panel mc-overview-panel"><div class="mc-overview-intro"><div><h2>Seu próximo passo</h2><p>Configure a vitrine e o atendimento. As alterações salvas aqui são usadas pelo seu bot no Telegram.</p></div><button data-section="orders">Conferir pedidos ${icon('chevron')}</button></div><div class="mc-quicklinks"><button data-section="test">${icon('test')}<span><b>Simular uma compra</b><small>Sem cobrança ou estoque real</small></span>${icon('chevron')}</button><button data-section="products">${icon('products')}<span><b>Produtos e fotos</b><small>Organize seu catálogo</small></span>${icon('chevron')}</button><button data-section="appearance">${icon('appearance')}<span><b>Mensagem de entrada</b><small>Dê a sua cara à loja</small></span>${icon('chevron')}</button><button data-section="payments">${icon('payments')}<span><b>Dados de pagamento</b><small>Configure como receber</small></span>${icon('chevron')}</button></div><dl><div><dt>Pedidos criados</dt><dd>${data.stats.orders}</dd></div><div><dt>Aguardando pagamento</dt><dd>${data.pendingPayment}</dd></div><div><dt>Recusados</dt><dd>${data.stats.rejected_orders}</dd></div><div><dt>Vendas em Stars</dt><dd>${money(data.stats.gross_stars, 'XTR')}</dd></div></dl></section>`;
     if (section === 'products') {
       const names = [
         ...new Set([...(data.categories ?? []), ...data.products.map((p) => p.category)]),
@@ -388,6 +391,11 @@ export async function mountMerchantConsole(
     }
     syncNavigation();
     mountLivePreview();
+    if (section === 'test') {
+      const testHost = document.createElement('div');
+      host.querySelector('.mc-main')!.append(testHost);
+      void mountStoreTest(testHost, api, privateFile);
+    }
     if (section === 'subscription') {
       const subscription = document.createElement('div');
       host.querySelector('.mc-main')!.append(subscription);
@@ -468,7 +476,10 @@ export async function mountMerchantConsole(
         if (request === navigationRequest && host.isConnected) render();
       } catch (error) {
         if (request === navigationRequest)
-          alert(error instanceof Error ? error.message : 'Não foi possível atualizar a configuração.', true);
+          alert(
+            error instanceof Error ? error.message : 'Não foi possível atualizar a configuração.',
+            true,
+          );
       }
     }
     if (!listLoading) return;
@@ -622,6 +633,7 @@ export async function mountMerchantConsole(
   host.addEventListener('click', (event) => {
     const button = (event.target as Element).closest<HTMLButtonElement>('button');
     if (!button || button.closest('dialog')) return;
+    if (button.id === 'connect-telegram-owner') return;
     event.stopPropagation();
     if (
       button.dataset.action === 'rename-category' ||

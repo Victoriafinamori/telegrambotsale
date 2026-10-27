@@ -27,6 +27,7 @@ import { PurinWallet } from './purin-wallet.js';
 import { PlatformSubscriptions } from './platform-subscriptions.js';
 import type { AutomaticActivation } from './automatic-activation.js';
 import { readSetupProgress } from './setup-progress.js';
+import { StoreTest } from './store-test.js';
 import { publicPaymentRouter, mercadoPagoWebhook } from './payment-routes.js';
 type AuthedRequest = Request & { identity: Identity; requestId: string };
 const tokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/),
@@ -554,6 +555,7 @@ export function createApp(
         payments,
         purin,
         wallet,
+        new StoreTest(services.bots.store, config.BOT_TOKEN_ENCRYPTION_KEY),
       ),
     );
   app.get('/api/onboarding', identity, async (req, res) => {

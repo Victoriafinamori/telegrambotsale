@@ -8,6 +8,7 @@ import type { MerchantConsole } from './merchant-console.js';
 import type { MercadoPagoPayments } from './mercado-pago.js';
 import type { PurinCashPayments } from './purin-cash.js';
 import type { PurinWallet } from './purin-wallet.js';
+import type { StoreTest } from './store-test.js';
 export function merchantConsoleRouter(
   console: MerchantConsole,
   accounts: AccountService,
@@ -15,6 +16,7 @@ export function merchantConsoleRouter(
   payments?: MercadoPagoPayments,
   purin?: PurinCashPayments,
   wallet?: PurinWallet,
+  test?: StoreTest,
 ) {
   const router = Router(),
     owners = new WeakMap<object, { id: string; uid: string }>();
@@ -32,6 +34,23 @@ export function merchantConsoleRouter(
     }
   });
   const owner = (req: object) => owners.get(req)!;
+  router.get('/test', async (req, res) => {
+    if (!test) throw new HttpError(503, 'TEST_UNAVAILABLE', 'Modo de teste indisponível.');
+    const { id, uid } = owner(req);
+    res.json(await test.read(id, uid));
+  });
+  router.post('/test/start', async (req, res) => {
+    if (!test) throw new HttpError(503, 'TEST_UNAVAILABLE', 'Modo de teste indisponível.');
+    const { id, uid } = owner(req);
+    await accounts.consumeRate('store-test-start:' + id, 10, 60000);
+    res.json(await test.start(id, uid, req.body));
+  });
+  router.post('/test/action', async (req, res) => {
+    if (!test) throw new HttpError(503, 'TEST_UNAVAILABLE', 'Modo de teste indisponível.');
+    const { id, uid } = owner(req);
+    await accounts.consumeRate('store-test-action:' + id, 60, 60000);
+    res.json(await test.action(id, uid, req.body));
+  });
   router.get('/wallet', async (req, res) => {
     if (!wallet) throw new HttpError(503, 'WALLET_UNAVAILABLE', 'Carteira indisponível.');
     const { id, uid } = owner(req);
