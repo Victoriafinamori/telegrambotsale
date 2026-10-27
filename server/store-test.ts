@@ -19,6 +19,7 @@ export type TestMessage = {
   asset?: string;
   buttons: { label: string; data: string }[];
   delivery: boolean;
+  turn?: number;
 };
 type State = {
   records: Record<string, Doc>;
@@ -334,6 +335,7 @@ export class StoreTest {
       )
       .map((button: Doc) => ({ label: String(button.text), data: button.callback_data }));
     const message: TestMessage = {
+      turn: state.sequence,
       id: effect.method.startsWith('edit') ? Number(p.message_id) : ++state.messageSequence,
       audience,
       kind,

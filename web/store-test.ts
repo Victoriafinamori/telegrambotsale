@@ -1,3 +1,4 @@
+import { currentTestResponse } from './test-response.js';
 import type { StoreTest, TestMessage } from '../server/store-test.js';
 import './store-test.css';
 type Session = Awaited<ReturnType<StoreTest['start']>>;
@@ -63,23 +64,40 @@ export async function mountStoreTest(
     const pending = session?.orders.find((order) =>
       ['awaiting_payment', 'precheckout', 'awaiting_review'].includes(order.status),
     );
+    const scrollTargets = [
+      document.scrollingElement,
+      ...Array.from(
+        host.closest('#merchant-console-host')?.querySelectorAll<HTMLElement>('.mc-main') ?? [],
+      ),
+    ].filter((el): el is HTMLElement => el instanceof HTMLElement);
+    const positions = scrollTargets.map((el) => ({ el, top: el.scrollTop, left: el.scrollLeft }));
+    const oldLayout = host.querySelector<HTMLElement>('.st-layout');
+    if (oldLayout) host.style.minHeight = host.offsetHeight + 'px';
     host.innerHTML = `<section class="mc-panel st-intro"><h2>Teste sua loja sem fazer uma venda</h2><p>Converse com uma cópia do bot, crie um pedido e simule o pagamento. Nenhuma cobrança é gerada, nenhuma mensagem é enviada pelo Telegram e o estoque real permanece intacto.</p><p class="mc-note">O teste usa a mesma lógica de catálogo, carrinho, pedidos e entrega. Os códigos e arquivos são fictícios. A conexão com os provedores e a entrega pelo Telegram precisam ser validadas separadamente.</p>${!session ? '<form data-test-start><label>Entrega que deseja experimentar<select name="deliveryKind"><option value="code">Código digital fictício</option><option value="file">Arquivo de exemplo</option></select></label><button type="submit">Iniciar simulação</button></form>' : `<div class="st-session-info"><span class="badge">Modo de teste</span><span>Cópia salva em ${new Date(session.createdAt).toLocaleString('pt-BR')} · ${session.actionsLeft} ações restantes</span></div><p class="mc-note">O teste fica salvo por até 2 horas. A cópia inclui até 10 unidades por produto. Produtos esgotados continuam esgotados; você pode repor unidades fictícias abaixo. Alterações feitas na loja depois do início só entram em um novo teste.</p><details><summary>Reiniciar com os dados atuais da loja</summary><p>Isso substitui apenas esta simulação. O histórico e os produtos reais não são alterados.</p><form data-test-start><label>Tipo de entrega<select name="deliveryKind"><option value="code">Código digital fictício</option><option value="file">Arquivo de exemplo</option></select></label><button type="submit" class="quiet">Iniciar novo teste</button></form></details><button class="quiet" data-test-resume>Retomar teste salvo</button>`}</section>${
       session
-        ? `<div class="st-layout"><section class="mc-panel"><h2>Visão do comprador</h2><p class="mc-note">Prévia aproximada das mensagens. Os botões abaixo operam somente nesta simulação.</p><div class="st-chat" role="region" tabindex="0" aria-label="Conversa de teste do comprador">${session.messages
-            .filter((m) => m.audience === 'buyer')
+        ? `<div class="st-layout"><section class="mc-panel"><h2>Visão do comprador</h2><p class="mc-note">Prévia aproximada das mensagens. Os botões abaixo operam somente nesta simulação.</p><div class="st-chat" role="region" tabindex="0" aria-label="Conversa de teste do comprador">${currentTestResponse(
+            session.messages,
+            'buyer',
+          )
             .map(message)
             .join(
               '',
             )}</div><form class="st-text-form" data-test-text><label>Comando ou cupom<input name="text" maxlength="200" required placeholder="/start, /pedidos, /suporte ou cupom" autocomplete="off"></label><button type="submit">Enviar no teste</button></form></section><aside class="st-controls"><section class="mc-panel"><h2>Pagamento fictício</h2><p>Modo da loja: <b>${esc({ manual: 'Pix manual', purincash: 'Pix integrado Blackout', mercadopago: 'Mercado Pago', stars: 'Telegram Stars' }[session.mode] ?? session.mode)}</b>.</p>${session.mode !== 'manual' && session.mode !== 'stars' ? '<p class="mc-note">Neste teste, a aprovação é reproduzida localmente. Não há consulta, QR Code, webhook ou cobrança real do provedor.</p>' : ''}<div class="st-payment-actions">${pending ? `<p>Pedido de teste ${esc(pending.id)}</p>${session.mode !== 'stars' ? '<button class="quiet" data-test-command="receipt">Simular envio de comprovante</button>' : ''}<button data-test-command="approve">Simular pagamento aprovado</button>${session.mode !== 'stars' ? '<button class="quiet" data-test-command="reject">Simular pagamento recusado</button>' : ''}` : '<p>Escolha um produto e gere um pedido na conversa de teste para liberar estes controles.</p>'}</div></section><section class="mc-panel"><h2>Pedidos desta simulação</h2>${session.orders.length ? session.orders.map((order) => `<article class="st-order"><b>Teste ${esc(order.id)}</b><p>${esc(labels[order.status] ?? order.status)}</p><p>${order.items.map((item) => `${item.quantity} × ${esc(item.title)}`).join('<br>')}</p><strong>${money(order.total, order.currency)}</strong></article>`).join('') : '<p>Nenhum pedido de teste criado.</p>'}</section><section class="mc-panel"><h2>Estoque fictício</h2>${session.products.length ? session.products.map((p) => `<div class="st-stock"><span>${esc(p.title)}<small>${p.stock} unidades de teste${p.enabled ? '' : ' · produto oculto'}</small></span><button class="quiet" data-test-stock="${esc(p.id)}" ${p.stock >= 10 ? 'disabled' : ''}>Repor 1</button></div>`).join('') : '<p>Cadastre categorias e produtos na loja e inicie um novo teste.</p>'}</section>${
-            session.messages.some((m) => m.audience === 'owner')
-              ? `<section class="mc-panel"><h2>Visão do lojista</h2><div class="st-chat" aria-label="Conversa de teste do lojista">${session.messages
-                  .filter((m) => m.audience === 'owner')
+            currentTestResponse(session.messages, 'owner').length > 0
+              ? `<section class="mc-panel"><h2>Visão do lojista</h2><div class="st-chat" aria-label="Conversa de teste do lojista">${currentTestResponse(
+                  session.messages,
+                  'owner',
+                )
                   .map(message)
                   .join('')}</div></section>`
               : ''
           }</aside></div>`
         : ''
     }<p class="st-feedback" role="status" ${error ? '' : 'hidden'}>${esc(error)}</p>`;
+    for (const { el, top, left } of positions) {
+      el.scrollTop = top;
+      el.scrollLeft = left;
+    }
     host.setAttribute('aria-busy', String(busy));
     host.querySelectorAll<HTMLButtonElement>('button').forEach((button) => {
       if (busy) button.disabled = true;
@@ -111,8 +129,6 @@ export async function mountStoreTest(
         }
       }),
     );
-    if (error)
-      host.querySelector<HTMLElement>('.st-feedback')?.scrollIntoView({ block: 'nearest' });
   };
   const run = async (operation: () => Promise<void>) => {
     if (busy) return;
