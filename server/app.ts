@@ -28,6 +28,7 @@ import { PlatformSubscriptions } from './platform-subscriptions.js';
 import type { AutomaticActivation } from './automatic-activation.js';
 import { readSetupProgress } from './setup-progress.js';
 import { StoreTest } from './store-test.js';
+import { AdminHealth } from './admin-health.js';
 import { publicPaymentRouter, mercadoPagoWebhook } from './payment-routes.js';
 type AuthedRequest = Request & { identity: Identity; requestId: string };
 const tokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/),
@@ -635,6 +636,18 @@ export function createApp(
     res.json(await services.adminMfa.verify(user, binding(req), code));
   });
   app.use('/api/admin', identity, admin);
+  app.get('/api/admin/health', rate('admin-health', 12, 60000), async (req, res) => {
+    if (!services?.bots)
+      throw new HttpError(503, 'HEALTH_UNAVAILABLE', 'Monitoramento indisponível.');
+    res.json(await new AdminHealth(services.bots.store).read(req.query));
+  });
+  app.get('/api/admin/health/stores/:id', async (req, res) => {
+    if (!services?.bots)
+      throw new HttpError(503, 'HEALTH_UNAVAILABLE', 'Monitoramento indisponível.');
+    res.json({
+      account: await new AdminHealth(services.bots.store).account(idSchema.parse(req.params.id)),
+    });
+  });
   app.get('/api/admin/subscription-plans', async (_req, res) => {
     if (!subscriptions)
       throw new HttpError(503, 'SUBSCRIPTION_UNAVAILABLE', 'Assinaturas indisponíveis.');

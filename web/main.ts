@@ -1,3 +1,4 @@
+import { mountAdminHealth } from './admin-health.js';
 import { renderSetupProgress, isSetupDismissed } from './setup-progress.js';
 import type { SetupProgress } from '../server/setup-progress.js';
 import './style.css';
@@ -211,7 +212,7 @@ function accountRow(a: AdminMerchantAccount) {
 function adminView() {
   const a = accounts.find((a) => a.id === selected);
   shell(
-    `<main class="workspace"><div class="page-heading"><div><span class="eyebrow">Administração da plataforma</span><h1>Lojistas</h1></div><button id="new-account">Adicionar lojista</button></div><nav class="tabs"><button data-section="accounts" class="${section === 'accounts' ? 'active' : ''}">Lojistas</button><button data-section="activations" class="${section === 'activations' ? 'active' : ''}">Ativações</button><button data-section="audit" class="${section === 'audit' ? 'active' : ''}">Histórico</button></nav>${section === 'audit' ? '<section class="card" id="audit-list">Carregando histórico…</section>' : `<section class="card compact">${accounts.map(accountRow).join('') || `<div class="empty"><b>${section === 'activations' ? 'Nenhuma ativação pendente' : 'Comece pelo primeiro lojista'}</b><p>${section === 'activations' ? 'Os bots enviados e liberados aparecerão aqui.' : 'Cadastre a contratação recebida e gere o convite de acesso.'}</p></div>`}</section><div class="pagination"><button class="quiet" id="previous" ${offset === 0 ? 'disabled' : ''}>Anterior</button><span>Página ${offset / 50 + 1}</span><button class="quiet" id="next" ${accounts.length < 50 ? 'disabled' : ''}>Próxima</button></div>`}${a && section !== 'audit' ? `<section class="card detail"><div class="card-heading"><h2>${esc(a.store_name)}</h2><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div><dl><div><dt>Lojista</dt><dd>${esc(a.name)}</dd></div><div><dt>E-mail</dt><dd>${esc(a.email)}</dd></div><div><dt>Canal da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Referência</dt><dd>${esc(a.reference || 'Não informada')}</dd></div><div><dt>Valor do ciclo contratado</dt><dd>${money(a.price_cents)}</dd></div><div><dt>Início da assinatura</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div></dl><p class="note">Liberar o acesso ao painel não ativa o bot. O período contratado começa somente após a ativação efetiva do bot.</p>${a.suspension_reason ? `<p class="warning">${esc(a.suspension_reason)}</p>` : ''}${adminBotSetup ? adminBotCard(adminBotSetup, a.access_status === 'approved', date) : ''}<div class="inline-actions">${!a.purchase_confirmed_at ? '<button id="confirm-purchase">Confirmar contratação</button>' : ''}${a.purchase_confirmed_at && !a.firebase_uid && a.access_status !== 'suspended' ? '<button id="issue-invite">Gerar convite</button>' : ''}${a.firebase_uid && a.access_status === 'pending' ? '<button id="approve">Liberar acesso ao painel</button>' : ''}${a.access_status !== 'suspended' ? '<button class="quiet" id="suspend">Suspender acesso ao painel</button>' : '<button class="quiet" id="restore">Remover suspensão</button>'}</div>${inviteLink ? `<div class="invite-box"><label for="invite-link">Convite · copie e envie pelo canal da contratação</label><input id="invite-link" value="${esc(inviteLink)}" readonly><button class="quiet" id="copy-invite">Copiar convite</button><small>Uso único, válido por 7 dias e vinculado ao e-mail cadastrado. Gerar outro invalida o anterior.</small></div>` : ''}</section>` : ''}</main>`,
+    `<main class="workspace"><div class="page-heading"><div><span class="eyebrow">Administração da plataforma</span><h1>Lojistas</h1></div><button id="new-account">Adicionar lojista</button></div><nav class="tabs"><button data-section="accounts" class="${section === 'accounts' ? 'active' : ''}">Lojistas</button><button data-section="activations" class="${section === 'activations' ? 'active' : ''}">Ativações</button><button data-section="health" class="${section === 'health' ? 'active' : ''}">Saúde dos bots</button><button data-section="audit" class="${section === 'audit' ? 'active' : ''}">Histórico</button></nav>${section === 'audit' ? '<section class="card" id="audit-list">Carregando histórico…</section>' : `<section class="card compact">${accounts.map(accountRow).join('') || `<div class="empty"><b>${section === 'activations' ? 'Nenhuma ativação pendente' : 'Comece pelo primeiro lojista'}</b><p>${section === 'activations' ? 'Os bots enviados e liberados aparecerão aqui.' : 'Cadastre a contratação recebida e gere o convite de acesso.'}</p></div>`}</section><div class="pagination"><button class="quiet" id="previous" ${offset === 0 ? 'disabled' : ''}>Anterior</button><span>Página ${offset / 50 + 1}</span><button class="quiet" id="next" ${accounts.length < 50 ? 'disabled' : ''}>Próxima</button></div>`}${a && section !== 'audit' ? `<section class="card detail"><div class="card-heading"><h2>${esc(a.store_name)}</h2><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div><dl><div><dt>Lojista</dt><dd>${esc(a.name)}</dd></div><div><dt>E-mail</dt><dd>${esc(a.email)}</dd></div><div><dt>Canal da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Referência</dt><dd>${esc(a.reference || 'Não informada')}</dd></div><div><dt>Valor do ciclo contratado</dt><dd>${money(a.price_cents)}</dd></div><div><dt>Início da assinatura</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div></dl><p class="note">Liberar o acesso ao painel não ativa o bot. O período contratado começa somente após a ativação efetiva do bot.</p>${a.suspension_reason ? `<p class="warning">${esc(a.suspension_reason)}</p>` : ''}${adminBotSetup ? adminBotCard(adminBotSetup, a.access_status === 'approved', date) : ''}<div class="inline-actions">${!a.purchase_confirmed_at ? '<button id="confirm-purchase">Confirmar contratação</button>' : ''}${a.purchase_confirmed_at && !a.firebase_uid && a.access_status !== 'suspended' ? '<button id="issue-invite">Gerar convite</button>' : ''}${a.firebase_uid && a.access_status === 'pending' ? '<button id="approve">Liberar acesso ao painel</button>' : ''}${a.access_status !== 'suspended' ? '<button class="quiet" id="suspend">Suspender acesso ao painel</button>' : '<button class="quiet" id="restore">Remover suspensão</button>'}</div>${inviteLink ? `<div class="invite-box"><label for="invite-link">Convite · copie e envie pelo canal da contratação</label><input id="invite-link" value="${esc(inviteLink)}" readonly><button class="quiet" id="copy-invite">Copiar convite</button><small>Uso único, válido por 7 dias e vinculado ao e-mail cadastrado. Gerar outro invalida o anterior.</small></div>` : ''}</section>` : ''}</main>`,
   );
   if (section !== 'audit') {
     const workspace = document.querySelector('.workspace');
@@ -465,6 +466,27 @@ async function load() {
       await renderAdminMfa();
       return;
     }
+    if (route === '#/saude' || section === 'health') {
+      shell(
+        '<main class="workspace"><div class="page-heading"><h1>Operação Blackout</h1><a class="button-link quiet" href="#/conta" id="health-back">Voltar aos lojistas</a></div><div id="admin-health-host"></div></main>',
+      );
+      document.querySelector('#health-back')?.addEventListener('click', () => {
+        section = 'accounts';
+        selected = null;
+        if (location.hash === '#/conta') void load();
+      });
+      await mountAdminHealth(
+        document.querySelector<HTMLElement>('#admin-health-host')!,
+        api,
+        async (id) => {
+          section = 'accounts';
+          selected = id;
+          if (location.hash.split('?')[0] === '#/conta') await load();
+          else location.hash = '#/conta';
+        },
+      );
+      return;
+    }
     accounts = (
       await api<{ accounts: AdminMerchantAccount[] }>(
         '/admin/accounts?offset=' +
@@ -473,6 +495,11 @@ async function load() {
           (section === 'activations' ? 'activation' : 'all'),
       )
     ).accounts;
+    if (selected && !accounts.some((account) => account.id === selected)) {
+      accounts.unshift(
+        (await api<{ account: AdminMerchantAccount }>('/admin/health/stores/' + selected)).account,
+      );
+    }
     adminBotSetup = selected
       ? (await api<{ setup: BotSetup | null }>('/admin/accounts/' + selected + '/bot-setup')).setup
       : null;
