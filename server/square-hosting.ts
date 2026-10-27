@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import hyzeBotLock from '../config/hyze-bot.package-lock.json' with { type: 'json' };
 import { resolve } from 'node:path';
 
 export class HostingError extends Error {
@@ -137,8 +138,15 @@ export async function buildRuntimeArchive(name: string, provider = 'squarecloud'
       type: 'module',
       private: true,
       engines: { node: '>=24.12.0' },
-      scripts: { start: 'node dist-server/server/bot-runner.js' },
+      scripts: {
+        start:
+          provider === 'hyze'
+            ? './node_modules/node/bin/node dist-server/server/bot-runner.js'
+            : 'node dist-server/server/bot-runner.js',
+      },
+      ...(provider === 'hyze' ? { dependencies: { node: '24.18.0' } } : {}),
     }),
+    ...(provider === 'hyze' ? { 'package-lock.json': JSON.stringify(hyzeBotLock) } : {}),
     ...(provider === 'squarecloud'
       ? {
           'squarecloud.app': `DISPLAY_NAME=${name}\nDESCRIPTION=Blackout managed merchant runtime\nMAIN=dist-server/server/bot-runner.js\nMEMORY=256\nVERSION=24\nRUNTIME=nodejs\nAUTORESTART=true\n`,

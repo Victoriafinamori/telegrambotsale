@@ -74,7 +74,7 @@ export class HyzeHosting implements HostingProvider {
     form.set('name', name);
     form.set('runtime', 'node');
     form.set('memoryMB', '256');
-    form.set('startupCommand', 'node dist-server/server/bot-runner.js');
+    form.set('startupCommand', './node_modules/node/bin/node dist-server/server/bot-runner.js');
     form.set('autoRestart', 'true');
     // Worker has no public endpoint. Hyze owns reserved NODE_ENV/PORT variables.
     const data = await this.call('/apps/deploy', 'POST', form),

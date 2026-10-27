@@ -2,6 +2,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { runtimeZip } from '../server/square-hosting.js';
 import { buildHyzeRuntimeArchive } from '../server/hyze-hosting.js';
+import { spawnSync } from 'node:child_process';
 
 // Deployment artifacts contain compiled code and manifests, never production envs.
 const files: Record<string, Uint8Array | string> = {};
@@ -14,7 +15,22 @@ async function collect(directory: string) {
 }
 await collect('dist-server');
 await collect('dist');
-for (const file of ['package.json', 'package-lock.json']) files[file] = await readFile(file);
+const destination = resolve('.local/hyze-migration-' + Date.now());
+await mkdir(destination, { recursive: true });
+const manifest = JSON.parse(await readFile('package.json', 'utf8'));
+delete manifest.devDependencies;
+manifest.dependencies.node = '24.18.0';
+manifest.scripts = { start: './node_modules/node/bin/node hyze-start.mjs' };
+await writeFile(join(destination, 'package.json'), JSON.stringify(manifest, null, 2));
+// Generate a production-only lock. Hyze must not rebuild this compiled artifact.
+const result = spawnSync(
+  process.platform === 'win32' ? 'npm.cmd' : 'npm',
+  ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund'],
+  { cwd: destination, shell: process.platform === 'win32', stdio: 'inherit' },
+);
+if (result.status !== 0) throw Error('Unable to lock the Hyze production manifest');
+for (const file of ['package.json', 'package-lock.json'])
+  files[file] = await readFile(join(destination, file));
 files['hyze-start.mjs'] = `import {mkdir, writeFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 if (Number(process.versions.node.split('.')[0]) < 24) throw Error('Blackout requires Node 24 or newer');
@@ -33,8 +49,6 @@ process.env.HOST='0.0.0.0';
 process.env.PORT ||= '3000';
 await import('./dist-server/server/main.js');
 `;
-const destination = resolve('.local/hyze-migration-' + Date.now());
-await mkdir(destination, { recursive: true });
 await writeFile(join(destination, 'blackout-api.zip'), runtimeZip(files));
 await writeFile(
   join(destination, 'blackout-bot-template.zip'),
@@ -54,7 +68,7 @@ BOT_TOKEN_ENCRYPTION_KEY=KEEP_THE_EXISTING_PRIVATE_KEY
 ADMIN_MFA_ENCRYPTION_KEY=KEEP_THE_EXISTING_DIFFERENT_PRIVATE_KEY
 BLACKOUT_FIREBASE_ADMIN_JSON=INSTALL_PRIVATE_RUNTIME_SERVICE_ACCOUNT_JSON
 # NODE_ENV and PORT are reserved by Hyze. hyze-start.mjs sets production/HOST internally.
-# Start command: node hyze-start.mjs; exposed port: 3000; API memory: 512 MB.
+# Start command: ./node_modules/node/bin/node hyze-start.mjs; exposed port: 3000; API memory: 512 MB.
 `,
 );
 console.log(destination);
