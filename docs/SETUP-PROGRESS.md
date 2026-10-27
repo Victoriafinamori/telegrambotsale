@@ -2,6 +2,10 @@
 
 O painel mostra cinco etapas: **Pagamento confirmado → Conectar bot → Confirmar responsável → Configurar loja → Loja pronta**. O mesmo componente aparece na visão geral da loja e em `#/configuracao`.
 
+As etapas aparecem em uma faixa compacta, com detalhes de uma etapa por vez. No celular, a faixa vira uma lista curta. O botão **Fechar** oculta o acompanhamento e guarda a preferência neste navegador, por bot. **Retomar configuração** permite reabrir sem perder os fatos salvos no servidor. O fechamento não suspende nem ativa a loja.
+
+Ao atingir **Loja pronta**, o acompanhamento deixa de aparecer automaticamente na visão geral. A preferência de fechamento é preservada para não reabrir o assistente por uma oscilação posterior de conexão ou estoque. O acesso comum à página de configuração redireciona para a loja quando estiver pronta. O item **Ativação e conexão** do menu usa `?review=1` para uma revisão explícita, e a contratação continua acessível via `?contract=1`. Mesmo na revisão existe um botão para voltar à loja.
+
 ## Retomada
 
 O backend calcula o acompanhamento a partir da conta, configuração do bot, runtime e loja já persistidos no Firestore. Não há um número de etapa mantido apenas no navegador. Sair, trocar de dispositivo ou atualizar a página preserva os fatos salvos. Campos ainda não enviados não são considerados concluídos; tokens não são guardados em localStorage.
