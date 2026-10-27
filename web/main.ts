@@ -274,7 +274,7 @@ function merchantView() {
   }
   const approved = a.access_status === 'approved';
   shell(
-    `<main class="merchant-shell"><div class="page-heading"><div><span class="eyebrow">${esc(a.store_name)}</span><h1>${botSetup?.activation_status === 'active' ? 'Sua loja' : 'Primeiros passos'}</h1></div><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div>${approved ? `<p class="welcome-note">${botSetup?.activation_status === 'active' ? 'Acompanhe sua ativação e os dados da contratação.' : 'Seu acesso foi liberado. Siga as etapas para preparar seu bot.'}</p>${botGuide(botSetup, guideStep, Boolean(config?.emulatorHost), automaticActivation)}` : `<section class="card"><h2>${a.access_status === 'suspended' ? 'Acesso suspenso' : 'Sua loja está em análise'}</h2><p>${a.access_status === 'suspended' ? esc(a.suspension_reason || 'Fale com a Blackout Create pelo canal da contratação.') : 'Sua conta já está vinculada. Após a aprovação, você terá um assistente para criar o bot, informar seu token e ID do Telegram e solicitar a ativação na Square Cloud.'}</p><p class="note">A mensalidade começa somente após a ativação efetiva do bot.</p><button class="quiet" id="refresh">Atualizar situação</button></section>`}<details class="card contract-details"><summary>Sua contratação · ${a.reference === 'PILOTO INTERNO BLACKOUT / SEM COBRANCA REAL' ? 'Piloto interno sem cobrança' : money(a.price_cents)}</summary><dl><div><dt>Período contratado</dt><dd>${a.billing_months ?? 1} mês(es)</dd></div><div><dt>Início do ciclo</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div><div><dt>Contato da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Conta</dt><dd>${esc(me!.user.email)}</dd></div></dl></details></main>`,
+    `<main class="merchant-shell"><div class="page-heading"><div><span class="eyebrow">${esc(a.store_name)}</span><h1>${botSetup?.activation_status === 'active' ? 'Sua loja' : 'Primeiros passos'}</h1></div><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div>${approved ? `<p class="welcome-note">${botSetup?.activation_status === 'active' ? 'Acompanhe sua ativação e os dados da contratação.' : 'Seu acesso foi liberado. Siga as etapas para preparar seu bot.'}</p>${botGuide(botSetup, guideStep, Boolean(config?.emulatorHost), automaticActivation)}` : `<section class="card"><h2>${a.access_status === 'suspended' ? 'Acesso suspenso' : 'Sua loja está em análise'}</h2><p>${a.access_status === 'suspended' ? esc(a.suspension_reason || 'Fale com a Blackout Create pelo canal da contratação.') : 'Sua conta já está vinculada. Após a aprovação, você terá um assistente para criar o bot, informar seu token e ID do Telegram e solicitar a ativação na Hyze Cloud.'}</p><p class="note">A mensalidade começa somente após a ativação efetiva do bot.</p><button class="quiet" id="refresh">Atualizar situação</button></section>`}<details class="card contract-details"><summary>Sua contratação · ${a.reference === 'PILOTO INTERNO BLACKOUT / SEM COBRANCA REAL' ? 'Piloto interno sem cobrança' : money(a.price_cents)}</summary><dl><div><dt>Período contratado</dt><dd>${a.billing_months ?? 1} mês(es)</dd></div><div><dt>Início do ciclo</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div><div><dt>Contato da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Conta</dt><dd>${esc(me!.user.email)}</dd></div></dl></details></main>`,
   );
   if (me?.role === 'platform')
     document
@@ -783,7 +783,7 @@ document.addEventListener('click', (event) => {
   if (button.id === 'confirm-bot-activation' && adminBotSetup) {
     dialog(
       'Confirmar ativação do bot',
-      `<form id="bot-activation-form"><input type="hidden" name="revision" value="${adminBotSetup.revision}"><p>Confirme somente depois de instalar e testar <b>@${esc(adminBotSetup.bot_username)}</b> na Square Cloud. Esta confirmação inicia o período mensal agora.</p><label>ID do aplicativo exclusivo deste cliente<input name="deploymentReference" required minlength="6" maxlength="120" pattern="[A-Za-z0-9_-]{6,120}" autocomplete="off" placeholder="ID da aplicação na Square Cloud"></label><label class="check-label"><input type="checkbox" name="ownerIdConfirmed" required><span>Conferi que o ID ${esc(adminBotSetup.telegram_user_id)} pertence ao responsável pela loja.</span></label><label class="check-label"><input type="checkbox" name="botTested" required><span>Instalei o bot neste aplicativo e testei seu funcionamento no Telegram.</span></label><p class="note">Confirmação manual: este botão registra a ativação; não inicia nem monitora a aplicação da Square Cloud.</p><button type="submit">Confirmar ativação e iniciar mensalidade</button></form>`,
+      `<form id="bot-activation-form"><input type="hidden" name="revision" value="${adminBotSetup.revision}"><p>Confirme somente depois de instalar e testar <b>@${esc(adminBotSetup.bot_username)}</b> na Hyze Cloud. Esta confirmação inicia o período mensal agora.</p><label>ID do aplicativo exclusivo deste cliente<input name="deploymentReference" required minlength="6" maxlength="120" pattern="[A-Za-z0-9_-]{6,120}" autocomplete="off" placeholder="ID da aplicação na Hyze Cloud"></label><label class="check-label"><input type="checkbox" name="ownerIdConfirmed" required><span>Conferi que o ID ${esc(adminBotSetup.telegram_user_id)} pertence ao responsável pela loja.</span></label><label class="check-label"><input type="checkbox" name="botTested" required><span>Instalei o bot neste aplicativo e testei seu funcionamento no Telegram.</span></label><p class="note">Confirmação manual: este botão registra a ativação; não inicia nem monitora a aplicação da Hyze Cloud.</p><button type="submit">Confirmar ativação e iniciar mensalidade</button></form>`,
     );
     return;
   }
@@ -797,7 +797,7 @@ document.addEventListener('click', (event) => {
   if (button.id === 'request-bot-token') {
     dialog(
       'Token para ativação',
-      '<p>Este segredo permite controlar o bot. A consulta será registrada no histórico. Use-o somente na configuração privada do servidor na Square Cloud.</p><button id="reveal-bot-token">Consultar token protegido</button>',
+      '<p>Este segredo permite controlar o bot. A consulta será registrada no histórico. Use-o somente na configuração privada do servidor na Hyze Cloud.</p><button id="reveal-bot-token">Consultar token protegido</button>',
     );
     return;
   }
@@ -818,7 +818,7 @@ document.addEventListener('click', (event) => {
   if (button.id === 'suspend') {
     dialog(
       'Suspender acesso',
-      '<form id="suspend-form"><label>Motivo<input name="reason" required minlength="3" maxlength="500"></label><p class="note">O lojista continuará podendo entrar para consultar a situação. Os dados serão preservados. Esta ação não desliga o aplicativo na Square Cloud.</p><button type="submit">Confirmar suspensão</button></form>',
+      '<form id="suspend-form"><label>Motivo<input name="reason" required minlength="3" maxlength="500"></label><p class="note">O lojista continuará podendo entrar para consultar a situação. Os dados serão preservados. Esta ação não desliga o aplicativo na Hyze Cloud.</p><button type="submit">Confirmar suspensão</button></form>',
     );
     return;
   }
@@ -851,7 +851,7 @@ document.addEventListener('click', (event) => {
     } else if (button.id === 'reveal-bot-token') {
       const value = await api<{ token: string }>('/admin/accounts/' + selected + '/bot-token', {});
       dialog(
-        'Token para a Square Cloud',
+        'Token para a Hyze Cloud',
         '<label for="activation-token">Token · ocultado em 30 segundos</label><input id="activation-token" readonly autocomplete="off" spellcheck="false"><small>Transfira somente para a configuração privada da hospedagem. Não envie por mensagem.</small>',
       );
       const input = document.querySelector<HTMLInputElement>('#activation-token')!;

@@ -11,7 +11,7 @@ export class HostingError extends Error {
 }
 export interface HostingProvider {
   account(): Promise<{ available: number; apps: { id: string; name: string }[] }>;
-  upload(archive: Uint8Array): Promise<string>;
+  upload(archive: Uint8Array, name?: string): Promise<string>;
   configure(id: string, env: Record<string, string>): Promise<void>;
   running(id: string): Promise<boolean>;
 }
@@ -124,7 +124,7 @@ export function runtimeZip(files: Record<string, string | Uint8Array>) {
   end.writeUInt32LE(offset, 16);
   return Buffer.concat([...parts, central, end]);
 }
-export async function buildRuntimeArchive(name: string) {
+export async function buildRuntimeArchive(name: string, provider = 'squarecloud') {
   if (!/^Blackout-[0-9a-f-]{36}$/.test(name)) throw Error('Invalid deployment name');
   const runner = await readFile(resolve('dist-server/server/bot-runner.js'), 'utf8');
   const telegram = await readFile(resolve('dist-server/server/telegram-client.js'), 'utf8');
@@ -139,6 +139,10 @@ export async function buildRuntimeArchive(name: string) {
       engines: { node: '>=24.12.0' },
       scripts: { start: 'node dist-server/server/bot-runner.js' },
     }),
-    'squarecloud.app': `DISPLAY_NAME=${name}\nDESCRIPTION=Blackout managed merchant runtime\nMAIN=dist-server/server/bot-runner.js\nMEMORY=256\nVERSION=24\nRUNTIME=nodejs\nAUTORESTART=true\n`,
+    ...(provider === 'squarecloud'
+      ? {
+          'squarecloud.app': `DISPLAY_NAME=${name}\nDESCRIPTION=Blackout managed merchant runtime\nMAIN=dist-server/server/bot-runner.js\nMEMORY=256\nVERSION=24\nRUNTIME=nodejs\nAUTORESTART=true\n`,
+        }
+      : {}),
   });
 }

@@ -538,7 +538,14 @@ export class FirestorePlatform implements AccountService {
       tx.set(path, { account_id: id });
       tx.set(setupPath(id), next);
       tx.set(accountPath(id), account);
-      this.audit(tx, actor, 'bot_activation.confirmed_manually', id);
+      this.audit(
+        tx,
+        actor,
+        actor === 'automatic-activation'
+          ? 'bot_activation.confirmed_automatically'
+          : 'bot_activation.confirmed_manually',
+        id,
+      );
       return {
         setup: pick<BotSetup>(next, setupFields),
         account: pick<MerchantAccount>(account, accountFields),

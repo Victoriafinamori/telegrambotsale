@@ -11,6 +11,7 @@ import { testConfig } from './helpers.js';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { adminPath } from '../server/firestore-platform.js';
+import { HyzeHosting } from '../server/hyze-hosting.js';
 
 async function fixture() {
   const store = new MemoryDocuments(),
@@ -219,12 +220,13 @@ test('Existing webhook, suspended accounts and revoked contract prevent deployme
 });
 test('Hosting keys are encrypted and never returned in public settings/status', async () => {
   const f = await fixture();
-  const settings = await f.store.get('platform_hosting/squarecloud');
+  const settings = await f.store.get('platform_hosting/hyze');
   assert(!JSON.stringify(settings).includes('test-private-key'));
   assert.deepEqual(await f.activation.settings(), {
     connected: true,
     enabled: true,
     memoryPerBot: 256,
+    provider: 'hyze',
   });
   await f.activation.pause();
   await f.tick();
@@ -309,4 +311,73 @@ test('Hosting HTTP settings require administrator MFA and merchant tracking cann
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test('Hyze adapter deploys via documented multipart and never sends reserved environment variables', async () => {
+  const calls: { path: string; init?: RequestInit }[] = [];
+  const hyze = new HyzeHosting('hyze_PRIVATE_TEST', async (url, init) => {
+    assert.equal(new URL(String(url)).origin, 'https://api.hyzecloud.com');
+    assert.equal(
+      (init?.headers as Record<string, string>).Authorization,
+      'Bearer hyze_PRIVATE_TEST',
+    );
+    const path = new URL(String(url)).pathname;
+    calls.push({ path, init });
+    if (path.endsWith('/plans/current'))
+      return Response.json({ success: true, usage: { availableRAM: 1024 } });
+    if (path.endsWith('/apps/'))
+      return Response.json({ success: true, apps: [{ id: 'app_test12345', name: 'Existing' }] });
+    if (path.endsWith('/apps/deploy'))
+      return Response.json({ success: true, appId: 'app_deployed123' });
+    if (path.endsWith('/app_deployed123'))
+      return Response.json({ success: true, container: { status: 'running' } });
+    return Response.json({ success: true });
+  });
+  assert.equal((await hyze.account()).available, 1024);
+  const id = await hyze.upload(
+    Buffer.from('archive'),
+    'Blackout-00000000-0000-4000-8000-000000000000',
+  );
+  assert.equal(id, 'app_deployed123');
+  const form = calls[2].init!.body as FormData;
+  assert.equal(form.get('runtime'), 'node');
+  assert.equal(form.get('memoryMB'), '256');
+  assert.equal(form.get('exposePort'), null);
+  assert.equal(form.get('name'), 'Blackout-00000000-0000-4000-8000-000000000000');
+  await hyze.configure(id, {
+    NODE_ENV: 'production',
+    PORT: '80',
+    BOT_API_ORIGIN: 'https://api.example.test',
+    BOT_RUNTIME_KEY: 'PRIVATE_TEST',
+  });
+  assert.equal(calls[3].init!.method, 'PUT');
+  assert.deepEqual(JSON.parse(String(calls[3].init!.body)), {
+    envVars: { BOT_API_ORIGIN: 'https://api.example.test', BOT_RUNTIME_KEY: 'PRIVATE_TEST' },
+  });
+  assert(await hyze.running(id));
+});
+
+test('Hyze ambiguous deploy failures stay ambiguous and never expose upstream secret-bearing bodies', async () => {
+  const api = new HyzeHosting('hyze_PRIVATE_TEST', async () =>
+    Response.json(
+      { success: false, error: { code: 'UNKNOWN', message: 'upstream PRIVATE_TEST' } },
+      { status: 500 },
+    ),
+  );
+  await assert.rejects(
+    () => api.upload(Buffer.from('zip'), 'Blackout-00000000-0000-4000-8000-000000000000'),
+    (error: unknown) =>
+      error instanceof HostingError && error.uncertain && !error.message.includes('PRIVATE_TEST'),
+  );
+});
+
+test('Hyze worker does not resume legacy Square jobs after provider switch', async () => {
+  const f = await fixture();
+  await f.store.transaction(async (tx) => {
+    const job = (await tx.get('bot_activation_jobs/' + f.account.id))!;
+    tx.set('bot_activation_jobs/' + f.account.id, { ...job, provider: 'squarecloud' });
+  });
+  await f.tick();
+  assert.equal(f.uploads(), 0);
+  assert.equal((await f.activation.status(f.account.id))?.code, 'LEGACY_HOSTING_JOB');
 });

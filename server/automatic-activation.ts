@@ -1,3 +1,4 @@
+import { HyzeHosting, buildHyzeRuntimeArchive } from './hyze-hosting.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { botTransaction } from './bot-data.js';
@@ -7,14 +8,9 @@ import type { OnboardingService } from './platform-contract.js';
 import { SecretVault } from './secret-vault.js';
 import { HttpError } from './types.js';
 import { TelegramClient } from './telegram-client.js';
-import {
-  SquareHosting,
-  HostingError,
-  buildRuntimeArchive,
-  type HostingProvider,
-} from './square-hosting.js';
+import { HostingError, type HostingProvider } from './square-hosting.js';
 
-const settingsPath = 'platform_hosting/squarecloud';
+const settingsPath = 'platform_hosting/hyze';
 const jobPath = (id: string) => 'bot_activation_jobs/' + id;
 const messages: Record<string, string> = {
   queued: 'Preparando a hospedagem do seu bot.',
@@ -33,7 +29,7 @@ export class AutomaticActivation {
     private onboarding: OnboardingService,
     key: string,
     private origin: string,
-    private provider: (key: string) => HostingProvider = (key) => new SquareHosting(key),
+    private provider: (key: string) => HostingProvider = (key) => new HyzeHosting(key),
     private inspect: (token: string) => Promise<{ id: string; webhook: boolean }> = async (
       token,
     ) => {
@@ -42,7 +38,7 @@ export class AutomaticActivation {
         webhook = await telegram.call<{ url: string }>('getWebhookInfo');
       return { id: me.is_bot ? String(me.id) : '', webhook: Boolean(webhook.url) };
     },
-    private archive = buildRuntimeArchive,
+    private archive = buildHyzeRuntimeArchive,
     private now = () => new Date(),
   ) {
     this.vault = new SecretVault(key);
@@ -56,6 +52,7 @@ export class AutomaticActivation {
       connected: Boolean(settings?.ciphertext),
       enabled: settings?.enabled === true,
       memoryPerBot: 256,
+      provider: 'hyze',
     };
   }
   async connect(actor: string, raw: unknown) {
@@ -74,7 +71,7 @@ export class AutomaticActivation {
     await this.provider(input.apiKey).account();
     await botTransaction(this.store, async (tx) => {
       tx.set(settingsPath, {
-        ciphertext: this.vault.seal(input.apiKey, 'square-hosting'),
+        ciphertext: this.vault.seal(input.apiKey, 'hyze-hosting'),
         enabled: input.enabled,
         updated_at: this.now(),
       });
@@ -118,6 +115,7 @@ export class AutomaticActivation {
         id,
         bot_id: setup.bot_id,
         telegram_id: setup.telegram_user_id,
+        provider: 'hyze',
         stage: 'queued',
         name: 'Blackout-' + id,
         created_at: this.now(),
@@ -128,6 +126,14 @@ export class AutomaticActivation {
   }
   async status(id: string) {
     const job = await this.store.get(jobPath(id));
+    if (job && job.provider !== 'hyze')
+      return {
+        stage: 'action_required',
+        message:
+          'Esta ativação pertence à hospedagem anterior. A Blackout precisa conferir a migração.',
+        updatedAt: job.updated_at,
+        code: 'LEGACY_HOSTING_JOB',
+      };
     return job
       ? {
           stage: String(job.stage),
@@ -140,7 +146,7 @@ export class AutomaticActivation {
   async retry(id: string) {
     await botTransaction(this.store, async (tx) => {
       const job = await tx.get(jobPath(id));
-      if (!job || !['action_required', 'uncertain'].includes(job.stage))
+      if (!job || job.provider !== 'hyze' || !['action_required', 'uncertain'].includes(job.stage))
         throw new HttpError(
           409,
           'ACTIVATION_NOT_RETRYABLE',
@@ -193,6 +199,7 @@ export class AutomaticActivation {
       let after = '';
       for (const job of jobs) {
         after = job.id;
+        if (job.provider !== 'hyze') continue;
         if (!['active', 'action_required', 'uncertain'].includes(job.stage)) {
           await this.process(job, settings);
           break;
@@ -212,7 +219,7 @@ export class AutomaticActivation {
     const id = job.id;
     let resume = job.stage;
     try {
-      const provider = this.provider(this.vault.open(settings.ciphertext, 'square-hosting'));
+      const provider = this.provider(this.vault.open(settings.ciphertext, 'hyze-hosting'));
       let { setup } = await this.eligible(id, job);
       if (['queued', 'checking'].includes(job.stage)) {
         resume = 'checking';
@@ -239,7 +246,7 @@ export class AutomaticActivation {
         resume = 'uploading';
         await this.save(id, { stage: 'uploading', resume });
         try {
-          job.application_id = await provider.upload(archive);
+          job.application_id = await provider.upload(archive, job.name);
         } catch (e) {
           // Only an explicit capacity/auth rejection is safe to resubmit later.
           if (
@@ -266,7 +273,7 @@ export class AutomaticActivation {
       if (job.stage === 'uploading') {
         resume = 'uploading';
         const candidates = (await provider.account()).apps.filter((app) => app.name === job.name);
-        if (candidates.length !== 1 || !/^[a-f0-9]{32}$/.test(candidates[0].id))
+        if (candidates.length !== 1 || !/^[A-Za-z0-9_-]{6,120}$/.test(candidates[0].id))
           throw new HostingError('UPLOAD_NEEDS_RECONCILIATION', true);
         job.application_id = candidates[0].id;
         job.stage = 'configuring';

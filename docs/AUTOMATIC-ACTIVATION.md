@@ -1,12 +1,12 @@
-# Ativação automática na Square Cloud
+# Ativação automática na Hyze Cloud
 
-A API executa uma fila persistida no Firestore a cada 15 segundos. A integração começa desativada e só é habilitada após a administradora conectar uma chave própria da Square Cloud no painel, com segundo fator confirmado.
+A API executa uma fila persistida no Firestore a cada 15 segundos. A integração começa desativada e só é habilitada após a administradora conectar uma chave própria da Hyze Cloud no painel, com segundo fator confirmado.
 
 ## Conexão
 
-Em Administração da plataforma, abra **Hospedagem automática dos bots**. Crie uma chave na Square Cloud, em Minha conta → Segurança, com `account:read`, `apps:read`, `apps:write`, `apps:control` e `envs:write`. Cole no formulário privado e escolha habilitar as novas ativações. O backend valida `/v2/users/me` antes de cifrar a chave; não devolve a credencial ao navegador. Não são usados login CLI, tokens Google nem credenciais Firebase dentro dos aplicativos dos lojistas.
+Em Administração da plataforma, abra **Hospedagem automática dos bots**. Crie uma chave na Hyze Cloud, em Configurações → Desenvolvedor no workspace de hospedagem da Blackout. Cole no formulário privado e escolha habilitar as novas ativações. O backend valida `/api/plans/current` e `/api/apps/` antes de cifrar a chave; não devolve a credencial ao navegador. Não são usados login CLI, tokens Google nem credenciais Firebase dentro dos aplicativos dos lojistas.
 
-A chave da Square é uma credencial de infraestrutura da Blackout. Ela permanece somente no servidor da plataforma. O aplicativo de cada lojista recebe apenas `NODE_ENV`, `PORT`, `BOT_API_ORIGIN` e uma credencial de runtime limitada àquela loja. O token Telegram continua cifrado no backend e é entregue ao runtime autenticado já existente.
+A chave da Square é uma credencial de infraestrutura da Blackout. Ela permanece somente no servidor da plataforma. O aplicativo de cada lojista recebe somente `BOT_API_ORIGIN` e uma credencial de runtime limitada àquela loja. `NODE_ENV` e `PORT` são variáveis reservadas definidas pela Hyze e não são enviadas à API de env. O token Telegram continua cifrado no backend e é entregue ao runtime autenticado já existente.
 
 ## Fluxo
 
@@ -14,7 +14,7 @@ A chave da Square é uma credencial de infraestrutura da Blackout. Ela permanece
 2. O lojista salva o token e seu ID pessoal; o Telegram valida o token.
 3. Ao enviar para ativação, uma conta aprovada e com contratação confirmada entra na fila. Bots já ativos ou com runtime manual não são migrados.
 4. O worker confere identidade do bot, ausência de webhook anterior e memória livre. Ele não remove webhooks ou para aplicativos existentes.
-5. A Square cria um aplicativo exclusivo, chamado `Blackout-<UUID da loja>`, com Node 24 e 256 MB. Não há contratação ou aumento automático do plano.
+5. A Square cria um aplicativo exclusivo, chamado `Blackout-<UUID da loja>`, com runtime Node e 256 MB. Não há contratação ou aumento automático do plano.
 6. O backend registra uma credencial por loja, instala-a nas variáveis privadas do aplicativo e reinicia somente esse aplicativo.
 7. Quando o runtime conectar, o lojista usa **Confirmar minha conta no Telegram**, abre o link com a conta de ID informado e toca em Iniciar.
 8. Somente com runtime recente, vínculo correto, responsável confirmado e aplicativo em execução, o sistema registra a ativação e inicia os 1, 3 ou 12 meses contratados. A operação é idempotente.
@@ -32,10 +32,16 @@ O lojista acompanha os estados na configuração e pode atualizar a situação. 
 
 Há uma exclusão global persistida com vencimento de cinco minutos, além da proteção local contra ticks simultâneos. Cada tick processa no máximo um job, com cursor para não bloquear novas lojas atrás de outras aguardando o responsável. As chamadas têm limites de tempo menores que a concessão da exclusão. A fila volta a ser processada após reinício da API.
 
-O pacote enviado usa uma lista explícita: runner compilado, cliente Telegram, package.json sem dependências e squarecloud.app. Não contém código da plataforma, chaves de cifragem, Admin SDK, inventário ou credenciais de outros lojistas.
+O pacote enviado usa uma lista explícita: runner compilado, cliente Telegram, package.json sem dependências sem arquivos de configuração da Square. Não contém código da plataforma, chaves de cifragem, Admin SDK, inventário ou credenciais de outros lojistas.
 
 ## Validação
 
 `tests/automatic-activation.test.ts` cobre publicação única sob concorrência, confirmação de dono correto, início único de três meses, capacidade insuficiente, retomada de upload ambíguo, configuração privada repetível, webhook existente, suspensão e proteção da chave. Os provedores são simulados; isso não substitui uma contratação real seguida da publicação de um bot novo.
 
-Referência oficial: https://github.com/squarecloudofc/sdk-api-js/blob/main/spec/openapi.json
+Referência oficial: https://github.com/Hyze-Cloud/hyzecloud-sdk-ts/blob/main/src/resources/apps.ts
+
+## Troca de provedor
+
+A configuração privada da Hyze usa `platform_hosting/hyze` e AAD `hyze-hosting`. Jobs novos são marcados com `provider: hyze`; jobs antigos da Square não são retomados ou convertidos silenciosamente. A automação da Square foi pausada em produção em 27/10/2026. Os aplicativos já ativos permanecem na hospedagem anterior até uma migração explícita. O nome histórico `square_app_links` continua como índice interno de unicidade dos aplicativos, sem vinculação operacional com o provedor.
+
+A migração da API central exige validar o novo plano/runtime, instalar a identidade Firebase e as chaves privadas no ambiente de destino, obter a origem HTTPS, atualizar callbacks e VITE_API_ORIGIN e confirmar acesso ao banco. A conexão da automação de bots à Hyze, por si só, não move a API ou o bot piloto existentes.
