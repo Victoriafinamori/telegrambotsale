@@ -1,3 +1,5 @@
+import { renderSetupProgress } from './setup-progress.js';
+import type { SetupProgress } from '../server/setup-progress.js';
 import './style.css';
 import { themeControl, syncThemeControl, toggleTheme } from './theme.js';
 import './landing.css';
@@ -79,6 +81,7 @@ let botSetup: BotSetup | null = null,
 type RuntimeStatus = { provisioned: boolean; online: boolean; ownerVerified: boolean };
 let botRuntime: RuntimeStatus | null = null;
 let automaticActivation: ActivationStatus | null = null;
+let setupProgress: SetupProgress | null = null;
 let adminRuntime: RuntimeStatus | null = null;
 let adminProof = '',
   mfaSecret = '';
@@ -274,8 +277,15 @@ function merchantView() {
   }
   const approved = a.access_status === 'approved';
   shell(
-    `<main class="merchant-shell"><div class="page-heading"><div><span class="eyebrow">${esc(a.store_name)}</span><h1>${botSetup?.activation_status === 'active' ? 'Sua loja' : 'Primeiros passos'}</h1></div><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div>${approved ? `<p class="welcome-note">${botSetup?.activation_status === 'active' ? 'Acompanhe sua ativação e os dados da contratação.' : 'Seu acesso foi liberado. Siga as etapas para preparar seu bot.'}</p>${botGuide(botSetup, guideStep, Boolean(config?.emulatorHost), automaticActivation)}` : `<section class="card"><h2>${a.access_status === 'suspended' ? 'Acesso suspenso' : 'Sua loja está em análise'}</h2><p>${a.access_status === 'suspended' ? esc(a.suspension_reason || 'Fale com a Blackout Create pelo canal da contratação.') : 'Sua conta já está vinculada. Após a aprovação, você terá um assistente para criar o bot, informar seu token e ID do Telegram e solicitar a ativação na Hyze Cloud.'}</p><p class="note">A mensalidade começa somente após a ativação efetiva do bot.</p><button class="quiet" id="refresh">Atualizar situação</button></section>`}<details class="card contract-details"><summary>Sua contratação · ${a.reference === 'PILOTO INTERNO BLACKOUT / SEM COBRANCA REAL' ? 'Piloto interno sem cobrança' : money(a.price_cents)}</summary><dl><div><dt>Período contratado</dt><dd>${a.billing_months ?? 1} mês(es)</dd></div><div><dt>Início do ciclo</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div><div><dt>Contato da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Conta</dt><dd>${esc(me!.user.email)}</dd></div></dl></details></main>`,
+    `<main class="merchant-shell"><div class="page-heading"><div><span class="eyebrow">${esc(a.store_name)}</span><h1>${botSetup?.activation_status === 'active' ? 'Sua loja' : 'Primeiros passos'}</h1></div><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div>${approved ? `<p class="welcome-note">${botSetup?.activation_status === 'active' ? 'Acompanhe sua ativação e os dados da contratação.' : 'Seu acesso foi liberado. Siga as etapas para preparar seu bot.'}</p>${setupProgress ? renderSetupProgress(setupProgress, 'connection') : ''}${!botRuntime?.provisioned ? botGuide(botSetup, guideStep, Boolean(config?.emulatorHost), automaticActivation) : ''}` : `<section class="card"><h2>${a.access_status === 'suspended' ? 'Acesso suspenso' : 'Sua loja está em análise'}</h2><p>${a.access_status === 'suspended' ? esc(a.suspension_reason || 'Fale com a Blackout Create pelo canal da contratação.') : 'Sua conta já está vinculada. Após a aprovação, você terá um assistente para criar o bot, informar seu token e ID do Telegram e solicitar a ativação na Hyze Cloud.'}</p><p class="note">A mensalidade começa somente após a ativação efetiva do bot.</p><button class="quiet" id="refresh">Atualizar situação</button></section>`}<details class="card contract-details" ${new URLSearchParams(location.hash.split('?')[1] ?? '').has('contract') ? 'open' : ''}><summary>Sua contratação · ${a.reference === 'PILOTO INTERNO BLACKOUT / SEM COBRANCA REAL' ? 'Piloto interno sem cobrança' : money(a.price_cents)}</summary><dl><div><dt>Período contratado</dt><dd>${a.billing_months ?? 1} mês(es)</dd></div><div><dt>Início do ciclo</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div><div><dt>Contato da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Conta</dt><dd>${esc(me!.user.email)}</dd></div></dl></details></main>`,
   );
+  if (new URLSearchParams(location.hash.split('?')[1] ?? '').get('step') === 'bot') {
+    const guide = document.querySelector<HTMLElement>('#bot-connection-guide');
+    guide?.scrollIntoView({ block: 'start' });
+    const heading = guide?.querySelector<HTMLElement>('h2');
+    heading?.setAttribute('tabindex', '-1');
+    heading?.focus({ preventScroll: true });
+  }
   if (me?.role === 'platform')
     document
       .querySelector('.header-actions')
@@ -283,7 +293,7 @@ function merchantView() {
         'afterbegin',
         '<a class="button-link quiet" href="#/conta">Administração</a>',
       );
-  if (approved && botRuntime?.provisioned) {
+  if (approved && botRuntime?.provisioned && !setupProgress) {
     document
       .querySelector('main.merchant-shell .page-heading')
       ?.insertAdjacentHTML(
@@ -489,12 +499,15 @@ async function load() {
             : 1;
     const runtimeInfo =
       me.account?.access_status === 'approved'
-        ? await api<{ runtime: typeof botRuntime; activation: ActivationStatus | null }>(
-            '/store/runtime',
-          )
+        ? await api<{
+            runtime: typeof botRuntime;
+            activation: ActivationStatus | null;
+            progress: SetupProgress | null;
+          }>('/store/runtime')
         : null;
     botRuntime = runtimeInfo?.runtime ?? null;
     automaticActivation = runtimeInfo?.activation ?? null;
+    setupProgress = runtimeInfo?.progress ?? null;
     merchantView();
   }
 }
@@ -827,7 +840,7 @@ document.addEventListener('click', (event) => {
       const link = await api<{ url: string }>('/store/telegram-link', {});
       dialog(
         'Confirme sua conta no Telegram',
-        `<p>Abra este link com a conta pessoal do Telegram cujo ID você informou no cadastro e toque em <b>Iniciar</b>. Ele vence em 10 minutos e só pode ser usado uma vez.</p><a class="button-link" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Confirmar no meu bot</a><p>Depois, volte ao site e clique em Atualizar situação. A configuração de produtos e estoque será feita pelo comando <code>/admin</code> no bot.</p>`,
+        `<p>Abra este link com a conta pessoal do Telegram cujo ID você informou no cadastro e toque em <b>Iniciar</b>. Ele vence em 10 minutos e só pode ser usado uma vez.</p><a class="button-link" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Confirmar no meu bot</a><p>Depois, volte ao site e clique em Atualizar situação. Você pode configurar os produtos e o estoque pelo painel do site.</p>`,
       );
     } else if (button.id === 'enroll-admin-mfa') {
       const result = await api<{ secret: string }>('/security/admin-mfa/enroll', {});

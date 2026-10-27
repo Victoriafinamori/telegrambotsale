@@ -1,0 +1,166 @@
+.setup-progress {
+  padding: clamp(20px, 3vw, 32px);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--ink);
+  margin-bottom: 24px;
+  min-width: 0;
+}
+.sp-heading,
+.sp-step-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+.sp-heading h2 {
+  margin: 0;
+  font-size: clamp(22px, 2.5vw, 28px);
+  letter-spacing: -0.025em;
+}
+.sp-heading > span,
+.sp-state {
+  color: var(--muted);
+  font-size: 12px;
+}
+.sp-intro {
+  color: var(--muted);
+  line-height: 1.7;
+  max-width: 70ch;
+  margin: 12px 0 24px;
+}
+.sp-steps {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.sp-step {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 16px;
+  padding: 20px 0;
+  border-top: 1px solid var(--line);
+}
+.sp-marker {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+.sp-current .sp-marker {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+.sp-done .sp-marker {
+  background: var(--soft);
+  color: var(--accent);
+}
+.sp-marker svg,
+.sp-checks svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.sp-step h3 {
+  margin: 4px 0 0;
+  font-size: 16px;
+  line-height: 1.5;
+}
+.sp-step p {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
+  margin: 8px 0 0;
+  max-width: 70ch;
+}
+.sp-current .sp-state {
+  color: var(--accent);
+  font-weight: 700;
+}
+.sp-action {
+  margin-top: 14px;
+}
+.sp-action .button-link {
+  white-space: normal;
+  text-align: center;
+  min-height: 44px;
+  line-height: 1.5;
+}
+.sp-await {
+  color: var(--muted);
+  font-size: 12px;
+}
+.sp-checks {
+  list-style: none;
+  padding: 0;
+  margin: 16px 0 0;
+}
+.sp-checks li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  font-size: 13px;
+  border-bottom: 1px solid var(--line);
+}
+.sp-checks li > span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sp-checks svg {
+  color: var(--accent);
+}
+.sp-check-empty {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.sp-checks a {
+  color: var(--accent);
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  font-weight: 600;
+  text-underline-offset: 4px;
+}
+.sp-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.8;
+  margin: 16px 0 0;
+}
+.sp-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+@media (max-width: 500px) {
+  .sp-step {
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 10px;
+  }
+  .sp-marker {
+    width: 28px;
+    height: 28px;
+  }
+  .sp-checks li {
+    align-items: start;
+  }
+  .sp-action .button-link {
+    width: 100%;
+  }
+}

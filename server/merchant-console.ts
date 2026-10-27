@@ -10,6 +10,7 @@ import { stats } from './bot-orders.js';
 import { categoryEmoji } from './category-emoji.js';
 import type { BotStore } from './bot-store.js';
 import { TelegramClient } from './telegram-client.js';
+import { setupProgress } from './setup-progress.js';
 
 const asset = z
   .string()
@@ -141,6 +142,7 @@ export class MerchantConsole {
         noticeSubscribers: shop.notice_subscribers ?? 0,
         revision: shop.portal_revision ?? 0,
         botUsername: setup.bot_username,
+        setupProgress: await setupProgress(tx, id, uid),
       };
     });
   }

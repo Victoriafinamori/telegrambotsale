@@ -1,3 +1,5 @@
+import { renderSetupProgress } from './setup-progress.js';
+import type { SetupProgress } from '../server/setup-progress.js';
 import './merchant-console.css';
 import './merchant-theme.css';
 import { mountPaymentSettings } from './payment-settings.js';
@@ -5,6 +7,7 @@ import { mountWallet } from './wallet.js';
 import { mountSubscription } from './subscription.js';
 import type { Product, ShopStats, Announcement } from '../server/bot-types.js';
 type Data = {
+  setupProgress?: SetupProgress;
   title: string;
   welcome: string;
   banner: string;
@@ -125,7 +128,11 @@ export async function mountMerchantConsole(
       ? 'subscription'
       : location.hash.includes('?wallet=')
         ? 'wallet'
-        : 'overview',
+        : ['overview', 'products', 'stock', 'appearance', 'support', 'payments'].includes(
+              new URLSearchParams(location.hash.split('?')[1] ?? '').get('section') ?? '',
+            )
+          ? new URLSearchParams(location.hash.split('?')[1] ?? '').get('section')!
+          : 'overview',
     category: string | null = null,
     selected: Product | undefined,
     orders: Order[] = [],
@@ -306,7 +313,7 @@ export async function mountMerchantConsole(
     revoke();
     let body = '';
     if (section === 'overview')
-      body = `<div class="mc-metrics">${metric('Vendas aprovadas', money(data.stats.gross_brl), 'sales', 'wallet')}${metric('Compradores', data.stats.buyers, 'buyers', 'buyers')}${metric('Pedidos entregues', data.stats.delivered_orders, 'delivered', 'delivered')}${metric('Para aprovar', data.pendingReview, 'pending', 'pending')}</div><section class="mc-panel mc-overview-panel"><div class="mc-overview-intro"><div><h2>Seu próximo passo</h2><p>Configure a vitrine e o atendimento. As alterações salvas aqui são usadas pelo seu bot no Telegram.</p></div><button data-section="orders">Conferir pedidos ${icon('chevron')}</button></div><div class="mc-quicklinks"><button data-section="products">${icon('products')}<span><b>Produtos e fotos</b><small>Organize seu catálogo</small></span>${icon('chevron')}</button><button data-section="appearance">${icon('appearance')}<span><b>Mensagem de entrada</b><small>Dê a sua cara à loja</small></span>${icon('chevron')}</button><button data-section="payments">${icon('payments')}<span><b>Dados de pagamento</b><small>Configure como receber</small></span>${icon('chevron')}</button></div><dl><div><dt>Pedidos criados</dt><dd>${data.stats.orders}</dd></div><div><dt>Aguardando pagamento</dt><dd>${data.pendingPayment}</dd></div><div><dt>Recusados</dt><dd>${data.stats.rejected_orders}</dd></div><div><dt>Vendas em Stars</dt><dd>${money(data.stats.gross_stars, 'XTR')}</dd></div></dl></section>`;
+      body = `${data.setupProgress ? renderSetupProgress(data.setupProgress, 'console') : ''}<div class="mc-metrics">${metric('Vendas aprovadas', money(data.stats.gross_brl), 'sales', 'wallet')}${metric('Compradores', data.stats.buyers, 'buyers', 'buyers')}${metric('Pedidos entregues', data.stats.delivered_orders, 'delivered', 'delivered')}${metric('Para aprovar', data.pendingReview, 'pending', 'pending')}</div><section class="mc-panel mc-overview-panel"><div class="mc-overview-intro"><div><h2>Seu próximo passo</h2><p>Configure a vitrine e o atendimento. As alterações salvas aqui são usadas pelo seu bot no Telegram.</p></div><button data-section="orders">Conferir pedidos ${icon('chevron')}</button></div><div class="mc-quicklinks"><button data-section="products">${icon('products')}<span><b>Produtos e fotos</b><small>Organize seu catálogo</small></span>${icon('chevron')}</button><button data-section="appearance">${icon('appearance')}<span><b>Mensagem de entrada</b><small>Dê a sua cara à loja</small></span>${icon('chevron')}</button><button data-section="payments">${icon('payments')}<span><b>Dados de pagamento</b><small>Configure como receber</small></span>${icon('chevron')}</button></div><dl><div><dt>Pedidos criados</dt><dd>${data.stats.orders}</dd></div><div><dt>Aguardando pagamento</dt><dd>${data.pendingPayment}</dd></div><div><dt>Recusados</dt><dd>${data.stats.rejected_orders}</dd></div><div><dt>Vendas em Stars</dt><dd>${money(data.stats.gross_stars, 'XTR')}</dd></div></dl></section>`;
     if (section === 'products') {
       const names = [
         ...new Set([...(data.categories ?? []), ...data.products.map((p) => p.category)]),
@@ -455,6 +462,15 @@ export async function mountMerchantConsole(
     listLoading = ['orders', 'notices'].includes(target) && !listLoaded.has(target);
     render();
     host.querySelector<HTMLElement>('.mc-title h2')?.focus();
+    if (target === 'overview') {
+      try {
+        await get();
+        if (request === navigationRequest && host.isConnected) render();
+      } catch (error) {
+        if (request === navigationRequest)
+          alert(error instanceof Error ? error.message : 'Não foi possível atualizar a configuração.', true);
+      }
+    }
     if (!listLoading) return;
     try {
       if (target === 'orders') {

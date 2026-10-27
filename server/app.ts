@@ -26,6 +26,7 @@ import { PaymentGateway } from './payment-gateway.js';
 import { PurinWallet } from './purin-wallet.js';
 import { PlatformSubscriptions } from './platform-subscriptions.js';
 import type { AutomaticActivation } from './automatic-activation.js';
+import { readSetupProgress } from './setup-progress.js';
 import { publicPaymentRouter, mercadoPagoWebhook } from './payment-routes.js';
 type AuthedRequest = Request & { identity: Identity; requestId: string };
 const tokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/),
@@ -514,12 +515,16 @@ export function createApp(
     },
   );
   app.get('/api/store/runtime', identity, async (req, res) => {
-    const account = await accounts.own((req as unknown as AuthedRequest).identity.uid);
+    const uid = (req as unknown as AuthedRequest).identity.uid;
+    const account = await accounts.own(uid);
     if (!account || account.access_status !== 'approved')
       throw new HttpError(403, 'STORE_NOT_APPROVED', 'Sua loja ainda não foi liberada.');
     res.json({
       runtime: services?.bots ? await services.bots.status(account.id) : null,
       activation: (await services?.activation?.status(account.id)) ?? null,
+      progress: services?.bots
+        ? await readSetupProgress(services.bots.store, account.id, uid)
+        : null,
     });
   });
   app.post(
