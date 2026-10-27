@@ -141,12 +141,27 @@ export async function buildRuntimeArchive(name: string, provider = 'squarecloud'
       scripts: {
         start:
           provider === 'hyze'
-            ? './node_modules/node/bin/node dist-server/server/bot-runner.js'
+            ? './node_modules/node/bin/node hyze-bot-start.mjs'
             : 'node dist-server/server/bot-runner.js',
       },
       ...(provider === 'hyze' ? { dependencies: { node: '24.18.0' } } : {}),
     }),
     ...(provider === 'hyze' ? { 'package-lock.json': JSON.stringify(hyzeBotLock) } : {}),
+    ...(provider === 'hyze'
+      ? {
+          'hyze-bot-start.mjs': `if(Number(process.versions.node.split('.')[0])<24)throw Error('Blackout requires Node 24');
+if(!process.env.BOT_API_ORIGIN||!process.env.BOT_RUNTIME_KEY){
+const {createServer}=await import('node:http');
+createServer((request,response)=>{response.writeHead(['/','/health'].includes(request.url||'')?200:503,{'Content-Type':'application/json','Cache-Control':'no-store'});response.end(JSON.stringify({ok:false,state:'awaiting_private_configuration'}));}).listen(Number(process.env.PORT||3000),'0.0.0.0');
+console.log('Blackout bot waiting for private runtime configuration');
+await new Promise(()=>{});
+}
+process.env.PORT||='3000';
+const {runBot}=await import('./dist-server/server/bot-runner.js');
+await runBot();
+`,
+        }
+      : {}),
     ...(provider === 'squarecloud'
       ? {
           'squarecloud.app': `DISPLAY_NAME=${name}\nDESCRIPTION=Blackout managed merchant runtime\nMAIN=dist-server/server/bot-runner.js\nMEMORY=256\nVERSION=24\nRUNTIME=nodejs\nAUTORESTART=true\n`,

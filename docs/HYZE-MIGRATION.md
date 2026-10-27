@@ -1,18 +1,21 @@
-# Migração preparada para Hyze Cloud
+# Migração para Hyze Cloud
 
 ## Estado em 27/10/2026
 
 ### Migração iniciada
 
 - Plano Starter confirmado pela API: 1.024 MB e quatro projetos estimados. A conexão privada da Hyze foi validada e novas ativações ficaram pausadas durante a migração.
-- Aplicação `Blackout-API` criada com 512 MB, porta 3000 e domínio solicitado `blackout-create-api.hyzecloud.app`. O domínio HTTPS ainda não foi validado.
+- API Hyze `d4da3202-673c-4985-98b1-c126468f39b5` publicada com 512 MB e porta 3000. HTTPS validado em `https://blackout-create-api.hyzecloud.app`: health/config 200 e configuração autenticada do piloto 200, incluindo leitura Firestore e escrita do limitador persistido.
 - O primeiro build falhou: a imagem Node padrão executou Node 22.23.2 e tentou recompilar o pacote já compilado. O pacote corrigido remove scripts de build e dependências de desenvolvimento e fixa Node 24.18.0 pelo npm, com lockfile próprio. O comando é `./node_modules/node/bin/node hyze-start.mjs`.
-- A publicação do pacote corrigido ainda está pendente. Nenhuma identidade Firebase ou chave de cifragem foi instalada na Hyze. API e piloto continuam na Square; frontend permanece com a origem anterior.
-- Não habilitar novas ativações nem parar o piloto Square antes de validar o pacote corrigido, a API e a transferência coordenada do runtime.
+- A proprietária autorizou explicitamente a identidade Firebase Admin dedicada e as duas chaves de cifragem no ambiente privado da API Hyze. Os valores existentes foram preservados e instalados sem incluir segredos em ZIP, Git ou frontend.
+- Frontend publicado no Firebase Hosting com origem Hyze e CSP correspondente; bundle `index-C_EYury9.js`.
+- Worker piloto Hyze `56f6b1ca-cf09-42ed-9379-d401d810eadd` publicado com 256 MB, ainda aguardando configuração privada. Não executa polling. A transferência da credencial do piloto e sua execução ainda dependem da autorização solicitada à proprietária.
+- Worker e API antigos continuam na Square. Novas ativações permanecem pausadas até validar a transferência coordenada do piloto e o painel autenticado.
+- Conferência de pagamentos: nenhuma fatura de assinatura registrada; piloto com um pedido expirado e um cancelado, nenhum aguardando pagamento ainda válido. Não houve cobrança ou saque de teste nesta migração.
+- Verificação de tipos, compilação e suíte completa: 116 testes aprovados.
 
 - A criação automática de novos aplicativos na Square foi pausada por escolha da proprietária.
-- O provedor da automação agora é a Hyze. A chave Hyze ainda precisa ser conectada; mantenha novas ativações desabilitadas até a migração ser validada.
-- A API central e o bot piloto ainda estão na Square. Não foram parados, movidos ou excluídos.
+- O provedor da automação agora é a Hyze, com chave conectada; mantenha novas ativações desabilitadas até a transferência do piloto ser validada.
 - O frontend permanece no Firebase Hosting; identidade, banco e dados continuam no Firebase.
 - Na preparação inicial, a conta Hyze mostrou Free, 256 MB totais e sete dias de teste. Depois a proprietária contratou Starter e autorizou iniciar a migração, conforme atualização acima.
 
@@ -25,6 +28,10 @@ Após `npm run build`, rode `node --import tsx scripts/package-hyze.ts`. Isso ge
 - `private-env.example`: nomes e placeholders das variáveis privadas necessárias.
 
 Não reutilize a ZIP da publicação incremental Square como primeira publicação Hyze: ela não contém os manifestos que a Hyze precisa para instalar dependências.
+
+A Hyze exige readiness HTTP em `/health` para a API e também em `/` para o worker. Antes da configuração privada, os inicializadores respondem nessas rotas técnicas com `ok: false` e estado de preparação, sem acessar Firebase ou Telegram; `/api/health` continua 503. Isso permite concluir o primeiro deploy, necessário para a API de variáveis encontrar o diretório da aplicação. A configuração privada seguida de reinício inicia o serviço real. Somente health real, autenticação no banco e heartbeat do bot comprovam operação.
+
+`PLATFORM_DATABASE` é reservado na Hyze; o inicializador define Firestore internamente. O pacote da API usa um manifesto de produção sem scripts de build, e os bots incluem Node 24.18.0 fixado e um inicializador que chama explicitamente `runBot()` após receber as duas variáveis privadas.
 
 ## Conexão do provedor de bots
 

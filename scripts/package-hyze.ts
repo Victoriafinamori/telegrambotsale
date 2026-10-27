@@ -35,7 +35,14 @@ files['hyze-start.mjs'] = `import {mkdir, writeFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 if (Number(process.versions.node.split('.')[0]) < 24) throw Error('Blackout requires Node 24 or newer');
 const raw = process.env.BLACKOUT_FIREBASE_ADMIN_JSON;
-if (!raw) throw Error('Configure the private Firebase service identity before starting');
+if (!raw) {
+  // Let Hyze finish the first deployment before its env API can access the app directory.
+  // This bootstrap exposes no application routes or data and never reports a healthy API.
+  const {createServer}=await import('node:http');
+  createServer((request,response)=>{response.writeHead(['/','/health'].includes(request.url||'')?200:503,{'Content-Type':'application/json','Cache-Control':'no-store'});response.end(JSON.stringify({ok:false,code:'SERVER_IDENTITY_NOT_CONFIGURED'}));}).listen(Number(process.env.PORT||3000),'0.0.0.0');
+  console.log('Blackout bootstrap waiting for private server identity; Node '+process.versions.node);
+  await new Promise(()=>{});
+}
 let identity;
 try {identity = JSON.parse(raw);} catch {throw Error('Invalid private Firebase identity');}
 if(identity.project_id !== process.env.FIREBASE_PROJECT_ID || !identity.client_email?.endsWith('.iam.gserviceaccount.com') || !identity.private_key?.includes('BEGIN PRIVATE KEY')) throw Error('Firebase identity does not match the configured project');
@@ -45,6 +52,7 @@ process.env.GOOGLE_APPLICATION_CREDENTIALS=resolve(folder,'firebase-admin.json')
 await writeFile(process.env.GOOGLE_APPLICATION_CREDENTIALS,raw,{mode:0o600});
 delete process.env.BLACKOUT_FIREBASE_ADMIN_JSON;
 process.env.NODE_ENV='production';
+process.env.PLATFORM_DATABASE='firestore';
 process.env.HOST='0.0.0.0';
 process.env.PORT ||= '3000';
 await import('./dist-server/server/main.js');
@@ -58,7 +66,6 @@ await writeFile(
   join(destination, 'private-env.example'),
   `# Placeholders only. Install through Hyze private env settings, never inside the ZIP.
 FIREBASE_PROJECT_ID=blackout-create
-PLATFORM_DATABASE=firestore
 API_AUTH_MODE=bearer
 APP_ORIGIN=https://blackout-create.web.app
 API_PUBLIC_ORIGIN=https://REPLACE_WITH_THE_REAL_API_ORIGIN
@@ -67,7 +74,7 @@ FIRESTORE_PREFER_REST=true
 BOT_TOKEN_ENCRYPTION_KEY=KEEP_THE_EXISTING_PRIVATE_KEY
 ADMIN_MFA_ENCRYPTION_KEY=KEEP_THE_EXISTING_DIFFERENT_PRIVATE_KEY
 BLACKOUT_FIREBASE_ADMIN_JSON=INSTALL_PRIVATE_RUNTIME_SERVICE_ACCOUNT_JSON
-# NODE_ENV and PORT are reserved by Hyze. hyze-start.mjs sets production/HOST internally.
+# Hyze reserves PLATFORM_*, NODE_ENV and PORT. The initializer sets Firestore/production/HOST internally.
 # Start command: ./node_modules/node/bin/node hyze-start.mjs; exposed port: 3000; API memory: 512 MB.
 `,
 );

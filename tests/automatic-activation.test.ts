@@ -342,6 +342,7 @@ test('Hyze adapter deploys via documented multipart and never sends reserved env
   const form = calls[2].init!.body as FormData;
   assert.equal(form.get('runtime'), 'node');
   assert.equal(form.get('memoryMB'), '256');
+  assert.equal(form.get('startupCommand'), './node_modules/node/bin/node hyze-bot-start.mjs');
   assert.equal(form.get('exposePort'), null);
   assert.equal(form.get('name'), 'Blackout-00000000-0000-4000-8000-000000000000');
   await hyze.configure(id, {

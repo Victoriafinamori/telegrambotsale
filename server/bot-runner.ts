@@ -198,8 +198,9 @@ export async function runBot() {
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Cache-Control', 'no-store');
     const ok = running && Date.now() - lastHealthy < 90000 && Date.now() - lastMaintenance < 120000;
-    res.statusCode = req.url === '/health' ? (ok ? 200 : 503) : 404;
-    res.end(JSON.stringify(req.url === '/health' ? { ok } : { error: 'not_found' }));
+    const healthPath = req.url === '/health' || req.url === '/';
+    res.statusCode = healthPath ? (ok ? 200 : 503) : 404;
+    res.end(JSON.stringify(healthPath ? { ok } : { error: 'not_found' }));
   }).listen(port, '0.0.0.0');
   for (const signal of ['SIGTERM', 'SIGINT'] as const)
     process.once(signal, () => {
