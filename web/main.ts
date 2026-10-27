@@ -22,6 +22,7 @@ import { botGuide } from './onboarding.js';
 import { adminBotCard, activationLabels } from './admin-bot.js';
 import { mountPurinAdmin } from './purin-admin.js';
 import { mountSubscriptionAdmin } from './subscription.js';
+import { mountHostingAdmin, type ActivationStatus } from './hosting-admin.js';
 import { mountPurchaseCheckout } from './purchase-checkout.js';
 import { mountMerchantConsole } from './merchant-console.js';
 import { mountPixCheckout } from './pix-checkout.js';
@@ -77,6 +78,7 @@ let botSetup: BotSetup | null = null,
   guideStep = 1;
 type RuntimeStatus = { provisioned: boolean; online: boolean; ownerVerified: boolean };
 let botRuntime: RuntimeStatus | null = null;
+let automaticActivation: ActivationStatus | null = null;
 let adminRuntime: RuntimeStatus | null = null;
 let adminProof = '',
   mfaSecret = '';
@@ -214,11 +216,19 @@ function adminView() {
     paymentHost.className = 'card';
     workspace?.append(paymentHost);
     void mountPurinAdmin(paymentHost, api);
+    const hostingHost = document.createElement('section');
+    hostingHost.className = 'card';
+    workspace?.append(hostingHost);
+    void mountHostingAdmin(hostingHost, api);
     if (a) {
       const bindingHost = document.createElement('section');
       bindingHost.className = 'setup-status';
       document.querySelector('.detail')?.append(bindingHost);
       void mountPurinAdmin(bindingHost, api, a.id);
+      const activationHost = document.createElement('section');
+      activationHost.className = 'setup-status';
+      document.querySelector('.detail')?.append(activationHost);
+      void mountHostingAdmin(activationHost, api, a.id);
     }
   }
   if (a && section !== 'audit') {
@@ -264,7 +274,7 @@ function merchantView() {
   }
   const approved = a.access_status === 'approved';
   shell(
-    `<main class="merchant-shell"><div class="page-heading"><div><span class="eyebrow">${esc(a.store_name)}</span><h1>${botSetup?.activation_status === 'active' ? 'Sua loja' : 'Primeiros passos'}</h1></div><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div>${approved ? `<p class="welcome-note">${botSetup?.activation_status === 'active' ? 'Acompanhe sua ativação e os dados da contratação.' : 'Seu acesso foi liberado. Siga as etapas para preparar seu bot.'}</p>${botGuide(botSetup, guideStep, Boolean(config?.emulatorHost))}` : `<section class="card"><h2>${a.access_status === 'suspended' ? 'Acesso suspenso' : 'Sua loja está em análise'}</h2><p>${a.access_status === 'suspended' ? esc(a.suspension_reason || 'Fale com a Blackout Create pelo canal da contratação.') : 'Sua conta já está vinculada. Após a aprovação, você terá um assistente para criar o bot, informar seu token e ID do Telegram e solicitar a ativação na Square Cloud.'}</p><p class="note">A mensalidade começa somente após a ativação efetiva do bot.</p><button class="quiet" id="refresh">Atualizar situação</button></section>`}<details class="card contract-details"><summary>Sua contratação · ${a.reference === 'PILOTO INTERNO BLACKOUT / SEM COBRANCA REAL' ? 'Piloto interno sem cobrança' : money(a.price_cents)}</summary><dl><div><dt>Período contratado</dt><dd>${a.billing_months ?? 1} mês(es)</dd></div><div><dt>Início do ciclo</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div><div><dt>Contato da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Conta</dt><dd>${esc(me!.user.email)}</dd></div></dl></details></main>`,
+    `<main class="merchant-shell"><div class="page-heading"><div><span class="eyebrow">${esc(a.store_name)}</span><h1>${botSetup?.activation_status === 'active' ? 'Sua loja' : 'Primeiros passos'}</h1></div><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div>${approved ? `<p class="welcome-note">${botSetup?.activation_status === 'active' ? 'Acompanhe sua ativação e os dados da contratação.' : 'Seu acesso foi liberado. Siga as etapas para preparar seu bot.'}</p>${botGuide(botSetup, guideStep, Boolean(config?.emulatorHost), automaticActivation)}` : `<section class="card"><h2>${a.access_status === 'suspended' ? 'Acesso suspenso' : 'Sua loja está em análise'}</h2><p>${a.access_status === 'suspended' ? esc(a.suspension_reason || 'Fale com a Blackout Create pelo canal da contratação.') : 'Sua conta já está vinculada. Após a aprovação, você terá um assistente para criar o bot, informar seu token e ID do Telegram e solicitar a ativação na Square Cloud.'}</p><p class="note">A mensalidade começa somente após a ativação efetiva do bot.</p><button class="quiet" id="refresh">Atualizar situação</button></section>`}<details class="card contract-details"><summary>Sua contratação · ${a.reference === 'PILOTO INTERNO BLACKOUT / SEM COBRANCA REAL' ? 'Piloto interno sem cobrança' : money(a.price_cents)}</summary><dl><div><dt>Período contratado</dt><dd>${a.billing_months ?? 1} mês(es)</dd></div><div><dt>Início do ciclo</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div><div><dt>Contato da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Conta</dt><dd>${esc(me!.user.email)}</dd></div></dl></details></main>`,
   );
   if (me?.role === 'platform')
     document
@@ -477,10 +487,14 @@ async function load() {
           : botSetup
             ? 3
             : 1;
-    botRuntime =
+    const runtimeInfo =
       me.account?.access_status === 'approved'
-        ? (await api<{ runtime: typeof botRuntime }>('/store/runtime')).runtime
+        ? await api<{ runtime: typeof botRuntime; activation: ActivationStatus | null }>(
+            '/store/runtime',
+          )
         : null;
+    botRuntime = runtimeInfo?.runtime ?? null;
+    automaticActivation = runtimeInfo?.activation ?? null;
     merchantView();
   }
 }
@@ -832,8 +846,8 @@ document.addEventListener('click', (event) => {
     } else if (button.id === 'submit-bot-setup') {
       botSetup = (await api<{ setup: BotSetup }>('/onboarding/submit', {})).setup;
       guideStep = 4;
-      merchantView();
-      flash('Dados enviados. Aguarde a configuração e ativação pela Blackout Create.');
+      await load();
+      flash('Dados enviados. Acompanhe a ativação nesta página.');
     } else if (button.id === 'reveal-bot-token') {
       const value = await api<{ token: string }>('/admin/accounts/' + selected + '/bot-token', {});
       dialog(

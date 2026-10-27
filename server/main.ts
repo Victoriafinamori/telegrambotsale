@@ -10,6 +10,7 @@ import { FirestoreDocumentStore } from './document-store.js';
 import { FirestorePlatform } from './firestore-platform.js';
 import { AdminMfa } from './admin-mfa.js';
 import { BotStore } from './bot-store.js';
+import { AutomaticActivation } from './automatic-activation.js';
 const config = loadConfig();
 if (config.PLATFORM_DATABASE === 'postgres' && !config.DATABASE_URL)
   throw new Error('Configure DATABASE_URL ou use npm run local para o ambiente de testes.');
@@ -26,6 +27,19 @@ const firestore =
         config.inviteMs,
       )
     : null;
+const bots =
+  firestore && config.BOT_TOKEN_ENCRYPTION_KEY
+    ? new BotStore(firestore.store, config.BOT_TOKEN_ENCRYPTION_KEY)
+    : undefined;
+const activation =
+  firestore && bots && config.BOT_TOKEN_ENCRYPTION_KEY && config.API_PUBLIC_ORIGIN
+    ? new AutomaticActivation(
+        bots,
+        firestore.onboarding,
+        config.BOT_TOKEN_ENCRYPTION_KEY,
+        config.API_PUBLIC_ORIGIN,
+      )
+    : undefined;
 const accounts = firestore ?? new Accounts(db!, config.inviteMs),
   app = createApp(
     config,
@@ -35,9 +49,8 @@ const accounts = firestore ?? new Accounts(db!, config.inviteMs),
     firestore
       ? {
           onboarding: firestore.onboarding,
-          bots: config.BOT_TOKEN_ENCRYPTION_KEY
-            ? new BotStore(firestore.store, config.BOT_TOKEN_ENCRYPTION_KEY)
-            : undefined,
+          bots,
+          activation,
           adminMfa: config.ADMIN_MFA_ENCRYPTION_KEY
             ? new AdminMfa(firestore.store, config.ADMIN_MFA_ENCRYPTION_KEY)
             : undefined,
@@ -55,8 +68,21 @@ const cleanup = setInterval(
   3600000,
 );
 cleanup.unref();
+let activationBusy = false;
+const activationTick = setInterval(() => {
+  if (!activation || activationBusy) return;
+  activationBusy = true;
+  void activation
+    .tick()
+    .catch(() => console.error('activation.worker_retry'))
+    .finally(() => {
+      activationBusy = false;
+    });
+}, 15000);
+activationTick.unref();
 for (const signal of ['SIGTERM', 'SIGINT'])
   process.once(signal, () => {
     clearInterval(cleanup);
+    clearInterval(activationTick);
     server.close(() => void db?.close());
   });

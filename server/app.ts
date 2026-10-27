@@ -25,6 +25,7 @@ import { PurinCashPayments } from './purin-cash.js';
 import { PaymentGateway } from './payment-gateway.js';
 import { PurinWallet } from './purin-wallet.js';
 import { PlatformSubscriptions } from './platform-subscriptions.js';
+import type { AutomaticActivation } from './automatic-activation.js';
 import { publicPaymentRouter, mercadoPagoWebhook } from './payment-routes.js';
 type AuthedRequest = Request & { identity: Identity; requestId: string };
 const tokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/),
@@ -51,6 +52,7 @@ export function createApp(
     payments?: MercadoPagoPayments;
     purin?: PurinCashPayments;
     wallet?: PurinWallet;
+    activation?: AutomaticActivation;
   },
 ) {
   const app = express(),
@@ -515,7 +517,10 @@ export function createApp(
     const account = await accounts.own((req as unknown as AuthedRequest).identity.uid);
     if (!account || account.access_status !== 'approved')
       throw new HttpError(403, 'STORE_NOT_APPROVED', 'Sua loja ainda não foi liberada.');
-    res.json({ runtime: services?.bots ? await services.bots.status(account.id) : null });
+    res.json({
+      runtime: services?.bots ? await services.bots.status(account.id) : null,
+      activation: (await services?.activation?.status(account.id)) ?? null,
+    });
   });
   app.post(
     '/api/store/telegram-link',
@@ -557,7 +562,11 @@ export function createApp(
   });
   app.post('/api/onboarding/submit', identity, async (req, res) => {
     z.object({}).strict().parse(req.body);
-    res.json({ setup: await onboarding.submit((req as unknown as AuthedRequest).identity.uid) });
+    const uid = (req as unknown as AuthedRequest).identity.uid;
+    const setup = await onboarding.submit(uid);
+    const account = await accounts.own(uid);
+    if (account) await services?.activation?.enqueue(account.id);
+    res.json({ setup });
   });
   app.post('/api/invitations/inspect', rate('inspect', 30, 15 * 60000), async (req, res) => {
     const { token } = z.object({ token: tokenSchema }).strict().parse(req.body);
@@ -680,6 +689,36 @@ export function createApp(
     res.json({ accounts: await accounts.list(offset, queue) });
   });
   app.get('/api/admin/audit', async (_req, res) => res.json({ events: await accounts.history() }));
+  app.get('/api/admin/hosting', async (_req, res) =>
+    res.json(
+      services?.activation
+        ? await services.activation.settings()
+        : { connected: false, enabled: false },
+    ),
+  );
+  app.post('/api/admin/hosting', rate('hosting-connect', 5, 600000), async (req, res) => {
+    if (!services?.activation)
+      throw new HttpError(503, 'HOSTING_UNAVAILABLE', 'Hospedagem automática indisponível.');
+    res.json(
+      await services.activation.connect((req as unknown as AuthedRequest).identity.uid, req.body),
+    );
+  });
+  app.post('/api/admin/hosting/pause', async (_req, res) => {
+    if (!services?.activation)
+      throw new HttpError(503, 'HOSTING_UNAVAILABLE', 'Hospedagem automática indisponível.');
+    res.json(await services.activation.pause());
+  });
+  app.get('/api/admin/accounts/:id/activation', async (req, res) =>
+    res.json({
+      activation: (await services?.activation?.status(idSchema.parse(req.params.id))) ?? null,
+    }),
+  );
+  app.post('/api/admin/accounts/:id/activation/retry', async (req, res) => {
+    z.object({}).strict().parse(req.body);
+    if (!services?.activation)
+      throw new HttpError(503, 'HOSTING_UNAVAILABLE', 'Hospedagem automática indisponível.');
+    res.json({ activation: await services.activation.retry(idSchema.parse(req.params.id)) });
+  });
   app.get('/api/admin/accounts/:id/bot-setup', async (req, res) => {
     res.json({ setup: await onboarding.read(idSchema.parse(req.params.id)) });
   });
