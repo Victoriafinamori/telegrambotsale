@@ -309,3 +309,19 @@ body:has(.purchase-checkout) {
     scroll-behavior: auto;
   }
 }
+
+.pc-summary .pc-buy {
+  display: flex;
+  width: 100%;
+  justify-content: center;
+  align-items: center;
+  min-height: 48px;
+  margin-top: 24px;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.5;
+}
+.pc-summary .pc-buy + small {
+  display: block;
+  margin-top: 12px;
+}
