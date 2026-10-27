@@ -182,6 +182,8 @@ test('Withdrawal requires matching web authorization and Telegram owner, sends o
   assert.equal(result.status, 'completed');
   assert.equal(result.netAmountCents, 900);
   assert.equal(result.feeCents, 100);
+  assert.equal(result.gatewayFeeCents, 100);
+  assert.equal(result.blackoutFeeCents, 0);
   assert.equal(p.posts.length, 1);
   assert(p.posts[0].idempotencyKey.startsWith('blackout_'));
   assert.equal(p.posts[0].pixKey, 'merchant@example.test');

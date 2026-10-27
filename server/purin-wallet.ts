@@ -7,6 +7,7 @@ import { SecretVault } from './secret-vault.js';
 import { pixKey, pixTypes } from './pix.js';
 import { HttpError } from './types.js';
 import { tokenHash } from './accounts.js';
+import { saleBreakdown, payoutBreakdown } from './wallet-breakdown.js';
 
 type Actor = { uid: string } | { telegram: string; auth: RuntimeAccess };
 export type WalletScreen = {
@@ -169,8 +170,14 @@ export class PurinWallet {
           ? 'expired'
           : row.status,
       createdAt: row.created_at,
+      submittedAt: row.submitted_at ?? null,
       feeCents: row.fee_cents ?? null,
+      gatewayFeeCents: row.gateway_fee_cents ?? null,
+      blackoutFeeCents: row.blackout_fee_cents ?? null,
       netAmountCents: row.net_cents ?? null,
+      completedAt: row.completed_at ?? null,
+      reversedAt: row.reversed_at ?? null,
+      updatedAt: row.updated_at ?? row.created_at,
       code: row.code ?? '',
       message: row.message ?? (row.status === 'cancelled' ? 'Saque cancelado.' : ''),
     };
@@ -214,6 +221,12 @@ export class PurinWallet {
       this.sub(ctx),
       this.provider(ctx.generation, ctx.subaccount, '/transactions?limit=20'),
     ]);
+    if (movements.subaccountId !== undefined && movements.subaccountId !== ctx.subaccount)
+      throw new HttpError(
+        409,
+        'WALLET_ACCOUNT_MISMATCH',
+        'O extrato não corresponde à subconta da loja.',
+      );
     withdrawals = await this.store.list(`merchant_wallets/${id}/withdrawals`, {
       limit: 20,
       orderBy: 'created_at',
@@ -222,19 +235,42 @@ export class PurinWallet {
       balanceCents: sub.balanceCents,
       availableCents: sub.availableCents,
       blockedCents: sub.medBlockedCents,
-      totalReceivedCents: sub.totalReceivedCents ?? 0,
+      totalReceivedCents: sub.totalReceivedCents ?? null,
+      checkedAt: this.now(),
       enabled: ctx.enabled,
       active: sub.active === true,
       markupPercent: sub.payoutFeePercent ?? 0,
       markupFixedCents: sub.payoutFeeFixedCents ?? 0,
       withdrawals: withdrawals.map((r) => this.safe(r)),
-      transactions: (movements.transactions ?? []).map((r: Doc) => ({
-        id: String(r.id ?? r.refId),
-        type: String(r.type),
-        amountCents: cents.or(z.number().int().negative()).parse(r.amountCents),
-        description: String(r.description ?? '').slice(0, 200),
-        createdAt: r.createdAt,
-      })),
+      transactions: await Promise.all(
+        (movements.transactions ?? []).slice(0, 20).map(async (r: Doc) => {
+          const reference = typeof r.refId === 'string' ? r.refId.slice(0, 160) : '';
+          const orders =
+            r.type === 'sale' && /^psc_[A-Za-z0-9_-]{1,120}$/.test(reference)
+              ? await this.store.list(`bot_shops/${id}/orders`, {
+                  limit: 2,
+                  equals: ['purin_payment_id', reference],
+                })
+              : [];
+          const order =
+            orders.length === 1 &&
+            orders[0].payment_method === 'purincash' &&
+            orders[0].purin_subaccount === ctx.subaccount &&
+            orders[0].currency === 'BRL'
+              ? orders[0]
+              : null;
+          return {
+            id: String(r.id ?? r.refId),
+            reference,
+            orderId: order ? String(order.id) : null,
+            type: String(r.type),
+            amountCents: cents.or(z.number().int().negative()).parse(r.amountCents),
+            description: String(r.description ?? '').slice(0, 200),
+            createdAt: r.createdAt,
+            breakdown: r.type === 'sale' ? saleBreakdown(r, order?.total) : null,
+          };
+        }),
+      ),
     };
   }
   async prepare(id: string, actor: Actor, raw: unknown) {
@@ -546,11 +582,11 @@ export class PurinWallet {
           ? 'reversed'
           : 'processing'
         : result.status;
-    const fee =
-        result.platformFeeCents == null
-          ? null
-          : cents.parse(result.platformFeeCents) + cents.parse(result.feeCents ?? 0),
-      net = result.netAmountCents == null ? null : cents.parse(result.netAmountCents);
+    for (const field of ['feeCents', 'platformFeeCents', 'netAmountCents'])
+      if (result[field] != null) cents.parse(result[field]);
+    const breakdown = payoutBreakdown(result);
+    const fee = breakdown.totalFeeCents,
+      net = breakdown.netCents;
     if (
       net !== null &&
       (net > row.amount_cents || (fee !== null && fee + net !== row.amount_cents))
@@ -559,7 +595,18 @@ export class PurinWallet {
     await this.finish(id, wid, {
       status,
       fee_cents: fee,
+      gateway_fee_cents: breakdown.gatewayFeeCents,
+      blackout_fee_cents: breakdown.blackoutFeeCents,
       net_cents: net,
+      completed_at:
+        typeof result.completedAt === 'string' && Number.isFinite(Date.parse(result.completedAt))
+          ? new Date(result.completedAt)
+          : null,
+      reversed_at:
+        typeof result.reversedAt === 'string' && Number.isFinite(Date.parse(result.reversedAt))
+          ? new Date(result.reversedAt)
+          : null,
+      updated_at: this.now(),
       code: typeof result.code === 'string' ? result.code.slice(0, 80) : '',
       message:
         status === 'completed'
@@ -629,7 +676,8 @@ export class PurinWallet {
               ? w.withdrawals
                   .slice(0, 8)
                   .map(
-                    (r) => `${money(r.amountCents)} · ${r.status}${r.code ? ' · ' + r.code : ''}`,
+                    (r) =>
+                      `${money(r.amountCents)} · ${r.status}${r.code ? ' · ' + r.code : ''}\nPurin: ${r.gatewayFeeCents == null ? 'não informada' : money(r.gatewayFeeCents)} · Blackout: ${r.blackoutFeeCents == null ? 'não informada' : money(r.blackoutFeeCents)} · Líquido: ${r.netAmountCents == null ? 'não informado' : money(r.netAmountCents)}`,
                   )
                   .join('\n') || 'Nenhum saque solicitado.'
               : 'Somente as vendas Pix Blackout entram nesta carteira.'
