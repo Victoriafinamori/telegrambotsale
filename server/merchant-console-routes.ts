@@ -149,6 +149,16 @@ export function merchantConsoleRouter(
     await console.moveProduct(id, uid, req.body);
     res.json({ ok: true });
   });
+  router.get('/stock', async (req, res) => {
+    const { id, uid } = owner(req);
+    res.set('Cache-Control', 'no-store');
+    res.json(await console.inventory(id, uid, z.string().parse(req.query.productId)));
+  });
+  router.post('/stock/manage', async (req, res) => {
+    const { id, uid } = owner(req);
+    await console.manageStock(id, uid, req.body);
+    res.json({ ok: true });
+  });
   router.post('/stock', async (req, res) => {
     const { id, uid } = owner(req);
     await console.addStock(id, uid, req.body);

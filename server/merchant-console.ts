@@ -1,3 +1,4 @@
+import { stockItems, stockVersion, changeStock } from './stock-management.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { DocumentStore, DocumentTransaction, Doc } from './document-store.js';
@@ -321,6 +322,45 @@ export class MerchantConsole {
       [shop.products[index], shop.products[target]] = [shop.products[target], shop.products[index]];
       tx.set(botRoot(id), { ...shop, portal_revision: value.revision + 1 });
       this.audit(tx, id, uid, 'store.product_reordered_web');
+    });
+  }
+  async inventory(id: string, uid: string, productId: string) {
+    z.string()
+      .regex(/^[a-f0-9]{12}$/)
+      .parse(productId);
+    return botTransaction(this.store, async (tx) => {
+      const { shop } = await this.owner(tx, id, uid);
+      const stock = await tx.get(botPath(id, 'products', productId));
+      if (!stock || !shop.products.some((p) => p.id === productId))
+        throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'Produto não encontrado.');
+      return { version: stockVersion(stock), units: stockItems(stock, this.vault, id, productId) };
+    });
+  }
+  async manageStock(id: string, uid: string, input: unknown) {
+    const value = z
+      .object({
+        productId: z.string().regex(/^[a-f0-9]{12}$/),
+        action: z.enum(['delete', 'clear', 'shuffle']),
+        version: z.string().regex(/^[a-f0-9]{12}$/),
+        unitId: z
+          .string()
+          .regex(/^[a-f0-9]{16}$/)
+          .optional(),
+      })
+      .strict()
+      .parse(input);
+    await botTransaction(this.store, async (tx) => {
+      const { shop } = await this.owner(tx, id, uid);
+      const target = botPath(id, 'products', value.productId),
+        stock = await tx.get(target);
+      const product = shop.products.find((p) => p.id === value.productId);
+      if (!stock || !product)
+        throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'Produto não encontrado.');
+      changeStock(stock, value.action, value.version, value.unitId);
+      product.stock = stock.units.length;
+      tx.set(target, stock);
+      tx.set(botRoot(id), { ...shop, portal_revision: (shop.portal_revision ?? 0) + 1 });
+      this.audit(tx, id, uid, 'store.stock_' + value.action);
     });
   }
   async addStock(id: string, uid: string, input: unknown) {

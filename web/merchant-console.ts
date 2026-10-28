@@ -353,7 +353,7 @@ export async function mountMerchantConsole(
         )}</select></label>${input('price', data.payment_mode === 'manual' ? 'Preço · R$' : 'Preço · Stars', p ? (data.payment_mode === 'manual' ? p.price / 100 : p.price) : '', 'type="number" required min="0.01" max="100000" step="' + (data.payment_mode === 'manual' ? '0.01' : '1') + '"')}</div>${picture('banner', p?.banner ?? '', 'Foto do produto · opcional')}${data.payment_mode === 'manual' ? picture('pix_qr', p?.pix_qr ?? '', 'QR Code Pix deste produto · opcional') + '<p class="mc-note">Envie o QR gerado no seu banco para o preço deste produto. Usado no Pix manual para uma unidade, sem cupom. Carrinhos com vários itens ou quantidade maior recebem os dados Pix manuais. Ao mudar o preço, envie um QR atualizado; o anterior não será usado para o novo valor.</p>' : ''}<label class="mc-check"><input type="checkbox" name="enabled" ${p?.enabled !== false ? 'checked' : ''}> Disponível no catálogo</label><button type="submit">Salvar produto</button></form></section>`;
     }
     if (section === 'stock')
-      body = `<section class="mc-panel"><h2>Adicionar estoque</h2><p>Cada linha é uma unidade exclusiva. O conteúdo é cifrado e entregue após a aprovação do pagamento.</p>${data.products.length ? `<form data-form="stock"><input type="hidden" name="requestId" value="${crypto.randomUUID()}"><label>Produto<select name="productId">${data.products.map((p) => `<option value="${p.id}">${esc(p.title)} · ${p.stock} disponíveis</option>`).join('')}</select></label>${area('units', 'Uma unidade por linha', '', 20020)}<small>Até 20 unidades por envio · 100 disponíveis por produto. Os códigos existentes não são exibidos neste painel.</small><button type="submit">Adicionar unidades</button></form><p>Para adicionar arquivos digitais ao estoque, envie o arquivo em <b>/admin → Estoque</b> no bot. Fotos da vitrine podem ser enviadas pelo próprio site.</p>` : empty('Cadastre um produto primeiro', 'Depois ele aparecerá aqui para receber estoque.')}</section>`;
+      body = `<section class="mc-panel"><h2>Estoque disponível</h2><p>Itens reservados em pedidos não aparecem nesta lista e não serão excluídos.</p><div class="mc-shortcuts">${data.products.map((p) => `<button class="quiet" data-inventory="${p.id}">${esc(p.title)} · ${p.stock} un.</button>`).join('')}</div><h3>Adicionar unidades</h3><p>Cada linha é uma unidade exclusiva. O conteúdo é cifrado e entregue após a aprovação do pagamento.</p>${data.products.length ? `<form data-form="stock"><input type="hidden" name="requestId" value="${crypto.randomUUID()}"><label>Produto<select name="productId">${data.products.map((p) => `<option value="${p.id}">${esc(p.title)} · ${p.stock} disponíveis</option>`).join('')}</select></label>${area('units', 'Uma unidade por linha', '', 20020)}<small>Até 20 unidades por envio · 100 disponíveis por produto. Clique no produto acima para consultar as unidades disponíveis.</small><button type="submit">Adicionar unidades</button></form><p>Para adicionar arquivos digitais ao estoque, envie o arquivo em <b>/admin → Estoque</b> no bot. Fotos da vitrine podem ser enviadas pelo próprio site.</p>` : empty('Cadastre um produto primeiro', 'Depois ele aparecerá aqui para receber estoque.')}</section>`;
     if (section === 'orders')
       body = `<section class="mc-panel"><div class="mc-panel-head"><h2>Pedidos</h2><button class="quiet" data-action="toggle-pending">${pendingOnly ? 'Ver todos' : 'Só aguardando aprovação'}</button></div>${orders.length ? orders.map((o) => `<article class="mc-order"><div class="mc-panel-head"><div><b>Pedido ${o.id}</b><small>${new Date(o.created_at).toLocaleString('pt-BR')}</small></div><span class="badge">${statuses[o.status] ?? esc(o.status)}</span></div><p><b>${esc(o.buyer_name || o.buyer_id)}</b>${o.buyer_username ? ' · @' + esc(o.buyer_username) : ''}</p><p>${o.items.map((i) => `${i.quantity} × ${esc(i.title)}`).join('<br>')}</p><strong>${money(o.total, o.currency)}</strong>${o.rejection_reason ? `<p>Recusa: ${esc(o.rejection_reason)}</p>` : ''}<div class="mc-shortcuts">${o.hasReceipt ? `<button class="quiet" data-receipt="${o.id}">Ver comprovante</button>` : ''}${o.status === 'awaiting_review' ? `<button data-approve="${o.id}" data-revision="${o.receipt_revision}">Aprovar e entregar</button><button class="quiet" data-reject="${o.id}" data-revision="${o.receipt_revision}">Recusar</button>` : ''}</div></article>`).join('') : empty('Nenhum pedido nesta lista', 'As compras feitas no Telegram aparecerão aqui com os itens e a situação do pagamento.')}<div class="mc-shortcuts">${cursor ? '<button class="quiet" data-action="first-orders">Primeira página</button>' : ''}${next ? '<button class="quiet" data-action="next-orders">Próxima página</button>' : ''}</div></section>`;
     if (section === 'appearance')
@@ -630,9 +630,68 @@ export async function mountMerchantConsole(
       dialog.querySelector<HTMLElement>('[data-close]')
     )?.focus();
   };
+  const inventoryDialog = async (productId: string) => {
+    const product = data.products.find((p) => p.id === productId);
+    const dialog = document.createElement('dialog');
+    dialog.className = 'mc-stock-dialog';
+    dialog.setAttribute('aria-label', 'Estoque do produto');
+    host.append(dialog);
+    dialog.addEventListener('close', () => dialog.remove());
+    const load = async () => {
+      const result = await api<{
+        version: string;
+        units: { id: string; kind: string; text: string }[];
+      }>('/store/manage/stock?productId=' + productId);
+      dialog.innerHTML = `<div class="mc-panel-head"><div><h2>Estoque · ${esc(product?.title)}</h2><p>${result.units.length} unidades disponíveis · ordem de entrega</p></div><button data-close aria-label="Fechar estoque">Fechar</button></div><p>Reservas e entregas de pedidos não são alteradas.</p><div class="mc-shortcuts"><button data-stock-action="shuffle" ${result.units.length < 2 ? 'disabled' : ''}>Embaralhar</button><button class="quiet" data-stock-action="clear" ${!result.units.length ? 'disabled' : ''}>Apagar disponíveis</button></div><div class="mc-stock-list">${result.units.map((u, i) => `<article><header><b>${i + 1}. ${u.kind === 'text' ? 'Código / texto' : 'Arquivo digital'}</b><button class="quiet" data-stock-action="delete" data-unit="${u.id}">Excluir unidade</button></header><pre>${esc(u.text)}</pre><small>Identificador: ${esc(u.id)}</small></article>`).join('') || '<p>Nenhuma unidade disponível.</p>'}</div><p role="status" data-stock-status></p>`;
+      dialog.querySelector('[data-close]')!.addEventListener('click', () => dialog.close());
+      dialog.querySelectorAll<HTMLButtonElement>('[data-stock-action]').forEach((b) =>
+        b.addEventListener('click', async () => {
+          const action = b.dataset.stockAction;
+          if (
+            action !== 'shuffle' &&
+            !window.confirm(
+              action === 'clear'
+                ? 'Excluir todas as unidades disponíveis deste produto? Esta ação não pode ser desfeita.'
+                : 'Excluir esta unidade do estoque? Esta ação não pode ser desfeita.',
+            )
+          )
+            return;
+          dialog
+            .querySelectorAll<HTMLButtonElement>('[data-stock-action]')
+            .forEach((btn) => (btn.disabled = true));
+          try {
+            await api('/store/manage/stock/manage', {
+              productId,
+              action,
+              version: result.version,
+              ...(b.dataset.unit ? { unitId: b.dataset.unit } : {}),
+            });
+            await get();
+            await load();
+          } catch (error) {
+            await load();
+            dialog.querySelector('[data-stock-status]')!.textContent =
+              error instanceof Error ? error.message : 'Não foi possível alterar o estoque.';
+          }
+        }),
+      );
+    };
+    try {
+      await load();
+      dialog.showModal();
+    } catch (error) {
+      dialog.remove();
+      throw error;
+    }
+    dialog.addEventListener('close', () => render());
+  };
   host.addEventListener('click', (event) => {
     const button = (event.target as Element).closest<HTMLButtonElement>('button');
     if (!button || button.closest('dialog')) return;
+    if (button.dataset.inventory) {
+      void run(() => inventoryDialog(button.dataset.inventory!));
+      return;
+    }
     if (button.id === 'connect-telegram-owner') return;
     event.stopPropagation();
     if (

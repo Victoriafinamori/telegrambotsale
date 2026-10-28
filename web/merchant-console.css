@@ -885,3 +885,40 @@ select:focus-visible {
     gap: 10px;
   }
 }
+.mc-stock-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-height: 85dvh;
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface);
+  color: var(--ink);
+}
+.mc-stock-dialog::backdrop {
+  background: #0009;
+}
+.mc-stock-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+}
+.mc-stock-list article {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.mc-stock-list header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.mc-stock-list pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  user-select: text;
+}
+.mc-stock-list header { position: static; min-height: 0; padding: 0; background: transparent; border: 0; box-shadow: none; }

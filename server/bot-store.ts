@@ -1,3 +1,4 @@
+import { stockItems, stockVersion, changeStock } from './stock-management.js';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { fastNavigation, reuseNavigationMessage } from './bot-navigation.js';
 import { categoryEmoji } from './category-emoji.js';
@@ -1088,11 +1089,154 @@ export class BotStore {
                 ]),
               ),
             );
-          else if (action.startsWith('stockfor:')) {
-            customer.session = { step: 'stock', product: action.slice(9) };
-            say(
-              'Envie uma unidade por linha (até 20), ou envie um arquivo para adicionar uma unidade de arquivo. O conteúdo fica cifrado.',
-            );
+          else if (/^stock(for|page|unit|add|clear|do):/.test(action)) {
+            const parts = action.split(':');
+            const operation = parts[0],
+              pid = parts[1];
+            const product = shop.products.find((p) => p.id === pid);
+            const stock = product ? await tx.get(productDoc(pid)) : null;
+            customer.session = null;
+            if (!stock || !product) say('Produto não encontrado.', adminMenu());
+            else {
+              if (operation === 'stockdo') {
+                try {
+                  changeStock(stock, parts[2], parts[3], parts[4]);
+                  product.stock = stock.units.length;
+                  tx.set(productDoc(pid), stock);
+                  this.audit(tx, id, 'store.stock_' + parts[2], userId);
+                } catch (error) {
+                  if (!(error instanceof HttpError)) throw error;
+                  say(error.message);
+                }
+              }
+              const version = stockVersion(stock);
+              const units = stockItems(stock, this.vault, id, pid);
+              const back = ['Voltar ao estoque', 'admin:stockfor:' + pid] as [string, string];
+              if (operation === 'stockadd') {
+                customer.session = { step: 'stock', product: pid };
+                say(
+                  'Envie uma unidade por linha (até 20), ou um arquivo. Envie /cancelar para sair.',
+                  buttons([[back]]),
+                );
+              } else if (operation === 'stockclear') {
+                say(
+                  'Excluir todas as ' +
+                    units.length +
+                    ' unidades disponíveis de ' +
+                    product.title +
+                    '? Esta ação não pode ser desfeita. Reservas de pedidos serão preservadas.',
+                  buttons([
+                    [['Confirmar exclusão', 'admin:stockdo:' + pid + ':clear:' + version]],
+                    [back],
+                  ]),
+                );
+              } else if (operation === 'stockunit') {
+                const unit = units.find((u: { id: string }) => u.id === parts[2]);
+                if (!unit) say('Esta unidade não está mais disponível.', buttons([[back]]));
+                else {
+                  if (unit.kind === 'document')
+                    effect('sendDocument', {
+                      chat_id: chatId,
+                      document: unit.fileId,
+                      caption: 'Arquivo disponível · ' + product.title,
+                    });
+                  say(
+                    '📦 Unidade de estoque · ' +
+                      product.title +
+                      '\n\n' +
+                      unit.text +
+                      '\n\nExcluir remove somente esta unidade disponível.',
+                    buttons([
+                      [['Excluir esta unidade', 'admin:stockconfirm:' + pid + ':' + unit.id]],
+                      [back],
+                    ]),
+                  );
+                }
+              } else {
+                const page =
+                  operation === 'stockpage'
+                    ? Math.max(
+                        0,
+                        Math.min(
+                          Math.floor(Number(parts[2]) || 0),
+                          Math.max(0, Math.ceil(units.length / 5) - 1),
+                        ),
+                      )
+                    : 0;
+                const pageUnits = units.slice(page * 5, page * 5 + 5);
+                say(
+                  '📦 ESTOQUE · ' +
+                    product.title +
+                    '\n' +
+                    units.length +
+                    ' unidades disponíveis\nOrdem de entrega · página ' +
+                    (page + 1) +
+                    '\n\n' +
+                    (pageUnits
+                      .map(
+                        (u: { text: string }, i: number) =>
+                          page * 5 + i + 1 + '. ' + u.text.slice(0, 160),
+                      )
+                      .join('\n\n') || 'Nenhuma unidade disponível.') +
+                    '\n\nReservas de pedidos não são alteradas.',
+                  buttons([
+                    ...pageUnits.map(
+                      (u: { id: string }, i: number) =>
+                        [
+                          [
+                            'Ver unidade ' + (page * 5 + i + 1),
+                            'admin:stockunit:' + pid + ':' + u.id,
+                          ],
+                        ] as [string, string][],
+                    ),
+                    ...(page > 0
+                      ? ([[['Anterior', 'admin:stockpage:' + pid + ':' + (page - 1)]]] as [
+                          string,
+                          string,
+                        ][][])
+                      : []),
+                    ...((page + 1) * 5 < units.length
+                      ? ([[['Próxima', 'admin:stockpage:' + pid + ':' + (page + 1)]]] as [
+                          string,
+                          string,
+                        ][][])
+                      : []),
+                    [['Adicionar unidades', 'admin:stockadd:' + pid]],
+                    ...(units.length > 1
+                      ? ([[['Embaralhar', 'admin:stockdo:' + pid + ':shuffle:' + version]]] as [
+                          string,
+                          string,
+                        ][][])
+                      : []),
+                    ...(units.length
+                      ? ([[['Apagar disponíveis', 'admin:stockclear:' + pid]]] as [
+                          string,
+                          string,
+                        ][][])
+                      : []),
+                    [['Produtos', 'admin:stock']],
+                  ]),
+                );
+              }
+            }
+          } else if (action.startsWith('stockconfirm:')) {
+            const [, pid, uid] = action.split(':');
+            const stock = await tx.get(productDoc(pid));
+            if (!stock?.units.some((u: { id: string }) => u.id === uid))
+              say('Unidade não disponível.');
+            else
+              say(
+                'Excluir esta unidade? Esta ação não pode ser desfeita.',
+                buttons([
+                  [
+                    [
+                      'Confirmar exclusão',
+                      'admin:stockdo:' + pid + ':delete:' + stockVersion(stock) + ':' + uid,
+                    ],
+                  ],
+                  [['Cancelar', 'admin:stockfor:' + pid]],
+                ]),
+              );
           } else if (action.startsWith('editfor:')) {
             const pid = action.slice(8);
             say(
@@ -1347,7 +1491,13 @@ export class BotStore {
             const p = shop.products.find((v) => v.id === session.product),
               stock = await tx.get(productDoc(session.product));
             const units = msg.document
-              ? [{ kind: 'document', fileId: msg.document.file_id }]
+              ? [
+                  {
+                    kind: 'document',
+                    fileId: msg.document.file_id,
+                    name: msg.document.file_name || 'Arquivo digital',
+                  },
+                ]
               : text
                   .split('\n')
                   .map((v) => v.trim())

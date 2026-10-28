@@ -1916,7 +1916,7 @@ async function fixture(
     await send(111111111, 'Arquivos');
     const shop = (await store.get('bot_shops/' + a.id)) as Shop,
       pid = shop.products.at(-1)!.id;
-    await click(111111111, 'admin:stockfor:' + pid);
+    await click(111111111, 'admin:stockadd:' + pid);
     await send(111111111, units.join('\n'));
     return pid;
   };
@@ -2415,7 +2415,7 @@ test('Monthly renewal is idempotent, reminders are durable, and expired invoices
 test('File inventory is encrypted, delivered as a document, and refund cancels pending deliveries', async () => {
   const f = await fixture(),
     pid = await f.product(['TEXT']);
-  await f.click(111111111, 'admin:stockfor:' + pid);
+  await f.click(111111111, 'admin:stockadd:' + pid);
   const update = f.message(111111111, '');
   delete update.message!.text;
   update.message!.document = { file_id: 'PRIVATE-FILE-ID', file_name: 'digital.pdf' };
@@ -2896,4 +2896,77 @@ test('Web HTTP authorization derives the shop from Firebase, blocks suspension a
   } finally {
     await new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
   }
+});
+
+test('Inventory management protects reserved units, rejects stale lists and synchronizes owner Telegram and web', async () => {
+  const f = await fixture();
+  const pid = await f.product(['PRIVATE-A', 'PRIVATE-B', 'PRIVATE-C']);
+  const portal = new MerchantConsole(f.store, f.key, f.bots);
+  const initial = await portal.inventory(f.a.id, 'merchant', pid);
+  assert.equal(initial.units.length, 3);
+  assert.equal(initial.units[0].text, 'PRIVATE-A');
+  await assert.rejects(() => portal.inventory(f.a.id, 'outsider', pid), {
+    code: 'STORE_NOT_APPROVED',
+  });
+  const blocked = await f.click(222222222, 'admin:stockfor:' + pid);
+  assert(!JSON.stringify(blocked).includes('PRIVATE-A'));
+  const page = await f.click(111111111, 'admin:stockfor:' + pid);
+  assert(JSON.stringify(page).includes('PRIVATE-A'));
+  const oid = await f.order(222222222, pid);
+  assert(oid);
+  const orderBefore = await f.store.get(`bot_shops/${f.a.id}/orders/${oid}`);
+  await assert.rejects(
+    () =>
+      portal.manageStock(f.a.id, 'merchant', {
+        productId: pid,
+        action: 'clear',
+        version: initial.version,
+      }),
+    { code: 'STOCK_CHANGED' },
+  );
+  let available = await portal.inventory(f.a.id, 'merchant', pid);
+  assert.equal(available.units.length, 2);
+  assert(!available.units.some((u: any) => u.text === 'PRIVATE-A'));
+  await portal.manageStock(f.a.id, 'merchant', {
+    productId: pid,
+    action: 'shuffle',
+    version: available.version,
+  });
+  let shuffled = await portal.inventory(f.a.id, 'merchant', pid);
+  assert.deepEqual(
+    shuffled.units.map((u: any) => u.id).sort(),
+    available.units.map((u: any) => u.id).sort(),
+  );
+  const confirmation = await f.click(
+    111111111,
+    'admin:stockconfirm:' + pid + ':' + shuffled.units[0].id,
+  );
+  const callback = confirmation
+    .flatMap((e) => (e.payload.reply_markup as any)?.inline_keyboard?.flat() ?? [])
+    .find((b: any) => b.text === 'Confirmar exclusão')?.callback_data;
+  assert(callback);
+  assert(Buffer.byteLength(callback) <= 64);
+  await f.click(111111111, callback);
+  available = await portal.inventory(f.a.id, 'merchant', pid);
+  assert.equal(available.units.length, 1);
+  await assert.rejects(
+    () =>
+      portal.manageStock(f.a.id, 'outsider', {
+        productId: pid,
+        action: 'clear',
+        version: available.version,
+      }),
+    { code: 'STORE_NOT_APPROVED' },
+  );
+  await portal.manageStock(f.a.id, 'merchant', {
+    productId: pid,
+    action: 'clear',
+    version: available.version,
+  });
+  assert.equal((await portal.inventory(f.a.id, 'merchant', pid)).units.length, 0);
+  assert.deepEqual(await f.store.get(`bot_shops/${f.a.id}/orders/${oid}`), orderBefore);
+  assert.equal(
+    (await portal.read(f.a.id, 'merchant')).products.find((p) => p.id === pid)?.stock,
+    0,
+  );
 });
