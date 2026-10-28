@@ -20,6 +20,7 @@ export class TelegramClient {
   async call<T = unknown>(
     method: TelegramMethod | 'getMe' | 'getUpdates' | 'getWebhookInfo' | 'getFile',
     payload: Record<string, unknown> = {},
+    timeoutMs?: number,
   ): Promise<T> {
     let response: Response;
     try {
@@ -27,7 +28,7 @@ export class TelegramClient {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(method === 'getUpdates' ? 35000 : 20000),
+        signal: AbortSignal.timeout(timeoutMs ?? (method === 'getUpdates' ? 35000 : 20000)),
       });
     } catch {
       throw new TelegramError(0);

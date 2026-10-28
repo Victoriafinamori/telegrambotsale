@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 import { TelegramClient, TelegramError } from './telegram-client.js';
 import type { BotEffect, TelegramUpdate } from './bot-types.js';
+import { fastNavigation } from './bot-navigation.js';
 
 export class RuntimeApiError extends Error {
   constructor(readonly status: number) {
@@ -85,6 +86,7 @@ export async function processTelegramUpdate(
   telegram: TelegramClient,
   update: TelegramUpdate,
 ) {
+  const started = performance.now();
   // Telegram entities, thumbnail metadata and other unused fields can be large.
   // Forward only the fields consumed by the shop, never arbitrary raw metadata.
   const from = (
@@ -164,8 +166,69 @@ export async function processTelegramUpdate(
         }
       : {}),
   };
-  const result = await api.call<{ effectIds: string[] }>('/updates', normalized);
-  await dispatchEffects(api, telegram, result.effectIds);
+  const fast = fastNavigation(callback?.data);
+  const acknowledgement =
+    fast && callback
+      ? telegram.call('answerCallbackQuery', { callback_query_id: callback.id }, 2000).then(
+          () => true,
+          () => false,
+        )
+      : Promise.resolve(false);
+  const result = await api.call<{
+    effectIds: string[];
+    effects?: (BotEffect & { lease: string })[];
+  }>('/updates' + (fast ? '?dispatch=navigation' : ''), normalized);
+  const apiReady = performance.now();
+  if (result.effects === undefined) {
+    await dispatchEffects(api, telegram, result.effectIds);
+    return;
+  }
+  const answered = await acknowledgement;
+  const acknowledgements: {
+    id: string;
+    lease: string;
+    result: 'sent' | 'retry' | 'failed' | 'uncertain';
+    errorCode?: number;
+    retryAfter?: number;
+  }[] = [];
+  let retryAfter = 0;
+  for (const effect of result.effects) {
+    let outcome: (typeof acknowledgements)[number] = {
+      id: effect.id,
+      lease: effect.lease,
+      result: 'sent',
+    };
+    if (retryAfter) outcome = { ...outcome, result: 'retry', retryAfter };
+    else if (!(answered && effect.method === 'answerCallbackQuery' && !effect.payload.text)) {
+      try {
+        await telegram.call(effect.method, effect.payload);
+      } catch (error) {
+        if (error instanceof TelegramError && error.code === 429) {
+          retryAfter = Math.max(1, error.retryAfter);
+          outcome = { ...outcome, result: 'retry', errorCode: 429, retryAfter };
+        } else
+          outcome = {
+            ...outcome,
+            result:
+              error instanceof TelegramError && error.code >= 400 && error.code < 500
+                ? 'failed'
+                : 'uncertain',
+            ...(error instanceof TelegramError ? { errorCode: error.code } : {}),
+          };
+      }
+    }
+    acknowledgements.push(outcome);
+  }
+  const screenReady = performance.now();
+  if (acknowledgements.length) await api.call('/effects/ack-batch', acknowledgements);
+  console.log(
+    JSON.stringify({
+      event: 'bot_runtime.navigation_timing',
+      apiMs: Math.round(apiReady - started),
+      screenMs: Math.round(screenReady - started),
+      totalMs: Math.round(performance.now() - started),
+    }),
+  );
 }
 
 export async function runBot() {

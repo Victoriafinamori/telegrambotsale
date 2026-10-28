@@ -1,5 +1,10 @@
 import type { BotEffect, TelegramUpdate } from './bot-types.js';
 
+// Read-only buyer screens can return their leased replies in the update response.
+// Checkout, stock changes and private owner commands keep the normal outbox path.
+export const fastNavigation = (data?: string) =>
+  /^(home|catalog|cart|orders|support|cat:[a-f0-9]{16}|p:[a-f0-9]{12,36})$/.test(data ?? '');
+
 // Only navigation screens are replaced. Invoices, receipts and deliveries remain separate.
 export function reuseNavigationMessage(update: TelegramUpdate, effects: BotEffect[]) {
   const callback = update.callback_query,

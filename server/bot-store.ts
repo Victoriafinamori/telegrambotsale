@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { reuseNavigationMessage } from './bot-navigation.js';
+import { fastNavigation, reuseNavigationMessage } from './bot-navigation.js';
 import { categoryEmoji } from './category-emoji.js';
 import { queueStockAlerts } from './stock-alerts.js';
 import type { PurinWallet } from './purin-wallet.js';
@@ -41,6 +41,26 @@ import {
 const unavailable = () =>
   new HttpError(403, 'BOT_RUNTIME_UNAVAILABLE', 'A operação deste bot está indisponível.');
 const isoMoney = money;
+const navigationReply = (row: Doc | null) =>
+  Boolean(
+    row &&
+      [
+        'answerCallbackQuery',
+        'sendMessage',
+        'sendPhoto',
+        'editMessageText',
+        'editMessageMedia',
+        'deleteMessage',
+      ].includes(row.method) &&
+      !row.order_id &&
+      !row.delivery &&
+      !row.announcement_id &&
+      !row.stock_watch_id &&
+      !row.wallet_draft_id &&
+      !row.subscription_owner_id &&
+      !row.subscription_reminder_due &&
+      !row.next_attempt_at,
+  );
 const isOpen = (order: Order) =>
   ['awaiting_payment', 'precheckout', 'awaiting_review'].includes(order.status);
 
@@ -288,20 +308,29 @@ export class BotStore {
     auth: RuntimeAccess,
     input: unknown,
     web?: { uid: string; requestId: string; reason?: string },
+    inlineNavigation = false,
   ) {
     const update = telegramUpdate.parse(input);
     const walletScreen = !web ? await this.wallet?.telegram(auth, update) : null;
     return buffered(this.store, async (tx) => {
-      const { runtime, account, setup, shop } = await this.access(tx, auth),
-        id = auth.accountId;
-      if (web && account.firebase_uid !== web.uid) throw unavailable();
+      const id = auth.accountId;
       const eventKey = web ? 'w' + tokenHash(web.requestId).slice(0, 32) : 'u' + update.update_id;
       const receiptPath = path(
         id,
         web ? 'web_updates' : 'updates',
         web ? tokenHash(web.requestId) : String(update.update_id),
       );
-      const receipt = await tx.get(receiptPath);
+      const actorId = String(
+        (update.message?.from ?? update.callback_query?.from ?? update.pre_checkout_query?.from)
+          ?.id ?? '',
+      );
+      // These reads belong to the same transaction snapshot; no cross-request cache.
+      const [{ runtime, account, setup, shop }, receipt] = await Promise.all([
+        this.access(tx, auth),
+        tx.get(receiptPath),
+        tx.get(path(id, web ? 'web_customers' : 'customers', actorId || 'unknown')),
+      ]);
+      if (web && account.firebase_uid !== web.uid) throw unavailable();
       if (receipt) return { effectIds: receipt.effect_ids as string[], duplicate: true };
       const effects: BotEffect[] = [];
       const effect = (
@@ -1794,12 +1823,24 @@ export class BotStore {
       if (!web) reuseNavigationMessage(update, effects);
       saveShop();
       const effectIds = effects.map((v) => v.id);
-      for (const out of effects) {
+      const leased =
+        inlineNavigation &&
+        fastNavigation(update.callback_query?.data) &&
+        effects.length <= 8 &&
+        effects.every(navigationReply)
+          ? effects.map((out) => ({
+              ...out,
+              status: 'sending' as const,
+              lease: randomBytes(24).toString('base64url'),
+            }))
+          : undefined;
+      for (const out of leased ?? effects) {
         const { payload, ...meta } = out;
         tx.set(path(id, 'effects', out.id), {
           ...meta,
           payload_ciphertext: this.vault.seal(JSON.stringify(payload), `${id}:effect:${out.id}`),
           created_at: this.now(),
+          ...(leased ? { lease_at: this.now() } : {}),
         });
       }
       tx.set(receiptPath, {
@@ -1814,7 +1855,7 @@ export class BotStore {
           last_update_at: this.now(),
           last_seen: this.now(),
         });
-      return { effectIds, duplicate: false };
+      return { effectIds, duplicate: false, ...(leased ? { effects: leased } : {}) };
     });
   }
 
@@ -2007,6 +2048,73 @@ export class BotStore {
         ...(out.delivery ? { delivery: true } : {}),
         ...(out.announcement_id ? { announcement_id: out.announcement_id } : {}),
       };
+    });
+  }
+  async claimNavigation(auth: RuntimeAccess, ids: string[]) {
+    if (ids.length > 8) return null;
+    return buffered(this.store, async (tx) => {
+      await this.access(tx, auth);
+      const rows = await Promise.all(ids.map((id) => tx.get(path(auth.accountId, 'effects', id))));
+      // Never pre-claim deliveries, money operations, announcements or deferred jobs.
+      if (!rows.every(navigationReply)) return null;
+      return rows.flatMap((row, index) => {
+        if (row!.status !== 'pending') return [];
+        const id = ids[index],
+          lease = randomBytes(24).toString('base64url');
+        tx.set(path(auth.accountId, 'effects', id), {
+          ...row,
+          status: 'sending',
+          lease,
+          lease_at: this.now(),
+        });
+        return [
+          {
+            id,
+            method: row!.method as TelegramMethod,
+            payload: JSON.parse(
+              this.vault.open(row!.payload_ciphertext, `${auth.accountId}:effect:${id}`),
+            ),
+            status: 'sending' as const,
+            lease,
+          },
+        ];
+      });
+    });
+  }
+  async acknowledgeNavigation(
+    auth: RuntimeAccess,
+    rows: {
+      id: string;
+      lease: string;
+      result: 'sent' | 'uncertain' | 'failed' | 'retry';
+      retryAfter?: number;
+    }[],
+  ) {
+    return buffered(this.store, async (tx) => {
+      const [_, effects] = await Promise.all([
+        this.access(tx, auth),
+        Promise.all(rows.map((row) => tx.get(path(auth.accountId, 'effects', row.id)))),
+      ]);
+      if (!effects.every(navigationReply)) return false;
+      for (let index = 0; index < rows.length; index++) {
+        const row = rows[index],
+          effect = effects[index]!;
+        if (effect.status !== 'sending' || effect.lease !== row.lease)
+          throw new HttpError(409, 'EFFECT_LEASE_INVALID', 'Confirmação de envio inválida.');
+        tx.set(
+          path(auth.accountId, 'effects', row.id),
+          row.result === 'retry'
+            ? {
+                ...effect,
+                status: 'pending',
+                next_attempt_at: new Date(
+                  this.now().getTime() + Math.max(1, Math.min(86400, row.retryAfter ?? 1)) * 1000,
+                ),
+              }
+            : { ...effect, status: row.result, finished_at: this.now() },
+        );
+      }
+      return true;
     });
   }
   async acknowledge(

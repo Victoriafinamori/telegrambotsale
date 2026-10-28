@@ -2163,9 +2163,82 @@ test('HTTP integration: web merchant ownership -> scoped runtime -> Telegram tra
       RuntimeApiError,
     );
     await dispatchEffects(api, telegram, (await api.call<{ ids: string[] }>('/effects')).ids);
+    const navigationRequests: string[] = [];
+    const quickApi = new BotRuntimeApi(
+      origin,
+      f.runtimeKey,
+      async (url, init) => {
+        navigationRequests.push(new URL(String(url)).pathname + new URL(String(url)).search);
+        return fetch(url, init);
+      },
+      true,
+    );
+    const navigation = f.callback(222222222, 'catalog');
+    await processTelegramUpdate(quickApi, telegram, navigation);
+    assert.deepEqual(navigationRequests, [
+      '/internal/bot/updates?dispatch=navigation',
+      '/internal/bot/effects/ack-batch',
+    ]);
+    const screenCount = captured.filter((e) => e.method === 'sendMessage').length;
+    await processTelegramUpdate(quickApi, telegram, navigation);
+    assert.equal(
+      captured.filter((e) => e.method === 'sendMessage').length,
+      screenCount,
+      'replayed navigation cannot send its screen twice',
+    );
   } finally {
     await new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
   }
+});
+
+test('Fast navigation leases are exclusive, keep revocation checks and reject paid deliveries', async () => {
+  const f = await fixture();
+  const result = await f.bots.process(f.auth, f.callback(222222222, 'catalog'));
+  const [first, second] = await Promise.all([
+    f.bots.claimNavigation(f.auth, result.effectIds),
+    f.bots.claimNavigation(f.auth, result.effectIds),
+  ]);
+  assert.equal((first?.length ?? 0) + (second?.length ?? 0), result.effectIds.length);
+  const leases = [...(first ?? []), ...(second ?? [])];
+  await assert.rejects(
+    () =>
+      f.bots.acknowledgeNavigation(
+        f.auth,
+        leases.map((effect, index) => ({
+          id: effect.id,
+          lease: index === leases.length - 1 ? 'Z'.repeat(32) : effect.lease,
+          result: 'sent',
+        })),
+      ),
+    { code: 'EFFECT_LEASE_INVALID' },
+  );
+  assert.equal(
+    (await f.store.get(`bot_shops/${f.a.id}/effects/${leases[0].id}`))!.status,
+    'sending',
+    'invalid batch must not partially acknowledge another effect',
+  );
+  for (const effect of [...(first ?? []), ...(second ?? [])]) {
+    await assert.rejects(() => f.bots.acknowledge(f.auth, effect.id, 'Z'.repeat(32), 'sent'), {
+      code: 'EFFECT_LEASE_INVALID',
+    });
+  }
+  assert.equal(
+    await f.bots.acknowledgeNavigation(
+      f.auth,
+      leases.map((effect) => ({ id: effect.id, lease: effect.lease, result: 'sent' })),
+    ),
+    true,
+  );
+  const pid = await f.product(),
+    oid = (await f.order(222222222, pid))!;
+  const paid = await f.bots.process(f.auth, f.payment(222222222, oid));
+  assert.equal(await f.bots.claimNavigation(f.auth, paid.effectIds), null);
+  assert.equal((await f.store.get(`bot_shops/${f.a.id}/orders/${oid}`))!.status, 'paid');
+  const next = await f.bots.process(f.auth, f.callback(222222222, 'catalog'));
+  await f.bots.revoke(f.a.id);
+  await assert.rejects(() => f.bots.claimNavigation(f.auth, next.effectIds), {
+    code: 'BOT_RUNTIME_UNAVAILABLE',
+  });
 });
 
 test('Telegram transport never exposes the token in network or provider errors', async () => {

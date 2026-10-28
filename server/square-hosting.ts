@@ -132,6 +132,10 @@ export async function buildRuntimeArchive(name: string, provider = 'squarecloud'
   return runtimeZip({
     'dist-server/server/bot-runner.js': runner.replace("import 'dotenv/config';", ''),
     'dist-server/server/telegram-client.js': telegram,
+    'dist-server/server/bot-navigation.js': await readFile(
+      resolve('dist-server/server/bot-navigation.js'),
+      'utf8',
+    ),
     'package.json': JSON.stringify({
       name: 'blackout-merchant-bot',
       version: '1.0.0',
