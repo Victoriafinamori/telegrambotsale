@@ -8,6 +8,7 @@ import type { Doc, DocumentStore, DocumentTransaction } from './document-store.j
 import { SecretVault } from './secret-vault.js';
 import { HttpError } from './types.js';
 import { nextBillingMonth } from './billing-period.js';
+import { pixCaption, pixPhoto } from './bot-pix.js';
 import {
   botRoot as root,
   botPath as path,
@@ -1674,6 +1675,10 @@ export class BotStore {
                 ...(automaticPix
                   ? {
                       checkout_token_hash: tokenHash(checkoutKey),
+                      checkout_key_ciphertext: this.vault.seal(
+                        checkoutKey,
+                        `${id}:checkout:${oid}`,
+                      ),
                       ...(shop.pix_mode === 'purincash'
                         ? {
                             purin_connection: shop.purin_connection,
@@ -1709,16 +1714,21 @@ export class BotStore {
               if (automaticPix) {
                 effect('sendMessage', {
                   chat_id: chatId,
-                  text: `${orderSummary(order)}\n\nPix automático · ${shop.pix_mode === 'purincash' ? 'Blackout' : 'Mercado Pago'}\nAbra o pagamento seguro para gerar o QR Code e o copia e cola. A entrega será liberada após a confirmação do pagamento.`,
+                  text: `${orderSummary(order)}\n\nPix automático · ${shop.pix_mode === 'purincash' ? 'Blackout' : 'Mercado Pago'}\n${shop.pix_mode === 'purincash' ? 'Gere o QR Code aqui na conversa pelo botão abaixo.' : 'Abra o pagamento seguro para gerar seu Pix.'}\n\n⏳ Seus itens ficam reservados por 60 minutos.\nA entrega é automática após a confirmação.`,
                   reply_markup: {
                     inline_keyboard: [
                       [
                         {
                           text: '💠 Gerar Pix',
-                          url: `${this.checkoutOrigin}/#/pagar/${id}/${oid}/${checkoutKey}`,
+                          ...(shop.pix_mode === 'purincash'
+                            ? { callback_data: 'pix-generate:' + oid }
+                            : {
+                                url: `${this.checkoutOrigin}/#/pagar/${id}/${oid}/${checkoutKey}`,
+                              }),
                         },
                       ],
                       [{ text: '🔄 Verificar pagamento', callback_data: 'pix-check:' + oid }],
+                      [{ text: '✕ Cancelar pedido', callback_data: 'cancel:' + oid }],
                     ],
                   },
                 });
@@ -1769,13 +1779,16 @@ export class BotStore {
                   },
                   order,
                 );
-              say(
-                `Pedido ${oid}. Estoque reservado por ${automaticPix ? 60 : 20} minutos.`,
-                buttons([[['Cancelar pedido', 'cancel:' + oid]]]),
-              );
+              if (!automaticPix && shop.payment_mode !== 'manual')
+                say(
+                  `Pedido ${oid}. Estoque reservado por 20 minutos.`,
+                  buttons([[['Cancelar pedido', 'cancel:' + oid]]]),
+                );
               this.audit(tx, id, 'bot_order.created', userId);
             }
           }
+        } else if (cmd.startsWith('pix-generate:')) {
+          // The scoped runtime router handles the provider after this transaction commits.
         } else if (cmd.startsWith('pix-check:')) {
           const order = (await tx.get(orderDoc(cmd.slice(10)))) as Order | null;
           if (
@@ -1783,7 +1796,8 @@ export class BotStore {
             ['mercadopago', 'purincash'].includes(order.payment_method ?? '')
           )
             say(
-              `Pedido ${order.id}: ${orderLabels[order.status]}. A confirmação é consultada no sistema de pagamento; acompanhe também em Meus pedidos.`,
+              `${['paid', 'delivered'].includes(order.status) ? '✅ PAGAMENTO CONFIRMADO' : '💠 STATUS DO PAGAMENTO'}\n\nPedido #${order.id}\n${orderLabels[order.status]}${order.status === 'awaiting_payment' ? '\n\nSe já pagou, aguarde a confirmação. Não pague novamente.' : ''}`,
+              buttons([[['🧾 Meus pedidos', 'orders']]]),
             );
           else say('Pedido não encontrado.');
         } else if (cmd.startsWith('history:')) await listOrders(false, cmd.slice(8));
@@ -1806,7 +1820,10 @@ export class BotStore {
           const o = (await tx.get(orderDoc(cmd.slice(7)))) as Order | null;
           if (o && o.buyer_id === userId && o.status === 'awaiting_payment') {
             await release(o, 'cancelled');
-            say('Pedido cancelado e estoque liberado.', menu());
+            say(
+              '✕ PEDIDO CANCELADO\n\nA reserva foi liberada.\nNão pague o Pix deste pedido.\n\nVocê pode voltar ao catálogo quando quiser.',
+              menu(),
+            );
           } else say('Este pedido não pode ser cancelado aqui. Use /paysupport.');
         } else {
           const welcome = `${shop.title}\n\n${shop.welcome}${!selling ? '\n\nLoja em configuração ou temporariamente sem novas vendas.' : ''}`;
@@ -1953,12 +1970,117 @@ export class BotStore {
       ...sending,
     ].map((v) => v.id as string);
   }
+  async checkoutForBot(auth: RuntimeAccess, buyer: string, oid: string) {
+    if (!/^[a-f0-9]{16}$/.test(oid)) throw unavailable();
+    return buffered(this.store, async (tx) => {
+      await this.access(tx, auth);
+      const order = await tx.get(path(auth.accountId, 'orders', oid));
+      if (
+        !order ||
+        order.buyer_id !== buyer ||
+        order.payment_method !== 'purincash' ||
+        !order.checkout_key_ciphertext
+      )
+        throw new HttpError(
+          404,
+          'ORDER_NOT_FOUND',
+          'Pedido indisponível. Abra um pedido atual em Meus pedidos.',
+        );
+      return {
+        accountId: auth.accountId,
+        orderId: oid,
+        key: this.vault.open(order.checkout_key_ciphertext, `${auth.accountId}:checkout:${oid}`),
+      };
+    });
+  }
+  async queuePix(auth: RuntimeAccess, buyer: string, oid: string, code?: string, error?: string) {
+    const photo = code ? await pixPhoto(code) : undefined;
+    return buffered(this.store, async (tx) => {
+      await this.access(tx, auth);
+      const order = (await tx.get(path(auth.accountId, 'orders', oid))) as Order | null;
+      if (!order || order.buyer_id !== buyer)
+        throw new HttpError(404, 'ORDER_NOT_FOUND', 'Pedido não encontrado.');
+      const eid = `pix_${oid}_${code ? 'qr' : 'notice'}`,
+        target = path(auth.accountId, 'effects', eid),
+        prior = await tx.get(target);
+      if (code && (order.status !== 'awaiting_payment' || order.expires_at <= this.now()))
+        return [];
+      if (prior && !['failed', 'skipped'].includes(prior.status))
+        return [eid, ...(code && code.length > 256 ? [eid + '_copy'] : [])];
+      const controls = [
+        ...(code && code.length <= 256
+          ? [[{ text: '📋 Copiar Pix', copy_text: { text: code } }]]
+          : []),
+        [{ text: '🔄 Verificar pagamento', callback_data: 'pix-check:' + oid }],
+        [{ text: '✕ Cancelar pedido', callback_data: 'cancel:' + oid }],
+      ];
+      const payload = code
+        ? {
+            chat_id: buyer,
+            photo,
+            caption: pixCaption(order),
+            reply_markup: { inline_keyboard: controls },
+          }
+        : {
+            chat_id: buyer,
+            text: `💠 PIX DO PEDIDO\n\n#${oid}\n\n${error ?? 'Não foi possível gerar o Pix agora. Use Verificar pagamento antes de tentar novamente.'}`,
+            reply_markup: { inline_keyboard: controls },
+          };
+      tx.set(target, {
+        id: eid,
+        method: code ? 'sendPhoto' : 'sendMessage',
+        status: 'pending',
+        order_id: oid,
+        ...(code ? { payment_qr: true } : {}),
+        payload_ciphertext: this.vault.seal(
+          JSON.stringify(payload),
+          `${auth.accountId}:effect:${eid}`,
+        ),
+        created_at: this.now(),
+      });
+      if (code && code.length > 256) {
+        const copyId = eid + '_copy';
+        tx.set(path(auth.accountId, 'effects', copyId), {
+          id: copyId,
+          method: 'sendMessage',
+          status: 'pending',
+          order_id: oid,
+          payment_qr: true,
+          payload_ciphertext: this.vault.seal(
+            JSON.stringify({
+              chat_id: buyer,
+              text: `📋 PIX COPIA E COLA\n\n<code>${code.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')}</code>`,
+              parse_mode: 'HTML',
+            }),
+            `${auth.accountId}:effect:${copyId}`,
+          ),
+          created_at: this.now(),
+        });
+        return [eid, copyId];
+      }
+      return [eid];
+    });
+  }
   async claim(auth: RuntimeAccess, effectId: string) {
     return buffered(this.store, async (tx) => {
       const { account, setup, shop } = await this.access(tx, auth),
         target = path(auth.accountId, 'effects', effectId),
         out = (await tx.get(target)) as (BotEffect & { lease_at?: Date }) | null;
       if (!out || !['pending', 'sending'].includes(out.status)) return null;
+      if (out.payment_qr && out.status === 'pending') {
+        const order = await tx.get(path(auth.accountId, 'orders', out.order_id!));
+        if (
+          !order ||
+          order.status !== 'awaiting_payment' ||
+          order.expires_at <= this.now() ||
+          account.access_status !== 'approved' ||
+          setup.activation_status !== 'active' ||
+          account.paid_through <= this.now()
+        ) {
+          tx.set(target, { ...out, status: 'skipped', finished_at: this.now() });
+          return null;
+        }
+      }
       if (out.wallet_draft_id && out.status === 'pending') {
         const draft = await tx.get(
           'merchant_wallets/' + auth.accountId + '/withdrawals/' + out.wallet_draft_id,

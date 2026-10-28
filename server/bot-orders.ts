@@ -7,7 +7,7 @@ export const orderLabels: Record<Order['status'], string> = {
   awaiting_payment: 'Aguardando pagamento',
   precheckout: 'Pagamento em processamento',
   awaiting_review: 'Comprovante aguardando aprovação',
-  paid: 'Pagamento aprovado · entrega pendente',
+  paid: 'Pagamento confirmado · preparando entrega',
   delivered: 'Entregue',
   cancelled: 'Cancelado',
   expired: 'Prazo vencido',
@@ -32,9 +32,11 @@ export function stats(shop: Shop): ShopStats {
 }
 export function orderSummary(order: Order, admin = false) {
   return [
-    `Pedido ${order.id}`,
-    `Estado: ${orderLabels[order.status]}`,
-    `Criado em: ${new Date(order.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`,
+    '🧾 RESUMO DO PEDIDO',
+    `#${order.id}`,
+    '',
+    orderLabels[order.status],
+    `Criado em ${new Date(order.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`,
     ...(admin
       ? [
           `Cliente: ${order.buyer_name || order.buyer_id}${order.buyer_username ? ' (@' + order.buyer_username + ')' : ''}`,
@@ -44,11 +46,9 @@ export function orderSummary(order: Order, admin = false) {
     '',
     ...order.items.map((item) => `${item.quantity} × ${item.title}`),
     '',
-    `Total: ${money(order.total, order.currency)}`,
-    order.rejection_reason ? 'Motivo da recusa: ' + order.rejection_reason : '',
-  ]
-    .filter(Boolean)
-    .join('\n');
+    `💰 Total: ${money(order.total, order.currency)}`,
+    ...(order.rejection_reason ? ['Motivo da recusa: ' + order.rejection_reason] : []),
+  ].join('\n');
 }
 export async function recordPaid(
   tx: DocumentTransaction,

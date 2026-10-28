@@ -769,8 +769,11 @@ async function purinFixture(failCreate = false) {
   await f.click(222222222, 'add:' + pid);
   const effects = await f.click(222222222, 'checkout');
   const effect = effects.find((e) => String(e.payload.text).includes('Pix automático'))!;
-  const url = (effect.payload.reply_markup as any).inline_keyboard[0][0].url;
-  const [, , accountId, orderId, key] = new URL(url).hash.split('/');
+  const command = (effect.payload.reply_markup as any).inline_keyboard[0][0]
+    .callback_data as string;
+  const orderId = command.slice('pix-generate:'.length),
+    accountId = f.a.id;
+  const { key } = await f.bots.checkoutForBot(f.auth, '222222222', orderId);
   const base = { accountId, orderId, key };
   const generation = (await f.store.get('bot_shops/' + f.a.id))!.purin_connection;
   const notify = async (payment: any) => {
@@ -2239,6 +2242,68 @@ test('Fast navigation leases are exclusive, keep revocation checks and reject pa
   await assert.rejects(() => f.bots.claimNavigation(f.auth, next.effectIds), {
     code: 'BOT_RUNTIME_UNAVAILABLE',
   });
+});
+
+test('Pix in chat creates one charge and one QR, protects buyer ownership and suppresses cancelled QR sends', async () => {
+  const p = await purinFixture(),
+    f = p.f,
+    gateway = new PaymentGateway(p.mp, p.service),
+    oid = p.base.orderId;
+  assert.deepEqual(await gateway.createFromBot(f.auth, '333333333', oid), []);
+  const [a, b] = await Promise.all([
+    gateway.createFromBot(f.auth, '222222222', oid),
+    gateway.createFromBot(f.auth, '222222222', oid),
+  ]);
+  assert.equal(p.charges.size, 1);
+  const qrId = [...a, ...b].find((id) => id.endsWith('_qr'))!;
+  assert(qrId);
+  const raw = (await f.store.get(`bot_shops/${f.a.id}/effects/${qrId}`))!;
+  assert(!JSON.stringify(raw).includes('PIX_SIMULADO_NAO_PAGAR'));
+  const effect = await f.bots.claim(f.auth, qrId);
+  assert(effect);
+  assert.equal(effect.method, 'sendPhoto');
+  assert.match(String(effect.payload.photo), /^data:image\/png;base64,/);
+  const markup = effect.payload.reply_markup as any;
+  assert.equal(markup.inline_keyboard[0][0].copy_text.text, 'PIX_SIMULADO_NAO_PAGAR');
+  assert(
+    markup.inline_keyboard.flat().some((button: any) => button.callback_data === 'cancel:' + oid),
+  );
+  assert(markup.inline_keyboard.flat().every((button: any) => !button.url));
+  await f.bots.acknowledge(f.auth, qrId, effect.lease, 'sent');
+  assert.equal(await f.bots.claim(f.auth, qrId), null);
+  const p2 = await purinFixture(),
+    ids = await new PaymentGateway(p2.mp, p2.service).createFromBot(
+      p2.f.auth,
+      '222222222',
+      p2.base.orderId,
+    );
+  await p2.f.click(222222222, 'cancel:' + p2.base.orderId);
+  for (const id of ids) assert.equal(await p2.f.bots.claim(p2.f.auth, id), null);
+});
+
+test('Pix PNG transport uses multipart with caption and copy/cancel buttons without remote image fetch', async () => {
+  const { pixPhoto } = await import('../server/bot-pix.js');
+  const photo = await pixPhoto('PIX_SIMULADO_NAO_PAGAR');
+  const client = new TelegramClient('123456789:' + 'A'.repeat(35), async (_url, init) => {
+    assert(init?.body instanceof FormData);
+    assert.equal((init.headers as any)['Content-Type'], undefined);
+    assert.equal(init.body.get('caption'), 'Pix do pedido');
+    const file = init.body.get('photo') as Blob;
+    assert.equal(file.type, 'image/png');
+    assert(file.size > 0);
+    assert.equal(init.body.get('reply_markup'), JSON.stringify({ inline_keyboard: [] }));
+    return Response.json({ ok: true, result: { message_id: 123 } });
+  });
+  await client.call('sendPhoto', {
+    chat_id: 222222222,
+    photo,
+    caption: 'Pix do pedido',
+    reply_markup: { inline_keyboard: [] },
+  });
+  await assert.rejects(
+    () => client.call('sendPhoto', { photo: 'data:image/png;base64,AAAA' }),
+    TelegramError,
+  );
 });
 
 test('Telegram transport never exposes the token in network or provider errors', async () => {

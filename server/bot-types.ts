@@ -85,6 +85,7 @@ export interface BotEffect {
   stock_watch_id?: string;
   stock_watch_nonce?: string;
   wallet_draft_id?: string;
+  payment_qr?: boolean;
   subscription_reminder_due?: string;
   subscription_owner_id?: string;
 }
@@ -174,6 +175,7 @@ export interface Order {
   purin_subaccount?: string;
   purin_payment_id?: string;
   checkout_token_hash?: string;
+  checkout_key_ciphertext?: string;
   mp_connection?: string;
   mp_payment_id?: string;
   items: { product_id: string; title: string; quantity: number; units: StockUnit[] }[];

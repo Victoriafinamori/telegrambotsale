@@ -23,11 +23,30 @@ export class TelegramClient {
     timeoutMs?: number,
   ): Promise<T> {
     let response: Response;
+    let body: BodyInit = JSON.stringify(payload);
+    let headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (
+      method === 'sendPhoto' &&
+      typeof payload.photo === 'string' &&
+      payload.photo.startsWith('data:')
+    ) {
+      const match = /^data:image\/png;base64,([A-Za-z0-9+/=]{1,400000})$/.exec(payload.photo);
+      if (!match) throw new TelegramError(400);
+      const bytes = Buffer.from(match[1], 'base64');
+      if (bytes.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw new TelegramError(400);
+      const form = new FormData();
+      for (const [name, value] of Object.entries(payload))
+        if (name !== 'photo' && value !== undefined)
+          form.set(name, typeof value === 'object' ? JSON.stringify(value) : String(value));
+      form.set('photo', new Blob([bytes], { type: 'image/png' }), 'pagamento-pix.png');
+      body = form;
+      headers = {};
+    }
     try {
       response = await this.request(`https://api.telegram.org/bot${this.token}/${method}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        headers,
+        body,
         signal: AbortSignal.timeout(timeoutMs ?? (method === 'getUpdates' ? 35000 : 20000)),
       });
     } catch {

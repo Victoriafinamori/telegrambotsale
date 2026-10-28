@@ -5,6 +5,7 @@ import type { BotStore } from './bot-store.js';
 import type { Shop, Order } from './bot-types.js';
 import { botRoot, botPath, botTransaction } from './bot-data.js';
 import { SecretVault } from './secret-vault.js';
+import { money } from './bot-appearance.js';
 import { tokenHash } from './accounts.js';
 import { HttpError } from './types.js';
 import { checkoutInput } from './mercado-pago.js';
@@ -656,7 +657,7 @@ export class PurinCashPayments {
           shop.open_orders = shop.open_orders.filter((v) => v !== oid);
           emit('sendMessage', {
             chat_id: order.buyer_id,
-            text: `Pix confirmado. Pedido ${oid}. Sua entrega segue abaixo.`,
+            text: `✅ PAGAMENTO CONFIRMADO\n\nPedido #${oid}\nRecebemos seu Pix de ${money(order.total, 'BRL')}.\n\n🎁 Seus produtos estão chegando abaixo.\nVocê também pode consultar tudo em Meus pedidos.`,
           });
           order.delivery_effects = [];
           for (const item of order.items)
@@ -670,8 +671,8 @@ export class PurinCashPayments {
                   {
                     chat_id: order.buyer_id,
                     ...(content.kind === 'document'
-                      ? { document: content.fileId, caption: item.title }
-                      : { text: `${item.title}\n\n${content.text}` }),
+                      ? { document: content.fileId, caption: `🎁 ${item.title}\nPedido #${oid}` }
+                      : { text: `🎁 ${item.title}\n\n${content.text}\n\nPedido #${oid}` }),
                   },
                   true,
                 ),

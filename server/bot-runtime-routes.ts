@@ -6,11 +6,13 @@ import { HttpError } from './types.js';
 import type { AccountService } from './platform-contract.js';
 import type { MercadoPagoPayments } from './mercado-pago.js';
 import { fastNavigation } from './bot-navigation.js';
+import type { PaymentGateway } from './payment-gateway.js';
 
 export function botRuntimeRouter(
   bots: BotStore,
   accounts: AccountService,
-  payments?: Pick<MercadoPagoPayments, 'checkFromBot'>,
+  payments?: Pick<MercadoPagoPayments, 'checkFromBot'> &
+    Partial<Pick<PaymentGateway, 'createFromBot'>>,
 ) {
   const router = Router(),
     accesses = new WeakMap<object, RuntimeAccess>();
@@ -38,7 +40,6 @@ export function botRuntimeRouter(
     const access = accesses.get(req)!;
     const callback = req.body?.callback_query;
     const inline = req.query.dispatch === 'navigation' && fastNavigation(callback?.data);
-    const result = await bots.process(access, req.body, undefined, inline);
     if (payments && typeof callback?.data === 'string' && callback.data.startsWith('pix-check:')) {
       await accounts.consumeRate(
         'pix-check:' + access.accountId + ':' + String(callback.from?.id),
@@ -49,6 +50,25 @@ export function botRuntimeRouter(
         access.accountId,
         String(callback.from?.id),
         callback.data.slice(10),
+      );
+    }
+    const result = await bots.process(access, req.body, undefined, inline);
+    if (
+      payments?.createFromBot &&
+      typeof callback?.data === 'string' &&
+      /^pix-generate:[a-f0-9]{16}$/.test(callback.data)
+    ) {
+      await accounts.consumeRate(
+        'pix-create:' + access.accountId + ':' + String(callback.from?.id),
+        5,
+        60000,
+      );
+      result.effectIds.push(
+        ...(await payments.createFromBot(
+          access,
+          String(callback.from?.id),
+          callback.data.slice(13),
+        )),
       );
     }
     if (inline && !('effects' in result)) {

@@ -2,6 +2,8 @@ import type { MercadoPagoPayments } from './mercado-pago.js';
 import { checkoutInput } from './mercado-pago.js';
 import type { PurinCashPayments } from './purin-cash.js';
 import { botPath } from './bot-data.js';
+import type { RuntimeAccess } from './bot-types.js';
+import { HttpError } from './types.js';
 // The stored order selects its provider. A browser cannot change the recipient/provider.
 export class PaymentGateway {
   constructor(
@@ -31,5 +33,28 @@ export class PaymentGateway {
       buyer,
       oid,
     );
+  }
+  async createFromBot(auth: RuntimeAccess, buyer: string, oid: string) {
+    let base;
+    try {
+      base = await this.mp.bots.checkoutForBot(auth, buyer, oid);
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) return [];
+      throw error;
+    }
+    try {
+      const charge = await this.purin.create(base);
+      return this.mp.bots.queuePix(auth, buyer, oid, charge.qrCode || undefined);
+    } catch (error) {
+      return this.mp.bots.queuePix(
+        auth,
+        buyer,
+        oid,
+        undefined,
+        error instanceof HttpError
+          ? error.message
+          : 'A cobrança está em conferência. Use Verificar pagamento. Não pague duas vezes.',
+      );
+    }
   }
 }
