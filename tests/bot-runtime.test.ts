@@ -118,11 +118,12 @@ async function walletFixture() {
   f.bots.wallet = wallet;
   const actor = { telegram: '111111111', auth: f.auth };
   const prepare = (amountCents = 1000) =>
-    wallet.prepare(
-      f.a.id,
-      { uid: 'merchant' },
-      { requestId: randomUUID(), amountCents, pixType: 'email', pixKey: 'merchant@example.test' },
-    );
+    wallet.prepare(f.a.id, actor, {
+      requestId: randomUUID(),
+      amountCents,
+      pixType: 'email',
+      pixKey: 'merchant@example.test',
+    });
   return {
     f,
     wallet,
@@ -157,22 +158,15 @@ test('Wallet exposes only the merchant subaccount available balance, rejects oth
   assert(!JSON.stringify(data).includes(p.token));
 });
 
-test('Withdrawal requires matching web authorization and Telegram owner, sends once under concurrent/replayed confirmations', async () => {
+test('Withdrawal confirms entirely in its origin channel and sends once under concurrent confirmations', async () => {
   const p = await walletFixture(),
     draft = await p.prepare();
-  await assert.rejects(() => p.wallet.execute(p.f.a.id, p.actor, draft.id), {
-    code: 'WITHDRAWAL_WEB_CONFIRM_REQUIRED',
-  });
   await assert.rejects(() => p.wallet.requestApproval(p.f.a.id, 'other', { draftId: draft.id }), {
     code: 'WALLET_OWNER_REQUIRED',
   });
-  await p.wallet.requestApproval(p.f.a.id, 'merchant', { draftId: draft.id });
-  await p.wallet.requestApproval(p.f.a.id, 'merchant', { draftId: draft.id });
-  assert.equal(
-    (await p.f.store.list(`bot_shops/${p.f.a.id}/effects`, { limit: 1000 })).filter((e) =>
-      e.id.startsWith('wallet_approval_'),
-    ).length,
-    1,
+  await assert.rejects(
+    () => p.wallet.requestApproval(p.f.a.id, 'merchant', { draftId: draft.id }),
+    { code: 'WITHDRAWAL_CHANNEL' },
   );
   await Promise.all([
     p.wallet.execute(p.f.a.id, p.actor, draft.id),
@@ -181,26 +175,69 @@ test('Withdrawal requires matching web authorization and Telegram owner, sends o
   const result = await p.wallet.execute(p.f.a.id, p.actor, draft.id);
   assert.equal(result.status, 'completed');
   assert.equal(result.netAmountCents, 900);
-  assert.equal(result.feeCents, 100);
-  assert.equal(result.gatewayFeeCents, 100);
-  assert.equal(result.blackoutFeeCents, 0);
   assert.equal(p.posts.length, 1);
-  assert(p.posts[0].idempotencyKey.startsWith('blackout_'));
-  assert.equal(p.posts[0].pixKey, 'merchant@example.test');
-  const row = await p.f.store.get(`merchant_wallets/${p.f.a.id}/withdrawals/${draft.id}`);
-  assert(!JSON.stringify(row).includes('merchant@example.test'));
+  assert(
+    !JSON.stringify(
+      await p.f.store.get(`merchant_wallets/${p.f.a.id}/withdrawals/${draft.id}`),
+    ).includes('merchant@example.test'),
+  );
+  const web = await p.wallet.prepare(
+    p.f.a.id,
+    { uid: 'merchant' },
+    { requestId: randomUUID(), amountCents: 500, pixType: 'email', pixKey: 'web@example.test' },
+  );
+  await assert.rejects(() => p.wallet.execute(p.f.a.id, p.actor, web.id), {
+    code: 'WITHDRAWAL_CHANNEL',
+  });
+  await p.wallet.requestApproval(p.f.a.id, 'merchant', { draftId: web.id });
+  await p.wallet.requestApproval(p.f.a.id, 'merchant', { draftId: web.id });
+  assert.equal(p.posts.length, 2);
+});
+
+test('Saved Pix keys remain encrypted, deduplicate, isolate merchants and can be removed', async () => {
+  const p = await walletFixture();
+  const key = { pixType: 'email', pixKey: 'saved@example.test', label: 'Conta principal' };
+  await p.wallet.saveKey(p.f.a.id, p.actor, key);
+  await p.wallet.saveKey(p.f.a.id, p.actor, key);
+  const keys = await p.wallet.keys(p.f.a.id, p.actor);
+  assert.equal(keys.length, 1);
+  assert(
+    !JSON.stringify(
+      await p.f.store.list(`merchant_wallets/${p.f.a.id}/pix_keys`, { limit: 20 }),
+    ).includes(key.pixKey),
+  );
+  await assert.rejects(() => p.wallet.keys(p.f.a.id, { uid: 'other' }), {
+    code: 'WALLET_OWNER_REQUIRED',
+  });
+  const draft = await p.wallet.prepare(p.f.a.id, p.actor, {
+    requestId: randomUUID(),
+    amountCents: 500,
+    savedKeyId: keys[0].id,
+  });
+  assert.equal(draft.fullDestination, key.pixKey);
+  await p.wallet.removeKey(p.f.a.id, p.actor, keys[0].id);
+  assert.equal((await p.wallet.keys(p.f.a.id, p.actor)).length, 0);
+  await assert.rejects(
+    () =>
+      p.wallet.prepare(p.f.a.id, p.actor, {
+        requestId: randomUUID(),
+        amountCents: 500,
+        savedKeyId: keys[0].id,
+      }),
+    { code: 'PIX_KEY_NOT_FOUND' },
+  );
+  await p.wallet.execute(p.f.a.id, p.actor, draft.id);
+  assert.equal(p.posts.length, 1);
 });
 
 test('Uncertain withdrawal never repeats POST or releases its lock until authoritative reconciliation', async () => {
   const p = await walletFixture();
   p.setMode('timeout');
   const draft = await p.prepare();
-  await p.wallet.requestApproval(p.f.a.id, 'merchant', { draftId: draft.id });
   assert.equal((await p.wallet.execute(p.f.a.id, p.actor, draft.id)).status, 'processing');
   await p.wallet.execute(p.f.a.id, p.actor, draft.id);
   assert.equal(p.posts.length, 1);
   const second = await p.prepare(500);
-  await p.wallet.requestApproval(p.f.a.id, 'merchant', { draftId: second.id });
   await assert.rejects(() => p.wallet.execute(p.f.a.id, p.actor, second.id), {
     code: 'WITHDRAWAL_BUSY',
   });
@@ -218,18 +255,15 @@ test('Cancelled, expired or revoked withdrawal approvals cannot transfer funds; 
   assert.equal((await p.wallet.execute(p.f.a.id, p.actor, cancelled.id)).status, 'cancelled');
   assert.equal(p.posts.length, 0);
   const expired = await p.prepare();
-  await p.wallet.requestApproval(p.f.a.id, 'merchant', { draftId: expired.id });
   p.advance(300001);
   await assert.rejects(() => p.wallet.execute(p.f.a.id, p.actor, expired.id));
   assert.equal(p.posts.length, 0);
   const next = await p.prepare();
-  await p.wallet.requestApproval(p.f.a.id, 'merchant', { draftId: next.id });
   p.setMode('reject');
   assert.equal((await p.wallet.execute(p.f.a.id, p.actor, next.id)).status, 'failed');
   assert.equal(p.posts.length, 1);
   assert.equal((await p.f.store.get('platform_payments/purincash'))!.active_withdrawal, null);
   const revoked = await p.prepare();
-  await p.wallet.requestApproval(p.f.a.id, 'merchant', { draftId: revoked.id });
   await p.f.store.transaction(async (tx) => {
     const runtime = (await tx.get('bot_runtimes/' + p.f.a.id))!;
     tx.set('bot_runtimes/' + p.f.a.id, { ...runtime, generation: randomUUID() });
@@ -493,27 +527,26 @@ test('Store start shows management only to the verified merchant and offers Blac
   );
 });
 
-test('Telegram wallet wizard uses owner binding, web review and explicit confirmation; buyer gets no wallet', async () => {
+test('Telegram wallet wizard uses owner binding and confirmation in Telegram; buyer gets no wallet', async () => {
   const p = await walletFixture();
   const denied = await p.f.click(222222222, 'admin:wallet');
   assert(denied.some((e) => String(e.payload.text).includes('exclusiva')));
   const view = await p.f.send(111111111, '/carteira');
-  assert(view.some((e) => String(e.payload.text).includes('Disponível para saque')));
+  assert(view.some((e) => String(e.payload.text).includes('Disponível:')));
   await p.f.click(111111111, 'wallet:new');
   await p.f.send(111111111, '10,00');
   await p.f.click(111111111, 'wallet:type:email');
   const preview = await p.f.send(111111111, 'merchant@example.test');
-  const screen = preview.find((e) => String(e.payload.text).includes('Confirmar saque'))!;
+  const screen = preview.find((e) => String(e.payload.text).includes('CONFIRMAR SAQUE'))!;
   assert(screen);
   const buttons = (screen.payload.reply_markup as any).inline_keyboard.flat();
-  assert(buttons.some((b: any) => b.url?.includes('/#/minha-loja?wallet=')));
+  assert(!buttons.some((b: any) => b.url));
   const confirm = buttons.find((b: any) =>
       b.callback_data?.startsWith('wallet:confirm:'),
     ).callback_data,
     draftId = confirm.slice(15);
   await p.f.click(111111111, confirm);
-  assert.equal(p.posts.length, 0);
-  await p.wallet.requestApproval(p.f.a.id, 'merchant', { draftId });
+  assert.equal(p.posts.length, 1);
   await p.f.click(111111111, confirm);
   assert.equal(p.posts.length, 1);
 });

@@ -162,6 +162,7 @@ export class PurinWallet {
   private safe(row: Doc) {
     return {
       id: row.id,
+      channel: row.channel ?? 'web',
       amountCents: row.amount_cents,
       destination: row.masked_key,
       pixType: row.pix_type,
@@ -180,7 +181,57 @@ export class PurinWallet {
       updatedAt: row.updated_at ?? row.created_at,
       code: row.code ?? '',
       message: row.message ?? (row.status === 'cancelled' ? 'Saque cancelado.' : ''),
+      estimatedBlackoutFeeCents:
+        Math.floor((row.amount_cents * (row.markup_percent ?? 0)) / 100) + (row.markup_fixed ?? 0),
     };
+  }
+  async keys(id: string, actor: Actor) {
+    await this.context(id, actor);
+    const rows = await this.store.list(`merchant_wallets/${id}/pix_keys`, { limit: 20 });
+    return rows.map((r) => ({ id: r.id, type: r.type, label: r.label, destination: r.masked_key }));
+  }
+  async saveKey(id: string, actor: Actor, raw: unknown) {
+    await this.context(id, actor);
+    const input = z
+      .object({
+        pixType: z.enum(['cpf', 'cnpj', 'email', 'phone', 'random']),
+        pixKey: z.string().max(200),
+        label: z.string().trim().max(40).default(''),
+      })
+      .strict()
+      .parse(raw);
+    const key = pixKey.parse({ type: input.pixType, value: input.pixKey, holder: '' });
+    const kid = tokenHash(key.type + ':' + key.value).slice(0, 32);
+    await botTransaction(this.store, async (tx) => {
+      const index = await tx.get(`merchant_wallets/${id}`);
+      const existing = await tx.get(`merchant_wallets/${id}/pix_keys/${kid}`);
+      const ids: string[] = index?.key_ids ?? [];
+      if (ids.length >= 10 && !ids.includes(kid))
+        throw new HttpError(409, 'PIX_KEY_LIMIT', 'Você pode salvar até dez chaves Pix.');
+      tx.set(`merchant_wallets/${id}`, { ...index, key_ids: [...new Set([...ids, kid])] });
+      tx.set(`merchant_wallets/${id}/pix_keys/${kid}`, {
+        id: kid,
+        type: key.type,
+        label: input.label || existing?.label || pixTypes[key.type],
+        masked_key: key.value.slice(0, 2) + '••••' + key.value.slice(-4),
+        ciphertext: this.vault.seal(key.value, `wallet-key:${id}:${kid}`),
+        created_at: this.now(),
+      });
+    });
+    return { ok: true };
+  }
+  async removeKey(id: string, actor: Actor, kid: string) {
+    await this.context(id, actor);
+    if (!/^[a-f0-9]{32}$/.test(kid)) throw new HttpError(400, 'PIX_KEY_INVALID', 'Chave inválida.');
+    await botTransaction(this.store, async (tx) => {
+      const index = await tx.get(`merchant_wallets/${id}`);
+      tx.set(`merchant_wallets/${id}`, {
+        ...index,
+        key_ids: (index?.key_ids ?? []).filter((v: string) => v !== kid),
+      });
+      tx.delete(`merchant_wallets/${id}/pix_keys/${kid}`);
+    });
+    return { ok: true };
   }
   async draft(id: string, actor: Actor, wid: string) {
     await this.context(id, actor);
@@ -241,6 +292,9 @@ export class PurinWallet {
       active: sub.active === true,
       markupPercent: sub.payoutFeePercent ?? 0,
       markupFixedCents: sub.payoutFeeFixedCents ?? 0,
+      salePercent: sub.feePercent ?? 0,
+      saleFixedCents: sub.feeFixedCents ?? 0,
+      keys: await this.keys(id, actor),
       withdrawals: withdrawals.map((r) => this.safe(r)),
       transactions: await Promise.all(
         (movements.transactions ?? []).slice(0, 20).map(async (r: Doc) => {
@@ -274,6 +328,26 @@ export class PurinWallet {
     };
   }
   async prepare(id: string, actor: Actor, raw: unknown) {
+    if (raw && typeof raw === 'object' && 'savedKeyId' in raw) {
+      await this.context(id, actor);
+      const input = z
+        .object({
+          requestId: z.uuid(),
+          amountCents: z.number().int(),
+          savedKeyId: z.string().regex(/^[a-f0-9]{32}$/),
+        })
+        .strict()
+        .parse(raw);
+      const saved = await this.store.get(`merchant_wallets/${id}/pix_keys/${input.savedKeyId}`);
+      if (!saved)
+        throw new HttpError(404, 'PIX_KEY_NOT_FOUND', 'Chave removida. Escolha outra chave.');
+      raw = {
+        requestId: input.requestId,
+        amountCents: input.amountCents,
+        pixType: saved.type,
+        pixKey: this.vault.open(saved.ciphertext, `wallet-key:${id}:${input.savedKeyId}`),
+      };
+    }
     const value = z
       .object({
         requestId: z.uuid(),
@@ -300,12 +374,22 @@ export class PurinWallet {
         'WALLET_BALANCE',
         'Valor acima do saldo disponível ou subconta inativa.',
       );
+    const blackoutFee =
+      Math.floor((value.amountCents * (sub.payoutFeePercent ?? 0)) / 100) +
+      (sub.payoutFeeFixedCents ?? 0);
+    if (value.amountCents <= blackoutFee)
+      throw new HttpError(
+        400,
+        'WALLET_AMOUNT_TOO_LOW',
+        'O valor precisa ser maior que a taxa do saque.',
+      );
     const body = {
       amountCents: value.amountCents,
       pixKey: destination.value,
       idempotencyKey: 'blackout_' + value.requestId.replaceAll('-', ''),
     };
     const hash = tokenHash(JSON.stringify(body));
+    await this.saveKey(id, actor, { pixType: destination.type, pixKey: destination.value });
     await botTransaction(this.store, async (tx) => {
       const existing = await tx.get(rowPath(id, value.requestId));
       if (existing) {
@@ -335,6 +419,7 @@ export class PurinWallet {
           `wallet:${id}:${value.requestId}`,
         ),
         status: 'prepared',
+        channel: 'uid' in actor ? 'web' : 'telegram',
         markup_percent: sub.payoutFeePercent ?? 0,
         markup_fixed: sub.payoutFeeFixedCents ?? 0,
         created_at: this.now(),
@@ -351,77 +436,19 @@ export class PurinWallet {
     };
   }
   async requestApproval(id: string, uid: string, raw: unknown) {
-    const { draftId } = z.object({ draftId: z.uuid() }).strict().parse(raw),
-      ctx = await this.context(id, { uid });
-    if (!ctx.enabled)
-      throw new HttpError(
-        409,
-        'WITHDRAWALS_DISABLED',
-        'Saques aguardam habilitação pela Blackout.',
-      );
-    await botTransaction(this.store, async (tx) => {
-      const row = await tx.get(rowPath(id, draftId));
-      if (
-        !row ||
-        row.owner_uid !== uid ||
-        row.owner !== ctx.owner ||
-        row.subaccount !== ctx.subaccount ||
-        row.generation !== ctx.generation ||
-        row.expires_at <= this.now() ||
-        !['prepared', 'awaiting_confirmation'].includes(row.status)
-      )
-        throw new HttpError(
-          409,
-          'WITHDRAWAL_EXPIRED',
-          'Solicitação vencida ou encerrada. Prepare outro saque.',
-        );
-      if (row.approval_queued) return;
-      const body = JSON.parse(this.vault.open(row.request_ciphertext, `wallet:${id}:${draftId}`));
-      const eid = 'wallet_approval_' + draftId.replaceAll('-', '');
-      const payload = {
-        chat_id: ctx.owner,
-        text: this.confirmText(row, body.pixKey),
-        reply_markup: this.confirmButtons(draftId),
-      };
-      tx.set(botPath(id, 'effects', eid), {
-        id: eid,
-        method: 'sendMessage',
-        status: 'pending',
-        wallet_draft_id: draftId,
-        payload_ciphertext: this.vault.seal(JSON.stringify(payload), `${id}:effect:${eid}`),
-        created_at: this.now(),
-      });
-      tx.set(rowPath(id, draftId), {
-        ...row,
-        status: 'awaiting_confirmation',
-        approval_queued: true,
-        web_confirmed_hash: row.request_hash,
-        web_confirmed_uid: uid,
-        web_confirmed_at: this.now(),
-      });
-      this.audit(tx, id, 'wallet.approval_requested', draftId);
-    });
-    return {
-      ok: true,
-      message: 'Abra o Telegram da loja e confirme os dados para enviar o saque.',
-    };
+    const { draftId } = z.object({ draftId: z.uuid() }).strict().parse(raw);
+    return this.execute(id, { uid }, draftId);
   }
   private confirmText(row: Doc, key: string) {
-    return `Confirmar saque\n\nDébito da sua carteira: ${money(row.amount_cents)}\nChave Pix: ${key}\n\nAs tarifas da PurinCash são descontadas deste valor. O líquido recebido será informado no comprovante.${row.markup_percent || row.markup_fixed ? `\nTaxa da subconta: ${row.markup_percent}% + ${money(row.markup_fixed)}.` : ''}\n\nConfirmar envia dinheiro para esta chave. Válido por 5 minutos.`;
+    const fee =
+      Math.floor((row.amount_cents * (row.markup_percent ?? 0)) / 100) + (row.markup_fixed ?? 0);
+    return `💸 CONFIRMAR SAQUE\n\nValor solicitado: ${money(row.amount_cents)}\nTaxa Blackout: ${money(fee)}\nApós taxa Blackout: ${money(Math.max(0, row.amount_cents - fee))}\nTarifa Purin: descontada adicionalmente pelo provedor.\n\nChave Pix: ${key}\n\nConfira os dados. Confirmar envia o saque, sem precisar acessar o site. Válido por 5 minutos.`;
   }
   private confirmButtons(id: string): WalletScreen['markup'] {
-    return {
-      inline_keyboard: [
-        [
-          {
-            text: 'Conferir e autorizar no site',
-            url: this.webOrigin + '/#/minha-loja?wallet=' + id,
-          },
-        ],
-        [{ text: 'Confirmar saque', callback_data: 'wallet:confirm:' + id }],
-        [{ text: 'Não, cancelar', callback_data: 'wallet:cancel:' + id }],
-      ],
-    };
+    return botButtons([
+      [['Confirmar saque', 'wallet:confirm:' + id]],
+      [['Cancelar', 'wallet:cancel:' + id]],
+    ]);
   }
   async cancel(id: string, actor: Actor, wid: string) {
     await this.context(id, actor);
@@ -435,28 +462,25 @@ export class PurinWallet {
       this.audit(tx, id, 'wallet.withdrawal_cancelled', wid);
     });
   }
-  async execute(id: string, actor: { telegram: string; auth: RuntimeAccess }, wid: string) {
+  async execute(id: string, actor: Actor, wid: string) {
     z.uuid().parse(wid);
     const ctx = await this.context(id, actor),
       row = await this.store.get(rowPath(id, wid));
     if (!row) throw new HttpError(404, 'WITHDRAWAL_NOT_FOUND', 'Saque não encontrado.');
     if (row.status === 'processing') return this.sync(id, actor, wid);
     if (!['prepared', 'awaiting_confirmation'].includes(row.status)) return this.safe(row);
-    if (
-      row.owner_uid !== ctx.uid ||
-      row.web_confirmed_uid !== ctx.uid ||
-      row.web_confirmed_hash !== row.request_hash ||
-      !row.web_confirmed_at ||
-      this.now().getTime() - row.web_confirmed_at.getTime() > 300000
-    )
+    const channel = 'uid' in actor ? 'web' : 'telegram';
+    if ((row.channel ?? 'web') !== channel)
       throw new HttpError(
         409,
-        'WITHDRAWAL_WEB_CONFIRM_REQUIRED',
-        'Confira e autorize primeiro este saque no site. Depois confirme aqui no Telegram.',
+        'WITHDRAWAL_CHANNEL',
+        'Confirme o saque no mesmo canal em que iniciou a solicitação.',
       );
+    if (row.owner_uid !== ctx.uid)
+      throw new HttpError(403, 'WITHDRAWAL_BLOCKED', 'Saque não autorizado.');
     if (
       !ctx.enabled ||
-      row.owner !== actor.telegram ||
+      row.owner !== ctx.owner ||
       row.generation !== ctx.generation ||
       row.subaccount !== ctx.subaccount ||
       row.expires_at <= this.now()
@@ -490,11 +514,13 @@ export class PurinWallet {
       if (!current || !['prepared', 'awaiting_confirmation'].includes(current.status)) return false;
       if (
         settings?.withdrawals_enabled !== true ||
-        runtime?.generation !== actor.auth.generation ||
-        current.web_confirmed_uid !== account?.firebase_uid ||
-        current.web_confirmed_hash !== current.request_hash ||
-        shop?.owner_id !== actor.telegram ||
-        setup?.telegram_user_id !== actor.telegram ||
+        (!('uid' in actor) && runtime?.generation !== actor.auth.generation) ||
+        current.owner_uid !== ctx.uid ||
+        account?.firebase_uid !== ctx.uid ||
+        (current.channel ?? 'web') !== channel ||
+        shop?.owner_id !== ctx.owner ||
+        setup?.telegram_user_id !== ctx.owner ||
+        shop?.owner_bot_id !== setup?.bot_id ||
         account?.access_status !== 'approved' ||
         shop.purin_connection !== row.generation ||
         shop.purin_subaccount !== row.subaccount ||
@@ -509,7 +535,7 @@ export class PurinWallet {
         );
       tx.set(platform, { ...settings, active_withdrawal: id + ':' + wid });
       tx.set(rowPath(id, wid), { ...current, status: 'processing', submitted_at: this.now() });
-      this.audit(tx, id, 'wallet.withdrawal_confirmed_telegram', wid);
+      this.audit(tx, id, 'wallet.withdrawal_confirmed_' + channel, wid);
       return true;
     });
     if (!acquired) return this.safe((await this.store.get(rowPath(id, wid)))!);
@@ -671,7 +697,7 @@ export class PurinWallet {
         });
         const w = await this.read(id, actor);
         output = screen(
-          `Sua carteira Blackout\n\nDisponível para saque: ${money(w.availableCents)}\nSaldo total: ${money(w.balanceCents)}\nBloqueado por disputas: ${money(w.blockedCents)}\n\n${
+          `💳 CARTEIRA BLACKOUT\n\n💰 Disponível: ${money(w.availableCents)}\nSaldo total: ${money(w.balanceCents)}\n🛡 Em disputa: ${money(w.blockedCents)}\n\nVendas: ${w.salePercent}% + ${money(w.saleFixedCents)} de comissão Blackout.\nSaques: ${w.markupPercent}% + ${money(w.markupFixedCents)} Blackout.\nTarifas Purin são adicionais.\n\n${
             cmd === 'wallet:history'
               ? w.withdrawals
                   .slice(0, 8)
@@ -691,7 +717,73 @@ export class PurinWallet {
               ['Atualizar', 'admin:wallet'],
               ['Voltar', 'admin'],
             ],
+            [['Minhas chaves Pix', 'wallet:keys']],
           ]),
+        );
+      } else if (cmd === 'wallet:keys') {
+        const keys = await this.keys(id, actor);
+        await botTransaction(this.store, async (tx) => {
+          tx.set(sid, { step: 'save_type', expires_at: new Date(this.now().getTime() + 300000) });
+        });
+        output = screen(
+          '🔑 MINHAS CHAVES PIX\n\n' +
+            (keys.map((k) => `${k.label} · ${k.destination}`).join('\n') ||
+              'Nenhuma chave salva.') +
+            '\n\nEscolha um tipo para adicionar uma chave ou remova uma das chaves abaixo.',
+          botButtons([
+            ...keys.map(
+              (k) =>
+                [[`Remover ${k.label} · ${k.destination}`, 'wallet:remove:' + k.id]] as [
+                  string,
+                  string,
+                ][],
+            ),
+            ...Object.entries(pixTypes).map(
+              ([type, label]) =>
+                [[`Adicionar ${label}`, 'wallet:save-type:' + type]] as [string, string][],
+            ),
+            [['Voltar', 'admin:wallet']],
+          ]),
+        );
+      } else if (cmd.startsWith('wallet:remove:')) {
+        await this.removeKey(id, actor, cmd.slice(14));
+        output = screen(
+          'Chave Pix removida.',
+          botButtons([[['Minhas chaves Pix', 'wallet:keys']]]),
+        );
+      } else if (cmd.startsWith('wallet:save-type:')) {
+        const type = z.enum(['cpf', 'cnpj', 'email', 'phone', 'random']).parse(cmd.slice(17));
+        await botTransaction(this.store, async (tx) => {
+          tx.set(sid, {
+            step: 'save_key',
+            pixType: type,
+            expires_at: new Date(this.now().getTime() + 300000),
+          });
+        });
+        output = screen(`Envie a chave Pix do tipo ${pixTypes[type]} que deseja salvar.`);
+      } else if (session?.step === 'save_key' && msg?.text) {
+        await this.saveKey(id, actor, { pixType: session.pixType, pixKey: msg.text.trim() });
+        await botTransaction(this.store, async (tx) => {
+          tx.delete(sid);
+        });
+        output = screen(
+          '🔑 Chave Pix salva. Ela poderá ser usada nos próximos saques.',
+          botButtons([[['Minhas chaves Pix', 'wallet:keys']]]),
+        );
+      } else if (cmd.startsWith('wallet:use:')) {
+        if (!session?.amount || session.expires_at <= this.now())
+          throw new HttpError(409, 'WITHDRAWAL_EXPIRED', 'Comece novamente em Sacar.');
+        const draft = await this.prepare(id, actor, {
+          requestId: randomUUID(),
+          amountCents: session.amount,
+          savedKeyId: cmd.slice(11),
+        });
+        await botTransaction(this.store, async (tx) => {
+          tx.delete(sid);
+        });
+        output = screen(
+          this.confirmText((await this.store.get(rowPath(id, draft.id)))!, draft.fullDestination),
+          this.confirmButtons(draft.id),
         );
       } else if (cmd === 'wallet:new') {
         const w = await this.read(id, actor);
@@ -761,11 +853,18 @@ export class PurinWallet {
         await botTransaction(this.store, async (tx) => {
           tx.set(sid, { ...session, step: 'type', amount });
         });
+        const keys = await this.keys(id, actor);
         output = screen(
-          'Escolha o tipo da chave Pix.',
-          botButtons(
-            Object.entries(pixTypes).map(([type, label]) => [[label, 'wallet:type:' + type]]),
-          ),
+          'Escolha uma chave salva ou o tipo de uma nova chave Pix.',
+          botButtons([
+            ...keys.map(
+              (k) =>
+                [[`${k.label} · ${k.destination}`, 'wallet:use:' + k.id]] as [string, string][],
+            ),
+            ...Object.entries(pixTypes).map(
+              ([type, label]) => [[label, 'wallet:type:' + type]] as [string, string][],
+            ),
+          ]),
         );
       } else if (session?.step === 'key') {
         const draft = await this.prepare(id, actor, {

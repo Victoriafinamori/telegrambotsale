@@ -47,7 +47,7 @@ const faqs = [
   ],
   [
     'Como funciona a carteira e o saque?',
-    'As vendas com Pix integrado Blackout são atribuídas à carteira da loja. O lojista consulta saldo disponível, bloqueios e histórico pelo site ou Telegram, e solicita o saque por Pix. A operação pede conferência no site e confirmação no Telegram, e está sujeita às taxas, limites e liberações do provedor.',
+    'As vendas com Pix integrado Blackout são atribuídas à carteira da loja. O lojista consulta saldo disponível, bloqueios e histórico pelo site ou Telegram, e solicita o saque por Pix. A operação pede conferência e confirmação no canal escolhido, e está sujeita às taxas, limites e liberações do provedor.',
   ],
   [
     'Preciso criar meu próprio bot?',

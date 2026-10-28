@@ -24,7 +24,7 @@ export async function mountPurinAdmin(host: HTMLElement, api: Api, merchantId?: 
     if (!merchantId && status.connected)
       host.insertAdjacentHTML(
         'beforeend',
-        `<h3>Saques das subcontas</h3><p>Para habilitar, a chave de produção precisa da permissão <strong>Sacar de subconta</strong> na PurinCash. A API enviará Pix apenas do saldo da subconta de cada lojista, após conferência no site e confirmação no Telegram vinculado. O primeiro saque, os valores mínimos, as tarifas e os limites dependem da PurinCash.</p><form data-withdrawals><label class="check-label"><input name="enabled" type="checkbox" ${status.withdrawalsEnabled ? 'checked' : ''}><span>Habilitar os saques dos lojistas pelo site e Telegram</span></label><button type="submit">Salvar habilitação de saques</button></form>`,
+        `<h3>Saques das subcontas</h3><p>Para habilitar, a chave de produção precisa da permissão <strong>Sacar de subconta</strong> na PurinCash. A API enviará Pix apenas do saldo da subconta de cada lojista, após conferência e confirmação no canal em que o saque foi iniciado. O primeiro saque, os valores mínimos, as tarifas e os limites dependem da PurinCash.</p><form data-withdrawals><label class="check-label"><input name="enabled" type="checkbox" ${status.withdrawalsEnabled ? 'checked' : ''}><span>Habilitar os saques dos lojistas pelo site e Telegram</span></label><button type="submit">Salvar habilitação de saques</button></form>`,
       );
   };
   host.addEventListener('submit', async (event) => {

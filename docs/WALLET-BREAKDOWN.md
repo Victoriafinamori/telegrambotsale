@@ -26,7 +26,15 @@ O backend preserva as duas taxas separadas e só soma um total quando ambas fore
 
 O acompanhamento distingue criação, autorização no site, confirmação no Telegram, processamento, conclusão e devolução. Datas de conclusão/devolução só aparecem quando informadas pela consulta do provedor. Saques com estorno exibem que o valor integral, incluindo taxas, foi devolvido. Solicitações em processamento orientam a conferir antes de repetir.
 
-Nenhuma taxa, comissão, valor mínimo ou permissão foi alterada. Não é feita uma transferência adicional para detalhar a carteira. Consulta automática de saque já em processamento e confirmação final pelo Telegram permanecem com as mesmas proteções anteriores.
+O detalhamento histórico não altera taxas nem faz transferências adicionais. A carteira usa as taxas reais configuradas na subconta; valores ausentes do provedor continuam como “Não informado”.
+
+## Confirmação e chaves Pix
+
+Cada saque novo registra seu canal de origem (`web` ou `telegram`). A confirmação final ocorre nesse canal, sem exigir autorização no outro. `/wallet/approve` executa uma solicitação web do lojista autenticado; `wallet:confirm` executa uma solicitação do Telegram do responsável vinculado. As duas entradas preservam a conferência de saldo, conexão, validade, alteração de taxas, trava transacional e chave de idempotência. Uma resposta ambígua continua em processamento e nunca repete o POST ao provedor.
+
+As chaves Pix são cifradas por loja, deduplicadas e limitadas a dez. A API de listagem expõe somente nome, tipo e destino mascarado. O lojista pode adicionar e remover pelo site ou Telegram. Remover uma chave salva não muda o destino de um saque já preparado: ele conserva os dados cifrados que o lojista conferiu.
+
+O layout tem cartões de saldo, filtros de saques, extrato e chaves Pix. O formulário mostra o valor solicitado, a comissão Blackout e o valor após essa comissão. A tarifa Purin é adicional e o líquido final só é apresentado como confirmado quando informado pelo provedor. Não se presume tarifa zero.
 
 ## Validação
 

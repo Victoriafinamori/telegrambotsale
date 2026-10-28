@@ -61,6 +61,18 @@ export function merchantConsoleRouter(
     const { id, uid } = owner(req);
     res.json(await wallet.draft(id, { uid }, z.uuid().parse(req.params.id)));
   });
+  router.post('/wallet/keys', async (req, res) => {
+    if (!wallet) throw new HttpError(503, 'WALLET_UNAVAILABLE', 'Carteira indisponível.');
+    const { id, uid } = owner(req);
+    await accounts.consumeRate('wallet-keys:' + id, 20, 60000);
+    res.json(await wallet.saveKey(id, { uid }, req.body));
+  });
+  router.post('/wallet/keys/remove', async (req, res) => {
+    if (!wallet) throw new HttpError(503, 'WALLET_UNAVAILABLE', 'Carteira indisponível.');
+    const { id, uid } = owner(req);
+    const { keyId } = z.object({ keyId: z.string() }).strict().parse(req.body);
+    res.json(await wallet.removeKey(id, { uid }, keyId));
+  });
   router.post('/wallet/prepare', async (req, res) => {
     if (!wallet) throw new HttpError(503, 'WALLET_UNAVAILABLE', 'Carteira indisponível.');
     const { id, uid } = owner(req);
