@@ -50,6 +50,13 @@ export function validPurinSignature(raw: Buffer, signature: string, secret: stri
   );
 }
 
+export const BLACKOUT_PURIN_FEES = Object.freeze({
+  feePercent: 12,
+  feeFixedCents: 0,
+  payoutFeePercent: 0,
+  payoutFeeFixedCents: 100,
+});
+
 export class PurinCashPayments {
   private vault: SecretVault;
   constructor(
@@ -69,7 +76,7 @@ export class PurinCashPayments {
         throw Error('Invalid payment origin');
     }
   }
-  private async provider(token: string, path: string, body?: Doc): Promise<Doc> {
+  private async provider(token: string, path: string, body?: Doc, method?: 'PUT'): Promise<Doc> {
     if (!this.liveEnabled)
       throw new HttpError(
         503,
@@ -79,7 +86,7 @@ export class PurinCashPayments {
     let response: Response;
     try {
       response = await this.request('https://api.purincash.com/v1' + path, {
-        method: body ? 'POST' : 'GET',
+        method: method ?? (body ? 'POST' : 'GET'),
         redirect: 'error',
         signal: AbortSignal.timeout(12000),
         headers: {
@@ -235,6 +242,28 @@ export class PurinCashPayments {
         'PURIN_SUBACCOUNT_MISMATCH',
         'Subconta inativa ou vinculada a outro identificador. Use o ID deste lojista como identificador externo.',
       );
+    // Reserve ownership before changing provider settings. Concurrent binds cannot
+    // configure another merchant's subaccount, even without an externalId.
+    await botTransaction(this.store, async (tx) => {
+      const [claim, account, shop, current] = await Promise.all([
+        tx.get('purin_subaccount_claims/' + input.subaccountId),
+        tx.get('merchant_accounts/' + id),
+        tx.get(botRoot(id)),
+        tx.get(root),
+      ]);
+      if (!account || !shop || current?.generation !== pointer.generation) throw missing();
+      if (claim && claim.account_id !== id)
+        throw new HttpError(
+          409,
+          'PURIN_SUBACCOUNT_USED',
+          'Esta subconta já pertence a outro lojista da Blackout.',
+        );
+      tx.set('purin_subaccount_claims/' + input.subaccountId, {
+        account_id: id,
+        created_at: claim?.created_at ?? this.now(),
+      });
+    });
+    await this.applySubaccountFees(input.subaccountId, credentials.token);
     await botTransaction(this.store, async (tx) => {
       const [account, shop, claimed, current] = await Promise.all([
         tx.get('merchant_accounts/' + id),
@@ -262,6 +291,32 @@ export class PurinCashPayments {
       this.audit(tx, id, actor, 'store.purin_subaccount_bound');
     });
     return this.binding(id);
+  }
+  private async applySubaccountFees(sid: string, token: string) {
+    await this.provider(token, '/subaccounts/' + sid, BLACKOUT_PURIN_FEES, 'PUT');
+    const sub = await this.provider(token, '/subaccounts/' + sid);
+    if (
+      sub.subaccountId !== sid ||
+      Object.entries(BLACKOUT_PURIN_FEES).some(([key, value]) => sub[key] !== value)
+    )
+      throw new HttpError(
+        409,
+        'PURIN_FEES_NOT_CONFIRMED',
+        'A Purin ainda não confirmou as taxas da subconta.',
+      );
+  }
+  async applyFees(id: string, actor: string) {
+    const shop = await this.store.get(botRoot(id));
+    if (!shop?.purin_connection || !shop.purin_subaccount) throw missing();
+    const sid = subaccountId.parse(shop.purin_subaccount);
+    const claim = await this.store.get('purin_subaccount_claims/' + sid);
+    if (claim?.account_id !== id) throw missing();
+    const credentials = await this.credentials(shop.purin_connection);
+    await this.applySubaccountFees(sid, credentials.token);
+    await botTransaction(this.store, async (tx) => {
+      this.audit(tx, id, actor, 'store.purin_fees_12_percent_and_100_cents');
+    });
+    return { ...BLACKOUT_PURIN_FEES };
   }
   async requestActivation(id: string, uid: string) {
     await botTransaction(this.store, async (tx) => {
@@ -411,7 +466,6 @@ export class PurinCashPayments {
           subaccountId: order.purin_subaccount,
         }),
         subaccountId: order.purin_subaccount,
-        subaccountFeeCents: 0,
       });
     } catch (error) {
       await botTransaction(this.store, async (tx) => {

@@ -13,7 +13,7 @@ Nenhuma URL global precisa ser alterada: cada cobrança recebe `callbackUrl` HTT
 
 ## Cobrança e entrega
 
-- A API calcula o valor a partir do pedido reservado. Usa `/v1/charges`, BRL, uma subconta obrigatória e **`subaccountFeeCents: 0`**. Não há comissão Blackout nesta versão, independentemente do markup padrão da subconta; tarifas do gateway continuam valendo. O mínimo do provedor é R$ 0,80.
+- A API calcula o valor a partir do pedido reservado. Usa `/v1/charges`, BRL e uma subconta obrigatória. Novos vínculos configuram **12% de comissão sobre o líquido após a tarifa Purin**, sem componente fixo por venda; **R$ 1,00 de comissão por saque**, sem percentual no saque. Não envia `subaccountFeeCents`: a Purin aplica o markup da subconta. Tarifas Purin são adicionais. Alterações não recalculam lançamentos anteriores. O mínimo do provedor é R$ 0,80.
 - QR e copia e cola são exibidos no checkout privado aberto pelo Telegram, sem exigir CPF/e-mail do comprador para PurinCash. O QR é renderizado localmente a partir do BR Code; URLs de imagem fornecidas pelo provedor nunca são acessadas.
 - Checkout usa capacidade aleatória no fragmento da URL; somente o bot do comprador recebe o link. O servidor seleciona o provedor pelo pedido, sem aceitar recebedor ou valor do navegador.
 - HMAC-SHA256 é validado sobre os bytes originais antes do JSON. `charge.paid` exige ID coerente, consulta autenticada da cobrança, valor, moeda, metadata, identificação externa e subconta congelada. Somente chaves `ps_live_` são aceitas; sandbox explícito é rejeitado. Pedidos encerrados/suspensos/vencidos vão para atendimento/reembolso, sem entrega.
@@ -23,6 +23,6 @@ Nenhuma URL global precisa ser alterada: cada cobrança recebe `callbackUrl` HTT
 - Se a resposta original de criação for perdida, o GET pode não retornar o QR; a confirmação continua conciliável, mas não prometemos reconstrução do código. Conferir a cobrança na PurinCash, aguardar expiração e atender o comprador antes de uma nova compra.
 - Rotação mantém versões privadas anteriores para pedidos pendentes. Vincule novamente as lojas à conexão atual após conferir que a chave pertence à mesma conta. IDs de subcontas já usados permanecem reservados ao lojista original.
 
-A carteira e os saques das subcontas têm fluxo próprio, descrito em WALLET.md. Gestão de contestações/MED e comissão configurável não foram implementadas.
+A carteira e os saques das subcontas têm fluxo próprio, descrito em WALLET.md. Gestão de contestações/MED permanece no provedor. A política de comissão está em `BLACKOUT_PURIN_FEES`, no servidor.
 
 Documentação: https://docs.purincash.com/guias/subcontas e https://docs.purincash.com/webhooks/assinatura.

@@ -720,6 +720,7 @@ async function purinFixture(failCreate = false) {
     posts = 0;
   let rejectNext = false,
     failPreflight = false;
+  let subFees: Record<string, number> = {};
   const charges = new Map<string, any>(),
     secret = 'WEBHOOK_SYNTHETIC_' + 'a'.repeat(32),
     token = 'ps_live_' + 'b'.repeat(40);
@@ -728,6 +729,15 @@ async function purinFixture(failCreate = false) {
     assert.equal(address.origin, 'https://api.purincash.com');
     if (address.pathname === '/v1/subaccounts') return Response.json({ subaccounts: [] });
     if (address.pathname.startsWith('/v1/subaccounts/')) {
+      if (init?.method === 'PUT') {
+        subFees = JSON.parse(String(init.body));
+        assert.deepEqual(subFees, {
+          feePercent: 12,
+          feeFixedCents: 0,
+          payoutFeePercent: 0,
+          payoutFeeFixedCents: 100,
+        });
+      }
       if (failPreflight) {
         failPreflight = false;
         throw Error('Simulated read failure');
@@ -736,6 +746,7 @@ async function purinFixture(failCreate = false) {
         subaccountId: address.pathname.split('/').at(-1),
         active: true,
         externalId: f.a.id,
+        ...subFees,
       });
     }
     if (init?.method === 'POST') {
@@ -760,7 +771,11 @@ async function purinFixture(failCreate = false) {
         subaccountId: body.subaccountId,
         pix: { brCode: 'PIX_SIMULADO_NAO_PAGAR' },
       };
-      assert.equal(body.subaccountFeeCents, 0);
+      assert.equal(
+        body.subaccountFeeCents,
+        undefined,
+        'Use the subaccount commission, never override it with zero',
+      );
       charges.set(id, payment);
       if (failCreate) throw Error('Simulated lost response');
       return Response.json(payment);
@@ -842,6 +857,26 @@ async function purinFixture(failCreate = false) {
     },
   };
 }
+
+test('Purin fee policy configures new bindings and refuses updates to another merchant claim', async () => {
+  const p = await purinFixture();
+  assert.deepEqual(await p.service.applyFees(p.f.a.id, 'admin'), {
+    feePercent: 12,
+    feeFixedCents: 0,
+    payoutFeePercent: 0,
+    payoutFeeFixedCents: 100,
+  });
+  await p.f.store.transaction(async (tx) => {
+    tx.set('purin_subaccount_claims/sacc_pilot', { account_id: 'another-merchant' });
+  });
+  await assert.rejects(() => p.service.applyFees(p.f.a.id, 'admin'), {
+    code: 'CHECKOUT_NOT_FOUND',
+  });
+  await assert.rejects(() => p.service.bind(p.f.a.id, 'admin', { subaccountId: 'sacc_pilot' }), {
+    code: 'PURIN_SUBACCOUNT_USED',
+  });
+  assert.equal(p.posts(), 0, 'Configuring fees never creates a charge or payout');
+});
 
 test('Purin receiver verification rejection remains actionable and permits retry only after a definite rejection', async () => {
   const p = await purinFixture();
