@@ -2,20 +2,22 @@
 
 ## Estado em 27/10/2026
 
-### Migração iniciada
+### Migração concluída
 
-- Plano Starter confirmado pela API: 1.024 MB e quatro projetos estimados. A conexão privada da Hyze foi validada e novas ativações ficaram pausadas durante a migração.
+- Plano Starter confirmado pela API: 1.024 MB e quatro projetos estimados. API e piloto reservam 768 MB; restam 256 MB para mais um bot. A conexão privada está validada e as novas ativações foram habilitadas após a troca.
 - API Hyze `d4da3202-673c-4985-98b1-c126468f39b5` publicada com 512 MB e porta 3000. HTTPS validado em `https://blackout-create-api.hyzecloud.app`: health/config 200 e configuração autenticada do piloto 200, incluindo leitura Firestore e escrita do limitador persistido.
 - O primeiro build falhou: a imagem Node padrão executou Node 22.23.2 e tentou recompilar o pacote já compilado. O pacote corrigido remove scripts de build e dependências de desenvolvimento e fixa Node 24.18.0 pelo npm, com lockfile próprio. O comando é `./node_modules/node/bin/node hyze-start.mjs`.
 - A proprietária autorizou explicitamente a identidade Firebase Admin dedicada e as duas chaves de cifragem no ambiente privado da API Hyze. Os valores existentes foram preservados e instalados sem incluir segredos em ZIP, Git ou frontend.
 - Frontend publicado no Firebase Hosting com origem Hyze e CSP correspondente; bundle `index-C_EYury9.js`.
-- Worker piloto Hyze `56f6b1ca-cf09-42ed-9379-d401d810eadd` publicado com 256 MB, ainda aguardando configuração privada. Não executa polling. A transferência da credencial do piloto e sua execução ainda dependem da autorização solicitada à proprietária.
-- Worker e API antigos continuam na Square. Novas ativações permanecem pausadas até validar a transferência coordenada do piloto e o painel autenticado.
+- Worker piloto Hyze `56f6b1ca-cf09-42ed-9379-d401d810eadd` executando com 256 MB e heartbeat recente. A proprietária autorizou a credencial privada de execução no destino. O worker Square foi parado antes da configuração Hyze; a API Square confirmou `CONTAINER_ALREADY_STOPPED` mesmo enquanto o endpoint de status ainda mostrava informação antiga.
+- Vínculo do piloto migrado em transação, preservando segredo, geração, offset, estoque, responsável e pedidos. Assinatura preservada de 25/10/2026 até 25/11/2026. Não foi usado o provisionamento de nova conta, que zeraria o offset.
+- A proprietária confirmou explicitamente parar a API antiga após ser informada sobre links/callbacks anteriores. A parada foi enviada; o health antigo retornou HTTP 408, e a API Hyze continuou 200. Os dois aplicativos Square foram preservados para rollback, sem exclusão.
+- Painel autenticado abriu na API Hyze. Saúde final: uma loja online, zero desconectadas, zero alertas, pagamentos pendentes, entregas com problema ou ativações pendentes. Hyze conectada e habilitada.
 - Conferência de pagamentos: nenhuma fatura de assinatura registrada; piloto com um pedido expirado e um cancelado, nenhum aguardando pagamento ainda válido. Não houve cobrança ou saque de teste nesta migração.
 - Verificação de tipos, compilação e suíte completa: 116 testes aprovados.
 
 - A criação automática de novos aplicativos na Square foi pausada por escolha da proprietária.
-- O provedor da automação agora é a Hyze, com chave conectada; mantenha novas ativações desabilitadas até a transferência do piloto ser validada.
+- O provedor das novas ativações é a Hyze, com chave conectada e automação habilitada. Sem os 256 MB necessários para o próximo bot, a ativação deve permanecer pendente sem iniciar o período contratado.
 - O frontend permanece no Firebase Hosting; identidade, banco e dados continuam no Firebase.
 - Na preparação inicial, a conta Hyze mostrou Free, 256 MB totais e sete dias de teste. Depois a proprietária contratou Starter e autorizou iniciar a migração, conforme atualização acima.
 
@@ -54,7 +56,11 @@ O adaptador valida `/api/plans/current` e `/api/apps/`, publica com `/api/apps/d
 9. Valide `/start`, painel, confirmação do responsável, catálogo, pedidos, entrega e carteira. Depois habilite novas ativações Hyze e faça uma contratação nova completa.
 10. Só encerre os aplicativos Square depois de confirmar a operação e esvaziar a necessidade dos callbacks antigos. Até então, o rollback é restaurar a origem anterior e usar o runtime antigo de forma coordenada.
 
-Na preparação inicial não houve contratação ou publicação. Na fase atual, a proprietária contratou o plano e a aplicação foi criada, mas a migração ainda não foi concluída, conforme estado acima.
+Não houve uma contratação real adicional nem pagamento/saque para testar a automação nesta migração. Os testes de compra e isolamento passaram na suíte, mas o próximo cadastro pago ainda deve ser acompanhado de ponta a ponta.
+
+## Rollback coordenado
+
+Os aplicativos Square antigos continuam salvos: API `aab3217b7ebb465193b72abcadac0254` e worker `db02dc1f31e343e8bbd5038105a68753`. Antes de religar o worker Square, pare o piloto Hyze e restaure os vínculos `bot_runtimes`, `merchant_bot_setup`, `bot_runtime_apps` e `square_app_links`, preservando offset e datas atuais. Nunca execute os dois workers simultaneamente. Para restaurar a API antiga, pause ativações, religue sua aplicação e republique o frontend com a origem Square e CSP correspondentes. Não troque chaves de cifragem ou credenciais dos pagamentos.
 
 ## Referências oficiais consultadas
 
