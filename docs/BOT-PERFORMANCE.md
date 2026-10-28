@@ -12,6 +12,7 @@ Checkout, pagamentos, alterações de estoque, entregas, avisos, saques e efeito
 - Primeira otimização: worker mediu 5.054 ms até enviar a tela e 7.650 ms até concluir a confirmação.
 - Reserva na própria transação e leituras paralelas: três amostras de 3.421–3.594 ms até enviar a tela, com 6.008–7.052 ms até concluir a confirmação.
 - A confirmação final em uma transação reduz o bloqueio entre cliques. Os logs `bot_runtime.navigation_timing` contêm somente tempos numéricos, sem texto, token ou dados do comprador.
+- Versão final publicada: três amostras de 2.534, 3.065 e 3.250 ms até enviar a tela ao Telegram; confirmações concluídas em 4.015, 4.680 e 4.754 ms. Saúde final sem pendências. Não foi gerado outro pedido ou Pix durante essas medições.
 
 Os números são amostras de produção, não garantias de latência nem medições do instante em que o aplicativo do comprador renderiza a alteração. Telegram, rede, contenção e Firestore ainda afetam os tempos. No teste, o Telegram Web demorou a atualizar mensagens editadas mesmo depois da confirmação de envio.
 
