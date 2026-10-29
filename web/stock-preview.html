@@ -12,11 +12,24 @@
       <a href="/stock-preview.html?owner=1">Ver Central da dona</a> ·
       <a href="/stock-preview.html#/minha-loja?section=stock">Ver painel do lojista</a>
     </div>
-    <div id="merchant-console-host"></div>
+    <div id="app">
+      <header>
+        <a class="brand" href="/stock-preview.html">Blackout Create</a>
+        <div class="header-actions">
+          <a class="button-link quiet" href="/stock-preview.html?owner=1">Central da dona</a
+          ><button type="button" data-preview-theme>Tema</button>
+        </div>
+      </header>
+      <div id="merchant-console-host"></div>
+    </div>
     <script type="module">
       import { mountMerchantConsole } from '/merchant-console.ts';
       import { mountResale } from '/resale.ts';
+      import '/mobile-workspace.css';
       if (!import.meta.env.DEV) throw Error('Prévia disponível somente no desenvolvimento.');
+      document
+        .querySelector('[data-preview-theme]')
+        .addEventListener('click', () => document.documentElement.classList.toggle('dark'));
       const products = [
         ['000000000001', 'Assinatura mensal · exemplo', 'Streaming', 0, 'individual'],
         ['000000000002', 'Licença de edição · exemplo', 'Ferramentas', 3, 'individual'],
@@ -89,6 +102,19 @@
         revision: 0,
       };
       const api = async (path, body) => {
+        if (path === '/store/manage/payments')
+          return {
+            mode: 'manual',
+            purinConnected: false,
+            purinRequested: false,
+            keys: [],
+            instructions: 'Somente demonstração.',
+            revision: 1,
+            connected: false,
+            merchantName: 'Loja de demonstração',
+            merchantId: 'demo',
+            webhookUrl: 'https://exemplo.invalid/webhook',
+          };
         if (path === '/store/manage') return structuredClone(data);
         if (path === '/store/resale') return structuredClone(own);
         if (path === '/store/resale/products') return { products: [] };

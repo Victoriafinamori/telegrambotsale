@@ -1,0 +1,248 @@
+/* Mobile uses document scrolling, so the browser can keep focused fields above its keyboard. */
+@media (max-width: 760px) {
+  body:has(#merchant-console-host) {
+    overflow: auto;
+  }
+  body:has(#merchant-console-host) > #app {
+    height: auto;
+    min-height: 100dvh;
+  }
+  #merchant-console-host .mc-layout,
+  #merchant-console-host .mc-main {
+    height: auto;
+    min-height: 0;
+  }
+  #merchant-console-host .mc-main {
+    overflow: visible;
+    scrollbar-gutter: auto;
+    padding: 0 12px max(28px, env(safe-area-inset-bottom));
+  }
+  body:has(#merchant-console-host) > #app > header {
+    padding: 12px 16px;
+  }
+  #app > header {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  #app > header .header-actions {
+    flex-wrap: wrap;
+    gap: 8px;
+    min-width: 0;
+  }
+  #app > header .header-actions > :is(button, a) {
+    min-height: 44px;
+  }
+  #merchant-console-host .mc-title {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--bg);
+    padding: 12px 0;
+    margin-bottom: 8px;
+    gap: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  #merchant-console-host .mc-page-heading {
+    flex: 1;
+    gap: 10px;
+  }
+  #merchant-console-host .mc-title h2 {
+    font-size: 21px;
+    line-height: 1.3;
+    margin: 0;
+  }
+  #merchant-console-host .mc-title > button {
+    flex-shrink: 0;
+    padding-inline: 10px;
+  }
+  #merchant-console-host .mc-menu-toggle {
+    flex-shrink: 0;
+  }
+  #merchant-console-host .mc-sidebar {
+    overscroll-behavior: contain;
+  }
+  #merchant-console-host :is(h2, input, textarea, select) {
+    scroll-margin-block: 88px 24px;
+  }
+  body:has(dialog[open]) {
+    overflow: hidden;
+  }
+  body:has(.mc-mobile-open) {
+    overflow: hidden;
+  }
+
+  #merchant-console-host :is(input, textarea, select),
+  dialog :is(input, textarea, select),
+  .merchant-shell :is(input, textarea, select),
+  .workspace :is(input, textarea, select) {
+    font-size: 16px;
+    max-width: 100%;
+    min-width: 0;
+  }
+  #merchant-console-host
+    :is(form, fieldset, label, .mc-panel, .mc-panel-head > div, .mc-product > span),
+  dialog :is(form, fieldset, label) {
+    min-width: 0;
+  }
+  #merchant-console-host :is(h2, h3, p, strong, small),
+  dialog :is(h2, h3, p, small) {
+    overflow-wrap: anywhere;
+  }
+  #merchant-console-host .mc-panel {
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+  #merchant-console-host .mc-panel-head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  #merchant-console-host .mc-form-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+  #merchant-console-host .mc-category-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  #merchant-console-host .mc-panel form > button[type='submit'] {
+    width: 100%;
+  }
+  #merchant-console-host .mc-panel textarea {
+    min-height: 128px;
+  }
+  #merchant-console-host .mc-upload {
+    padding: 12px;
+  }
+  #merchant-console-host input[type='file'] {
+    width: 100%;
+  }
+  #merchant-console-host .mc-live-preview {
+    max-width: 100%;
+    padding-top: 18px;
+    margin-top: 20px;
+  }
+  #merchant-console-host .mc-product {
+    padding-inline: 0;
+  }
+  #merchant-console-host .mc-pix-key {
+    padding: 12px;
+  }
+  #merchant-console-host .mc-overview-intro {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  #merchant-console-host .mc-quicklinks {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  dialog:is(
+    .mc-stock-dialog,
+    .mc-category-dialog,
+    .rs-stock-dialog,
+    .stock-batch-dialog,
+    .wallet-modal
+  ),
+  #app dialog {
+    inset: 0;
+    margin: 0;
+    width: 100%;
+    max-width: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    border: 0;
+    padding: 16px 16px max(28px, env(safe-area-inset-bottom));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scroll-padding-block: 90px 28px;
+  }
+  dialog:is(.mc-stock-dialog, .mc-category-dialog, .rs-stock-dialog, .stock-batch-dialog)
+    > :is(.mc-panel-head, .stock-group-heading, .rs-card-heading, .card-heading) {
+    position: sticky;
+    top: -16px;
+    z-index: 2;
+    background: var(--surface);
+    padding: 14px 0;
+    margin-bottom: 14px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  dialog:is(.mc-stock-dialog, .rs-stock-dialog, .stock-batch-dialog)
+    > :is(.mc-panel-head, .stock-group-heading, .rs-card-heading)
+    > :first-child {
+    min-width: 0;
+    flex: 1;
+  }
+  dialog :is([data-close], .card-heading > button) {
+    flex-shrink: 0;
+    min-height: 44px;
+  }
+  .mc-stock-dialog .mc-stock-modes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .mc-stock-dialog .mc-stock-save {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .rs-stock-dialog form > button,
+  .mc-stock-dialog form > button {
+    width: 100%;
+  }
+  .stock-batch-dialog .stock-batch-actions {
+    flex-wrap: wrap;
+  }
+  .stock-batch-dialog .stock-batch-actions button {
+    flex: 1 1 140px;
+  }
+  dialog :is(input, select, textarea) {
+    scroll-margin-block: 90px 24px;
+  }
+
+  .workspace .tabs {
+    overflow-x: auto;
+    gap: 20px;
+  }
+  .workspace .tabs button {
+    flex-shrink: 0;
+  }
+  .wallet-page .wallet-section-heading,
+  .wallet-page .wallet-heading {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .wallet-page .wallet-tabs button,
+  .wallet-page .wallet-filters button {
+    min-height: 44px;
+  }
+  .wallet-page .wallet-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 420px) {
+  #app > header .header-actions {
+    width: 100%;
+  }
+  #merchant-console-host .mc-main {
+    padding-inline: 10px;
+  }
+  #merchant-console-host .mc-panel {
+    padding: 14px;
+  }
+  #merchant-console-host .mc-metrics {
+    gap: 8px;
+  }
+  #merchant-console-host .mc-metric {
+    padding: 12px;
+  }
+  #merchant-console-host .mc-metric strong {
+    font-size: 21px;
+  }
+  .merchant-shell dl,
+  .workspace dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

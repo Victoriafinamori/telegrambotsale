@@ -31,6 +31,7 @@ import { mountHostingAdmin, type ActivationStatus } from './hosting-admin.js';
 import { mountPurchaseCheckout } from './purchase-checkout.js';
 import { mountMerchantConsole } from './merchant-console.js';
 import { mountPixCheckout } from './pix-checkout.js';
+import './mobile-workspace.css';
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const esc = (v: unknown) =>
   String(v ?? '').replace(
