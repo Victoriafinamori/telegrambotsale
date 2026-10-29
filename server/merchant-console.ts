@@ -1,3 +1,4 @@
+import { refreshSharedCatalog } from './resale-stock.js';
 import { modeInput, configureStock, syncStock } from './stock-modes.js';
 import { stockItems, stockVersion, changeStock } from './stock-management.js';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -122,6 +123,7 @@ export class MerchantConsole {
   async read(id: string, uid: string) {
     return botTransaction(this.store, async (tx) => {
       const { shop, setup } = await this.owner(tx, id, uid);
+      await refreshSharedCatalog(tx, id, shop);
       return {
         title: shop.title,
         welcome: shop.welcome,
@@ -177,6 +179,7 @@ export class MerchantConsole {
           ...fields,
           id: pid,
           stock: current?.stock ?? 0,
+          ...(current?.resale_source ? { resale_source: current.resale_source } : {}),
           stock_mode: current?.stock_mode ?? 'individual',
           pix_qr: qr,
           pix_qr_price: qr && qr !== current?.pix_qr ? value.price : (current?.pix_qr_price ?? 0),

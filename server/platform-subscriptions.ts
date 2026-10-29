@@ -1,3 +1,5 @@
+import { ResaleCatalog } from './resale-catalog.js';
+import { resaleRecipient, creditProof, recordCommission } from './resale-finance.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { DocumentStore, DocumentTransaction, Doc } from './document-store.js';
@@ -119,6 +121,7 @@ export class PlatformSubscriptions {
       plan: invoice.plan,
       label: invoice.label,
       months: invoice.months,
+      partnerId: invoice.resale?.partnerId ?? null,
       total: invoice.total,
       status: invoice.status,
       expiresAt: clock(invoice.expires_at),
@@ -132,7 +135,30 @@ export class PlatformSubscriptions {
       throw new HttpError(403, 'EMAIL_UNVERIFIED', 'Entre e confirme seu e-mail antes de pagar.');
     return { uid: identity.uid, email: identity.email.trim().toLowerCase() };
   }
-  async purchaseRead(identity: Identity) {
+  async publicPlans(partnerId?: string, buyerUid = 'anonymous') {
+    const base = (await this.settings()).plans;
+    if (!partnerId) return { plans: base, partnerId: null };
+    const catalog = new ResaleCatalog(this.store, this.now);
+    const plans = await Promise.all(
+      base.map(async (p) =>
+        p.enabled
+          ? { ...p, priceCents: (await catalog.quotePlan(partnerId, buyerUid, p.id)).total }
+          : p,
+      ),
+    );
+    return { plans, partnerId };
+  }
+  private async renewalPlans(account: Doc, uid: string) {
+    if (account.resale_partner_id) {
+      try {
+        return await this.publicPlans(account.resale_partner_id, uid);
+      } catch (error) {
+        if (!(error instanceof HttpError)) throw error;
+      }
+    }
+    return this.publicPlans();
+  }
+  async purchaseRead(identity: Identity, partnerId?: string) {
     const buyer = this.buyer(identity),
       link = await this.store.get('platform_uids/' + tokenHash(buyer.uid));
     const pointer = await this.store.get('platform_subscription_signups/' + tokenHash(buyer.uid));
@@ -140,7 +166,7 @@ export class PlatformSubscriptions {
       ? await this.store.get(invoicePath(pointer.invoice_id))
       : null;
     return {
-      plans: (await this.settings()).plans,
+      ...(await this.publicPlans(partnerId, buyer.uid)),
       hasStore: Boolean(link),
       invoice: invoice?.uid === buyer.uid ? this.safe(invoice) : null,
     };
@@ -154,10 +180,13 @@ export class PlatformSubscriptions {
           expectedPriceCents: z.number().int().positive(),
           name: z.string().trim().min(2).max(80),
           storeName: z.string().trim().min(2).max(80),
+          partnerId: z.uuid().optional(),
         })
         .strict()
         .parse(raw);
-    const plan = (await this.settings()).plans.find((p) => p.id === input.plan)!;
+    const plan = (await this.publicPlans(input.partnerId, buyer.uid)).plans.find(
+      (p) => p.id === input.plan,
+    )!;
     if (!plan.enabled || plan.priceCents !== input.expectedPriceCents)
       throw new HttpError(
         409,
@@ -191,7 +220,9 @@ export class PlatformSubscriptions {
       const previous = pointer?.invoice_id ? await tx.get(invoicePath(pointer.invoice_id)) : null;
       if (
         previous &&
-        (['creating', 'uncertain', 'review_required', 'paid'].includes(previous.status) ||
+        (['creating', 'uncertain', 'awaiting_credit', 'review_required', 'paid'].includes(
+          previous.status,
+        ) ||
           (previous.status === 'awaiting_payment' && previous.expires_at > this.now()))
       )
         return { invoice: previous, created: false };
@@ -200,7 +231,21 @@ export class PlatformSubscriptions {
         receipt = await tx.get(requestPath);
       if (receipt)
         return { invoice: (await tx.get(invoicePath(receipt.invoice_id)))!, created: false };
+      const quote = input.partnerId
+        ? await new ResaleCatalog(this.store, this.now).quotePlan(
+            input.partnerId,
+            buyer.uid,
+            input.plan,
+            tx,
+          )
+        : null;
+      if (quote && quote.total !== input.expectedPriceCents)
+        throw new HttpError(409, 'PLAN_PRICE_CHANGED', 'O preço mudou. Atualize os planos.');
+      const resale = quote
+        ? await resaleRecipient(tx, quote.partnerId, 'plan', gateway.generation, quote.baseCents)
+        : null;
       const invoice = {
+        ...(resale ? { resale, base_total: quote!.baseCents } : {}),
         id: invoiceId,
         account_id: accountId,
         uid: buyer.uid,
@@ -219,6 +264,14 @@ export class PlatformSubscriptions {
         payment_id: null,
       };
       tx.set(invoicePath(invoiceId), invoice);
+      if (resale)
+        tx.set('resale_reconciliation/' + invoiceId, {
+          id: invoiceId,
+          kind: 'subscription',
+          invoiceId,
+          done: false,
+          created_at: this.now(),
+        });
       tx.set(signupPath, { invoice_id: invoiceId });
       tx.set(emailReservation, { uid: buyer.uid, invoice_id: invoiceId });
       tx.set(requestPath, { invoice_id: invoiceId });
@@ -230,6 +283,12 @@ export class PlatformSubscriptions {
     try {
       payment = await gateway.create({
         valueCents: invoice.total,
+        ...(invoice.resale
+          ? {
+              subaccountId: invoice.resale.subaccount,
+              subaccountFeeCents: invoice.resale.baseCents,
+            }
+          : {}),
         description: `Contratação Blackout ${invoice.label} — ${invoice.id}`,
         expiresIn: 3600,
         callbackUrl: this.apiOrigin + '/payments/subscriptions/' + gateway.generation,
@@ -285,7 +344,7 @@ export class PlatformSubscriptions {
       active = await this.store.get('platform_subscription_accounts/' + id),
       invoice = active?.invoice_id ? await this.store.get(invoicePath(active.invoice_id)) : null;
     return {
-      plans: (await this.settings()).plans,
+      ...(await this.renewalPlans(account, uid)),
       paidThrough: clock(account.paid_through),
       months: account.billing_months ?? 1,
       canRenew: Boolean(account.billing_started_at && setup?.activation_status === 'active'),
@@ -308,7 +367,8 @@ export class PlatformSubscriptions {
         'BOT_NOT_ACTIVATED',
         'A renovação fica disponível após a ativação. A Blackout configura o plano inicial da contratação.',
       );
-    const plan = (await this.settings()).plans.find((p) => p.id === input.plan)!;
+    const renewal = await this.renewalPlans(account, uid);
+    const plan = renewal.plans.find((p) => p.id === input.plan)!;
     if (!plan.enabled)
       throw new HttpError(409, 'PLAN_NOT_CONFIGURED', 'Este plano ainda não está disponível.');
     const gateway = await this.purin.subscriptionGateway(),
@@ -327,14 +387,28 @@ export class PlatformSubscriptions {
         previous = pointer?.invoice_id ? await tx.get(invoicePath(pointer.invoice_id)) : null;
       if (
         previous &&
-        (['creating', 'uncertain'].includes(previous.status) ||
+        (['creating', 'uncertain', 'awaiting_credit'].includes(previous.status) ||
           (previous.status === 'awaiting_payment' && previous.expires_at > this.now()))
       )
         return { invoice: previous, created: false };
       const receipt = await tx.get('platform_subscription_requests/' + id + '_' + input.requestId);
       if (receipt)
         return { invoice: (await tx.get(invoicePath(receipt.invoice_id)))!, created: false };
+      const quote = renewal.partnerId
+        ? await new ResaleCatalog(this.store, this.now).quotePlan(
+            renewal.partnerId,
+            uid,
+            input.plan,
+            tx,
+          )
+        : null;
+      if (quote && quote.total !== plan.priceCents)
+        throw new HttpError(409, 'PLAN_PRICE_CHANGED', 'O preço mudou. Atualize os planos.');
+      const resale = quote
+        ? await resaleRecipient(tx, quote.partnerId, 'plan', gateway.generation, quote.baseCents)
+        : null;
       const invoice = {
+        ...(resale ? { resale, base_total: quote!.baseCents } : {}),
         id: invoiceId,
         account_id: id,
         uid,
@@ -349,6 +423,14 @@ export class PlatformSubscriptions {
         payment_id: null,
       };
       tx.set(invoicePath(invoiceId), invoice);
+      if (resale)
+        tx.set('resale_reconciliation/' + invoiceId, {
+          id: invoiceId,
+          kind: 'subscription',
+          invoiceId,
+          done: false,
+          created_at: this.now(),
+        });
       tx.set('platform_subscription_accounts/' + id, { invoice_id: invoiceId });
       tx.set('platform_subscription_requests/' + id + '_' + input.requestId, {
         invoice_id: invoiceId,
@@ -361,6 +443,12 @@ export class PlatformSubscriptions {
     try {
       payment = await gateway.create({
         valueCents: invoice.total,
+        ...(invoice.resale
+          ? {
+              subaccountId: invoice.resale.subaccount,
+              subaccountFeeCents: invoice.resale.baseCents,
+            }
+          : {}),
         description: `Assinatura Blackout ${invoice.label} — ${invoice.id}`,
         expiresIn: 3600,
         callbackUrl: this.apiOrigin + '/payments/subscriptions/' + gateway.generation,
@@ -415,13 +503,25 @@ export class PlatformSubscriptions {
       payment.environment !== 'live' ||
       payment.currency !== 'BRL' ||
       payment.amountCents !== invoice.total ||
-      payment.subaccountId ||
+      (invoice.resale
+        ? (payment.subaccountId !== undefined &&
+            payment.subaccountId !== invoice.resale.subaccount) ||
+          (payment.subaccountFeeCents !== undefined &&
+            payment.subaccountFeeCents !== invoice.resale.baseCents)
+        : Boolean(payment.subaccountId)) ||
       meta?.kind !== 'blackout_subscription' ||
       meta?.invoiceId !== invoice.id ||
       meta?.accountId !== invoice.account_id ||
       (invoice.payment_id && invoice.payment_id !== payment.paymentId)
     )
       throw new HttpError(409, 'SUBSCRIPTION_MISMATCH', 'Cobrança não corresponde à assinatura.');
+  }
+  async reconcileResale(invoiceId: string) {
+    const invoice = await this.store.get(invoicePath(invoiceId));
+    if (!invoice?.resale) return true;
+    await this.checkInvoice(invoice);
+    const current = await this.store.get(invoicePath(invoiceId));
+    return ['paid', 'review_required', 'failed', 'expired'].includes(current?.status);
   }
   async check(id: string, uid: string, raw: unknown) {
     const { invoiceId } = z.object({ invoiceId: z.uuid() }).strict().parse(raw);
@@ -494,12 +594,42 @@ export class PlatformSubscriptions {
     await this.settle(z.uuid().parse(meta.invoiceId), generation, payment);
   }
   private async settle(invoiceId: string, generation: string, payment: Doc) {
+    const snapshot = await this.store.get(invoicePath(invoiceId));
+    if (snapshot) this.validate(snapshot, payment);
+    let proof: Doc | null = null;
+    if (snapshot?.resale && payment.status === 'paid') {
+      const gateway = await this.purin.subscriptionGateway(generation);
+      proof = creditProof(
+        snapshot.resale,
+        payment,
+        await gateway.ledger(snapshot.resale.subaccount, payment.paidAt, payment.paymentId),
+      );
+    }
     await botTransaction(this.store, async (tx) => {
       const invoice = await tx.get(invoicePath(invoiceId));
       if (!invoice || invoice.generation !== generation)
         throw new HttpError(404, 'INVOICE_NOT_FOUND', 'Cobrança não encontrada.');
       this.validate(invoice, payment);
       if (invoice.status === 'paid' || invoice.status === 'review_required') return;
+      if (invoice.resale && payment.status === 'paid') {
+        if (!proof) {
+          tx.set(invoicePath(invoiceId), {
+            ...invoice,
+            status: 'awaiting_credit',
+            payment_id: payment.paymentId,
+          });
+          return;
+        }
+        await recordCommission(tx, proof, { invoiceId, accountId: invoice.account_id }, this.now());
+        if (proof.status !== 'credited') {
+          tx.set(invoicePath(invoiceId), {
+            ...invoice,
+            status: 'review_required',
+            payment_id: payment.paymentId,
+          });
+          return;
+        }
+      }
       if (invoice.purpose === 'initial') {
         await this.settlePurchase(tx, invoice, payment);
         return;
@@ -551,7 +681,7 @@ export class PlatformSubscriptions {
         ...a,
         paid_through: until,
         billing_months: invoice.months,
-        price_cents: invoice.total,
+        price_cents: invoice.base_total ?? invoice.total,
       });
       tx.set(invoicePath(invoiceId), {
         ...invoice,
@@ -654,7 +784,8 @@ export class PlatformSubscriptions {
         store_name: invoice.store_name,
         channel: 'site',
         reference: 'Checkout Blackout ' + invoice.id,
-        price_cents: invoice.total,
+        ...(invoice.resale ? { resale_partner_id: invoice.resale.partnerId } : {}),
+        price_cents: invoice.base_total ?? invoice.total,
         billing_months: invoice.months,
         firebase_uid: invoice.uid,
         purchase_confirmed_at: now,

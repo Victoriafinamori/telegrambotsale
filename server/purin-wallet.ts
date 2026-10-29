@@ -313,6 +313,15 @@ export class PurinWallet {
             orders[0].currency === 'BRL'
               ? orders[0]
               : null;
+          const commission =
+            r.type === 'sale' && reference
+              ? await this.store.get(`resale_partners/${id}/commissions/${tokenHash(reference)}`)
+              : null;
+          const resale =
+            order?.resale ??
+            (commission?.subaccount === ctx.subaccount && commission?.paymentId === reference
+              ? commission
+              : null);
           return {
             id: String(r.id ?? r.refId),
             reference,
@@ -321,7 +330,9 @@ export class PurinWallet {
             amountCents: cents.or(z.number().int().negative()).parse(r.amountCents),
             description: String(r.description ?? '').slice(0, 200),
             createdAt: r.createdAt,
-            breakdown: r.type === 'sale' ? saleBreakdown(r, order?.total) : null,
+            breakdown:
+              r.type === 'sale' ? saleBreakdown(r, order?.total ?? commission?.grossCents) : null,
+            resale: resale ? { baseCents: resale.baseCents, kind: resale.kind } : null,
           };
         }),
       ),

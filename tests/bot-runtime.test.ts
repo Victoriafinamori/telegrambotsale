@@ -727,6 +727,19 @@ async function purinFixture(failCreate = false) {
   const transport: typeof fetch = async (url, init) => {
     const address = new URL(String(url));
     assert.equal(address.origin, 'https://api.purincash.com');
+    if (address.pathname.endsWith('/transactions'))
+      return Response.json({
+        subaccountId: 'sacc_pilot',
+        transactions: [...charges.values()]
+          .filter((p) => p.status === 'paid')
+          .map((p) => ({
+            id: p.paymentId,
+            refId: p.paymentId,
+            type: 'sale',
+            amountCents: p.amountCents - 70 - (p.subaccountFeeCents ?? 0),
+            feeCents: p.subaccountFeeCents ?? 0,
+          })),
+      });
     if (address.pathname === '/v1/subaccounts') return Response.json({ subaccounts: [] });
     if (address.pathname.startsWith('/v1/subaccounts/')) {
       if (init?.method === 'PUT') {
@@ -769,13 +782,12 @@ async function purinFixture(failCreate = false) {
         metadata: body.metadata,
         customer: body.customer,
         subaccountId: body.subaccountId,
+        ...(body.subaccountFeeCents !== undefined
+          ? { subaccountFeeCents: body.subaccountFeeCents }
+          : {}),
         pix: { brCode: 'PIX_SIMULADO_NAO_PAGAR' },
       };
-      assert.equal(
-        body.subaccountFeeCents,
-        undefined,
-        'Use the subaccount commission, never override it with zero',
-      );
+      if (body.subaccountFeeCents !== undefined) assert(body.subaccountFeeCents > 0);
       charges.set(id, payment);
       if (failCreate) throw Error('Simulated lost response');
       return Response.json(payment);
@@ -3177,4 +3189,96 @@ test('Resale HTTP keeps normal merchants separate and protects global inventory 
   } finally {
     await new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
   }
+});
+
+test('Shared product checkout reserves central stock, protects supplier base in Pix, credits margin once and restores cancellation to origin', async () => {
+  const p = await purinFixture(),
+    f = p.f,
+    supplier = randomUUID(),
+    sourcePid = 'abcdef123456';
+  await botTransaction(f.store, async (tx) => {
+    const local = await tx.get('bot_shops/' + f.a.id);
+    tx.set('merchant_accounts/' + supplier, {
+      id: supplier,
+      firebase_uid: 'supplier',
+      access_status: 'approved',
+    });
+    tx.set('resale_profiles/' + f.a.id, { products: 'approved' });
+    const source = {
+      id: sourcePid,
+      title: 'Produto central',
+      description: 'Compartilhado',
+      category: 'Global',
+      price: 500,
+      stock: 2,
+      enabled: true,
+    };
+    const vault = new SecretVault(f.key);
+    tx.set('bot_shops/' + supplier, { products: [source], portal_revision: 0 });
+    tx.set('bot_shops/' + supplier + '/products/' + sourcePid, {
+      units: ['CENTRAL-ONE', 'CENTRAL-TWO'].map((text, i) => ({
+        id: 'unit' + i,
+        ciphertext: vault.seal(
+          JSON.stringify({ kind: 'text', text }),
+          supplier + ':stock:' + sourcePid + ':unit' + i,
+        ),
+      })),
+    });
+    tx.set('resale_suppliers/' + supplier + '/grants/' + f.a.id + '_' + sourcePid, {
+      partnerId: f.a.id,
+      productId: sourcePid,
+      enabled: true,
+      baseCents: 500,
+      revision: 1,
+    });
+    const product = local!.products.find((v: any) => v.id === p.pid);
+    product.price = 1000;
+    product.resale_source = { supplierId: supplier, productId: sourcePid };
+    tx.set('bot_shops/' + f.a.id, local!);
+  });
+  const result = await f.click(333333333, 'buy:' + p.pid);
+  const summary = result.find((e) => String(e.payload.text).includes('Pix automático'))!;
+  assert(summary);
+  const oid = (summary.payload.reply_markup as any).inline_keyboard[0][0].callback_data.slice(
+    'pix-generate:'.length,
+  );
+  assert.equal(
+    (await f.store.get('bot_shops/' + supplier + '/products/' + sourcePid))!.units.length,
+    1,
+  );
+  const base = await f.bots.checkoutForBot(f.auth, '333333333', oid);
+  await p.service.create(base);
+  const charge = [...p.charges.values()][0];
+  assert.equal(charge.subaccountFeeCents, 500);
+  assert.equal(charge.subaccountId, 'sacc_pilot');
+  charge.status = 'paid';
+  await p.notify(charge);
+  await p.notify(charge);
+  const order = (await f.store.get('bot_shops/' + f.a.id + '/orders/' + oid))!;
+  assert.equal(order.status, 'paid');
+  const effects = await f.effects(order.delivery_effects);
+  assert(effects.some((e) => String(e.payload.text).includes('CENTRAL-ONE')));
+  const commissions = await f.store.list('resale_commissions', { limit: 10 });
+  assert.equal(commissions.length, 1);
+  assert.equal(commissions[0].partnerCents, 430);
+  assert.equal(commissions[0].baseCents, 500);
+  assert.equal(
+    (await f.store.get('bot_shops/' + supplier + '/products/' + sourcePid))!.shared_reserved,
+    0,
+  );
+  const second = await f.click(444444444, 'buy:' + p.pid),
+    card = second.find((e) => String(e.payload.text).includes('Pix automático'))!;
+  const secondOid = (card.payload.reply_markup as any).inline_keyboard[0][0].callback_data.slice(
+    'pix-generate:'.length,
+  );
+  assert.equal(
+    (await f.store.get('bot_shops/' + supplier + '/products/' + sourcePid))!.units.length,
+    0,
+  );
+  await f.click(444444444, 'cancel:' + secondOid);
+  await f.click(444444444, 'cancel:' + secondOid);
+  assert.equal(
+    (await f.store.get('bot_shops/' + supplier + '/products/' + sourcePid))!.units.length,
+    1,
+  );
 });

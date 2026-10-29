@@ -44,6 +44,7 @@ type Wallet = {
     createdAt: string;
     reference: string;
     orderId: string | null;
+    resale?: { baseCents: number; kind: 'product' | 'plan' } | null;
     breakdown: {
       grossCents: number | null;
       netCents: number | null;
@@ -168,7 +169,14 @@ export async function mountWallet(host: HTMLElement, api: Api) {
                               ? breakdown([
                                   ['Valor da venda', t.breakdown.grossCents],
                                   ['Tarifa Purin', t.breakdown.gatewayFeeCents],
-                                  ['Comissão Blackout', t.breakdown.blackoutFeeCents],
+                                  [
+                                    t.resale
+                                      ? t.resale.kind === 'plan'
+                                        ? 'Valor base Blackout'
+                                        : 'Custo do fornecedor'
+                                      : 'Comissão Blackout',
+                                    t.breakdown.blackoutFeeCents,
+                                  ],
                                   ['Líquido creditado', t.breakdown.netCents],
                                 ]) +
                                 `<p class="wallet-status-note">${t.breakdown.reconciled ? 'Valores conferidos com o crédito do provedor.' : 'Detalhamento em conferência; valores ausentes não são considerados zero.'}</p>`

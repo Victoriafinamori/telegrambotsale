@@ -68,7 +68,7 @@ export class ResaleCatalog {
           baseProtected: true,
           renewals: 'through_partner',
         },
-        checkoutReady: false,
+        checkoutReady: true,
       };
     });
   }
@@ -108,10 +108,15 @@ export class ResaleCatalog {
     });
   }
   // Server-only quotation: never accept seller, base price or margin supplied by a buyer.
-  async quotePlan(partnerId: string, buyerUid: string, plan: 'monthly' | 'quarterly' | 'annual') {
+  async quotePlan(
+    partnerId: string,
+    buyerUid: string,
+    plan: 'monthly' | 'quarterly' | 'annual',
+    transaction?: DocumentTransaction,
+  ) {
     identifier.parse(partnerId);
     z.enum(['monthly', 'quarterly', 'annual']).parse(plan);
-    return botTransaction(this.store, async (tx) => {
+    const work = async (tx: DocumentTransaction) => {
       const account = await tx.get(accountPath(partnerId)),
         offer = await tx.get('resale_partners/' + partnerId),
         base = await tx.get('platform_billing/settings');
@@ -141,7 +146,8 @@ export class ResaleCatalog {
         gatewayFeePaidBy: 'partner' as const,
         renewals: 'through_partner' as const,
       };
-    });
+    };
+    return transaction ? work(transaction) : botTransaction(this.store, work);
   }
   async grantProduct(supplierId: string, uid: string, raw: unknown) {
     const input = z

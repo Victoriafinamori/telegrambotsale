@@ -24,6 +24,7 @@ export async function mountResale(host: HTMLElement, api: Api, admin = false) {
     own: any,
     offers: any,
     plans: any,
+    commissions: any[] = [],
     filter = 'all';
   const feedback = (message: string) => {
     const node = host.querySelector('[data-resale-feedback]');
@@ -32,10 +33,11 @@ export async function mountResale(host: HTMLElement, api: Api, admin = false) {
   const refresh = async () => {
     if (admin) data = await api('/admin/resale');
     else
-      [own, offers, plans] = await Promise.all([
+      [own, offers, plans, { commissions }] = await Promise.all([
         api('/store/resale'),
         api('/store/resale/products'),
         api('/store/resale/plans'),
+        api('/store/resale/commissions'),
       ]);
     render();
   };
@@ -57,14 +59,17 @@ export async function mountResale(host: HTMLElement, api: Api, admin = false) {
     host.innerHTML =
       title(admin) +
       '<p role="status" data-resale-feedback></p>' +
-      (admin ? renderAdmin() : renderMerchant());
+      (admin
+        ? renderAdmin()
+        : renderMerchant() +
+          `<section class="rs-card"><h2>Extrato de revenda</h2><p>Créditos confirmados no extrato da sua subconta Purin. O saldo disponível e o saque continuam na carteira.</p>${commissions.map((c) => `<article class="rs-permission"><div><b>${c.kind === 'plan' ? 'Plano Blackout' : 'Produto do fornecedor'}</b><small>Venda ${money(c.grossCents)} · Base ${money(c.baseCents)} · Purin ${money(c.gatewayFeeCents)}</small></div><strong>${money(c.partnerCents)}</strong><span class="rs-badge">${c.status === 'credited' ? 'Creditado' : 'Em conferência'}</span></article>`).join('') || '<p>Nenhuma comissão confirmada ainda.</p>'}<a class="button-link quiet" href="#/minha-loja?wallet=1">Abrir carteira</a></section>`);
     const selector = host.querySelector<HTMLSelectElement>('[data-filter]');
     if (selector) selector.value = filter;
   };
   const renderMerchant = () =>
-    `<div class="rs-grid">${kinds.map(([key, label, description]) => `<section class="rs-card"><span class="rs-icon">${key === 'products' ? '↗' : 'B'}</span><span class="rs-badge" data-status="${own.permissions[key]}">${esc(labels[own.permissions[key]])}</span><h2>${label}</h2><p>${description}</p><p class="rs-muted">${key === 'products' ? 'Você recebe acesso somente aos produtos liberados pela dona.' : 'A Blackout recebe o valor base; a tarifa Purin sai da sua margem. Sem comissão adicional de 12% nos planos.'}</p><button class="${own.permissions[key] === 'none' || own.permissions[key] === 'revoked' ? '' : 'quiet'}" data-opt="${key}" data-enable="${own.permissions[key] === 'none' || own.permissions[key] === 'revoked'}">${own.permissions[key] === 'none' || own.permissions[key] === 'revoked' ? 'Quero participar' : 'Desativar participação'}</button></section>`).join('')}</div>${own.permissions.products === 'approved' ? `<section class="rs-card"><h2>Catálogo liberado para você</h2><div class="rs-catalog">${offers.products.map((p: any) => `<article><span class="rs-badge">${p.stockMode === 'infinite' ? 'Sem limite' : p.stock + ' disponíveis'}</span><h3>${esc(p.title)}</h3><p>${esc(p.description)}</p><b>Fornecedor: ${money(p.baseCents)}</b></article>`).join('') || '<p>A dona ainda não liberou produtos para sua loja.</p>'}</div><p class="rs-muted">A venda pelo estoque compartilhado será liberada após a integração do checkout e dos repasses. Você não recebe acesso aos códigos do fornecedor.</p></section>` : ''}${
+    `<div class="rs-grid">${kinds.map(([key, label, description]) => `<section class="rs-card"><span class="rs-icon">${key === 'products' ? '↗' : 'B'}</span><span class="rs-badge" data-status="${own.permissions[key]}">${esc(labels[own.permissions[key]])}</span><h2>${label}</h2><p>${description}</p><p class="rs-muted">${key === 'products' ? 'Você recebe acesso somente aos produtos liberados pela dona.' : 'A Blackout recebe o valor base; a tarifa Purin sai da sua margem. Sem comissão adicional de 12% nos planos.'}</p><button class="${own.permissions[key] === 'none' || own.permissions[key] === 'revoked' ? '' : 'quiet'}" data-opt="${key}" data-enable="${own.permissions[key] === 'none' || own.permissions[key] === 'revoked'}">${own.permissions[key] === 'none' || own.permissions[key] === 'revoked' ? 'Quero participar' : 'Desativar participação'}</button></section>`).join('')}</div>${own.permissions.products === 'approved' ? `<section class="rs-card"><h2>Catálogo liberado para você</h2><div class="rs-catalog">${offers.products.map((p: any) => `<article><span class="rs-badge">${p.stockMode === 'infinite' ? 'Sem limite' : p.stock + ' disponíveis'}</span><h3>${esc(p.title)}</h3><p>${esc(p.description)}</p><b>Fornecedor: ${money(p.baseCents)}</b><form data-publish="${p.productId}"><label>Seu preço · R$<input name="price" type="number" min="${(p.baseCents + 1) / 100}" step="0.01" required></label><button type="submit">Publicar na minha loja</button></form></article>`).join('') || '<p>A dona ainda não liberou produtos para sua loja.</p>'}</div><p class="rs-muted">As unidades são reservadas no estoque global. O valor do fornecedor fica com a Blackout; você recebe a diferença após a tarifa Purin, sem os 12% adicionais. Use um carrinho separado para estes produtos.</p></section>` : ''}${
       own.permissions.plans === 'approved'
-        ? `<section class="rs-card"><h2>Seus preços de planos</h2><p>Primeira contratação e renovações pelo parceiro. O preço precisa cobrir o valor base e a tarifa Purin.</p><form data-plan-prices><div class="rs-grid">${[
+        ? `<section class="rs-card"><h2>Seus preços de planos</h2>${plans.enabled ? `<label>Seu link de revenda<input readonly value="${esc(location.origin + '/#/comprar?partner=' + own.accountId)}"></label>` : ''}<p>Primeira contratação e renovações pelo parceiro. O preço precisa cobrir o valor base e a tarifa Purin.</p><form data-plan-prices><div class="rs-grid">${[
             ['monthly', 'Mensal'],
             ['quarterly', 'Trimestral'],
             ['annual', 'Anual'],
@@ -75,7 +80,7 @@ export async function mountResale(host: HTMLElement, api: Api, admin = false) {
             )
             .join(
               '',
-            )}</div><button type="submit">Salvar preços</button></form><p class="rs-muted">O link de venda será liberado quando checkout e crédito de comissões estiverem conectados. Salvar preços ainda não habilita cobranças.</p></section>`
+            )}</div><button type="submit">Salvar preços</button></form><p class="rs-muted">Sua margem é creditada pela Purin na carteira da loja. O extrato abaixo confirma cada crédito.</p></section>`
         : ''
     }`;
   const renderAdmin = () => {
@@ -229,7 +234,12 @@ export async function mountResale(host: HTMLElement, api: Api, admin = false) {
     e.stopPropagation();
     const fields = new FormData(form);
     void run(async () => {
-      if (form.hasAttribute('data-plan-prices'))
+      if (form.dataset.publish)
+        await api('/store/resale/products/publish', {
+          productId: form.dataset.publish,
+          priceCents: Math.round(Number(fields.get('price')) * 100),
+        });
+      else if (form.hasAttribute('data-plan-prices'))
         await api('/store/resale/plans', {
           revision: plans.revision,
           enabled: true,

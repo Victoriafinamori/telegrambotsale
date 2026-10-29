@@ -68,6 +68,37 @@ const cleanup = setInterval(
   3600000,
 );
 cleanup.unref();
+let resaleBusy = false;
+let resaleCursor = '';
+const resaleTick = setInterval(() => {
+  if (!firestore || resaleBusy || !app.locals.subscriptions || !app.locals.purin) return;
+  resaleBusy = true;
+  void (async () => {
+    const jobs = await firestore.store.list('resale_reconciliation', {
+      limit: 5,
+      equals: ['done', false],
+      afterId: resaleCursor,
+    });
+    resaleCursor = jobs.length === 5 ? jobs.at(-1)!.id : '';
+    for (const job of jobs)
+      try {
+        const done =
+          job.kind === 'subscription'
+            ? await app.locals.subscriptions.reconcileResale(job.invoiceId)
+            : await app.locals.purin.reconcileResale(job.accountId, job.orderId);
+        if (done)
+          await firestore.store.transaction(async (tx) => {
+            const current = await tx.get('resale_reconciliation/' + job.id);
+            if (current) tx.set('resale_reconciliation/' + job.id, { ...current, done: true });
+          });
+      } catch {
+        console.error('resale.reconciliation_retry');
+      }
+  })()
+    .catch(() => console.error('resale.reconciliation_retry'))
+    .finally(() => (resaleBusy = false));
+}, 60000);
+resaleTick.unref();
 let activationBusy = false;
 const activationTick = setInterval(() => {
   if (!activation || activationBusy) return;
@@ -83,6 +114,7 @@ activationTick.unref();
 for (const signal of ['SIGTERM', 'SIGINT'])
   process.once(signal, () => {
     clearInterval(cleanup);
+    clearInterval(resaleTick);
     clearInterval(activationTick);
     server.close(() => void db?.close());
   });

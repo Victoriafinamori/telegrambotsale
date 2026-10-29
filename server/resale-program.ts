@@ -1,3 +1,5 @@
+import { tokenHash } from './accounts.js';
+import { resaleRecipient } from './resale-finance.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Doc, DocumentStore, DocumentTransaction } from './document-store.js';
@@ -241,6 +243,88 @@ export class ResaleProgram {
       }
     }
     return { products: products.map(({ priceCents, ...p }) => p) };
+  }
+  async publishProduct(accountId: string, uid: string, raw: unknown) {
+    const input = z
+      .object({
+        productId: z.string().regex(/^[a-f0-9]{12}$/),
+        priceCents: z.number().int().positive().max(10000000),
+      })
+      .strict()
+      .parse(raw);
+    return botTransaction(this.store, async (tx) => {
+      await this.merchant(tx, accountId, uid);
+      const global = await tx.get(root),
+        shop = await tx.get('bot_shops/' + accountId),
+        platform = await tx.get('platform_payments/purincash');
+      if (!global || !shop || global.supplier_id === accountId)
+        throw new HttpError(409, 'SUPPLIER_UNAVAILABLE', 'Fornecedor indisponível.');
+      const grant = await tx.get(
+          `resale_suppliers/${global.supplier_id}/grants/${accountId}_${input.productId}`,
+        ),
+        supplier = await tx.get('bot_shops/' + global.supplier_id),
+        sourceAccount = await tx.get('merchant_accounts/' + global.supplier_id);
+      const product = supplier?.products.find((p: Doc) => p.id === input.productId && p.enabled);
+      if (
+        !grant?.enabled ||
+        !product ||
+        sourceAccount?.access_status !== 'approved' ||
+        input.priceCents <= grant.baseCents
+      )
+        throw new HttpError(
+          409,
+          'SUPPLIER_UNAVAILABLE',
+          'Confira o produto e o preço mínimo de revenda.',
+        );
+      await resaleRecipient(tx, accountId, 'product', platform?.generation, grant.baseCents);
+      if (shop.pix_mode !== 'purincash' || shop.payment_mode !== 'manual')
+        throw new HttpError(409, 'PURIN_REQUIRED', 'Ative o Pix integrado Blackout nesta loja.');
+      const pid = tokenHash(global.supplier_id + ':' + input.productId).slice(0, 12),
+        current = shop.products.find((p: Doc) => p.id === pid);
+      if (!current && shop.products.length >= 40)
+        throw new HttpError(409, 'PRODUCT_LIMIT', 'Limite de produtos atingido.');
+      const linked = {
+        id: pid,
+        title: product.title,
+        description: product.description,
+        category: product.category,
+        price: input.priceCents,
+        enabled: true,
+        stock: product.stock,
+        stock_mode: product.stock_mode ?? 'individual',
+        resale_source: { supplierId: global.supplier_id, productId: product.id },
+      };
+      if (current) shop.products = shop.products.map((p: Doc) => (p.id === pid ? linked : p));
+      else {
+        shop.products.push(linked);
+        tx.set('bot_shops/' + accountId + '/products/' + pid, { id: pid, units: [] });
+      }
+      tx.set('bot_shops/' + accountId, {
+        ...shop,
+        portal_revision: (shop.portal_revision ?? 0) + 1,
+      });
+      this.audit(tx, uid, accountId, 'resale.product_published');
+      return { id: pid };
+    });
+  }
+  async commissions(accountId: string, uid: string) {
+    await this.own(accountId, uid);
+    const rows = await this.store.list('resale_partners/' + accountId + '/commissions', {
+      limit: 50,
+      orderBy: 'created_at',
+    });
+    return {
+      commissions: rows.map((r) => ({
+        id: r.id,
+        kind: r.kind,
+        grossCents: r.grossCents,
+        baseCents: r.baseCents,
+        gatewayFeeCents: r.gatewayFeeCents,
+        partnerCents: r.partnerCents,
+        status: r.status,
+        createdAt: r.created_at,
+      })),
+    };
   }
   async grants(uid: string) {
     const settings = await this.authority(uid);

@@ -45,6 +45,8 @@ export async function configureStock(
       'STOCK_CHANGED',
       'O estoque mudou. Atualize a lista e tente novamente.',
     );
+  if (stock.shared_reserved > 0)
+    throw new HttpError(409, 'STOCK_RESERVED', 'Há pedidos de revenda reservados deste produto.');
   const product = shop.products.find((p) => p.id === input.productId);
   if (!product) throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'Produto não encontrado.');
   for (const oid of shop.open_orders) {

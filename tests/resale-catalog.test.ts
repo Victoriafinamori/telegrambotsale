@@ -64,7 +64,7 @@ test('Affiliate quotes use server base and partner price, reject impersonation a
   await assert.rejects(() => service.quotePlan(partner, 'buyer', 'monthly'), {
     code: 'RESELLER_PRICE_TOO_LOW',
   });
-  assert.equal((await service.affiliateSettings(partner, 'partner')).checkoutReady, false);
+  assert.equal((await service.affiliateSettings(partner, 'partner')).checkoutReady, true);
 });
 test('Supplier authorizes a specific product and partner, exposes no delivery, and revocation takes effect on the next quote', async () => {
   const { service, store } = await fixture();

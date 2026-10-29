@@ -101,6 +101,7 @@ export interface Product {
   price: number;
   enabled: boolean;
   stock: number;
+  resale_source?: { supplierId: string; productId: string };
   stock_mode?: 'individual' | 'ghost' | 'infinite';
   banner?: string;
   pix_qr?: string;
@@ -172,6 +173,7 @@ export interface Order {
   buyer_username?: string;
   currency?: 'BRL' | 'XTR';
   payment_method?: 'manual' | 'stars' | 'mercadopago' | 'purincash';
+  resale?: import('./resale-finance.js').ResaleSnapshot;
   purin_connection?: string;
   purin_subaccount?: string;
   purin_payment_id?: string;
@@ -184,6 +186,12 @@ export interface Order {
     title: string;
     quantity: number;
     stock_mode?: Product['stock_mode'];
+    resale_source?: {
+      supplierId: string;
+      productId: string;
+      baseCents: number;
+      originalUnits: StockUnit[];
+    };
     units: StockUnit[];
   }[];
   total: number;

@@ -1,3 +1,5 @@
+import { restoreShared, finishShared } from './resale-stock.js';
+import { creditProof, recordCommission } from './resale-finance.js';
 import { restoreStock, syncStock } from './stock-modes.js';
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
@@ -158,7 +160,7 @@ export class PurinCashPayments {
       withdrawalsEnabled: pointer?.withdrawals_enabled === true,
     };
   }
-  // Server-only facade. Subscription revenue belongs to the platform, never to a merchant ledger.
+  // Server-only provider facade; affiliate allocation is frozen in the invoice snapshot.
   async subscriptionGateway(generation?: string) {
     const pointer = await this.store.get(root);
     const current = generation ?? pointer?.generation;
@@ -170,6 +172,32 @@ export class PurinCashPayments {
       create: (body: Doc) => this.provider(credentials.token, '/charges', body),
       read: (id: string) => this.provider(credentials.token, '/charges/' + chargeId.parse(id)),
       list: () => this.provider(credentials.token, '/charges?limit=100'),
+      subaccount: (id: string) =>
+        this.provider(credentials.token, '/subaccounts/' + subaccountId.parse(id)),
+      ledger: async (id: string, paidAt?: unknown, paymentId?: string) => {
+        const sub = subaccountId.parse(id),
+          time = typeof paidAt === 'string' ? Date.parse(paidAt) : NaN;
+        const window = Number.isFinite(time)
+          ? '&from=' +
+            encodeURIComponent(new Date(time - 60000).toISOString()) +
+            '&to=' +
+            encodeURIComponent(new Date(time + 60000).toISOString())
+          : '';
+        for (let offset = 0; offset < 1000; offset += 100) {
+          const page = await this.provider(
+            credentials.token,
+            '/subaccounts/' + sub + '/transactions?limit=100&offset=' + offset + window,
+          );
+          if (
+            !paymentId ||
+            page.transactions?.some((r: Doc) => r.type === 'sale' && r.refId === paymentId) ||
+            !page.transactions ||
+            page.transactions.length < 100
+          )
+            return page;
+        }
+        return { subaccountId: sub, transactions: [] };
+      },
       verify: (raw: Buffer, signature: string) =>
         validPurinSignature(raw, signature, credentials.secret),
     };
@@ -467,6 +495,7 @@ export class PurinCashPayments {
           subaccountId: order.purin_subaccount,
         }),
         subaccountId: order.purin_subaccount,
+        ...(order.resale ? { subaccountFeeCents: order.resale.baseCents } : {}),
       });
     } catch (error) {
       await botTransaction(this.store, async (tx) => {
@@ -607,6 +636,21 @@ export class PurinCashPayments {
       await this.provider(token, '/charges/' + chargeId.parse(paymentId)),
     );
   }
+  async reconcileResale(accountId: string, oid: string) {
+    const order = await this.store.get(botPath(accountId, 'orders', oid));
+    if (!order?.resale) return true;
+    await this.checkFromBot(accountId, order.buyer_id, oid);
+    const current = await this.store.get(botPath(accountId, 'orders', oid));
+    return [
+      'delivered',
+      'paid',
+      'cancelled',
+      'expired',
+      'rejected',
+      'refunded',
+      'refund_required',
+    ].includes(current?.status);
+  }
   private async settle(id: string, oid: string, generation: string, payment: Doc) {
     let meta: Doc;
     try {
@@ -615,6 +659,16 @@ export class PurinCashPayments {
       throw missing();
     }
     chargeId.parse(payment.paymentId);
+    const snapshot = await this.store.get(botPath(id, 'orders', oid));
+    let proof: Doc | null = null;
+    if (snapshot?.resale && payment.status === 'paid') {
+      const gateway = await this.subscriptionGateway(generation);
+      proof = creditProof(
+        snapshot.resale,
+        payment,
+        await gateway.ledger(snapshot.resale.subaccount, payment.paidAt, payment.paymentId),
+      );
+    }
     await botTransaction(this.store, async (tx) => {
       const [raw, attempt, account, setup, saved] = await Promise.all([
         tx.get(botPath(id, 'orders', oid)),
@@ -642,6 +696,9 @@ export class PurinCashPayments {
         (payment.environment !== undefined && payment.environment !== 'live') ||
         payment.sandbox === true ||
         (payment.subaccountId !== undefined && payment.subaccountId !== order.purin_subaccount) ||
+        (order.resale &&
+          payment.subaccountFeeCents !== undefined &&
+          payment.subaccountFeeCents !== order.resale.baseCents) ||
         (order.purin_payment_id && order.purin_payment_id !== payment.paymentId) ||
         payment.customer?.externalId !== `blackout:${id}:${oid}`
       )
@@ -654,6 +711,10 @@ export class PurinCashPayments {
       const release = async () => {
         if (order.status !== 'awaiting_payment') return;
         for (const item of order.items) {
+          if (item.resale_source) {
+            await restoreShared(tx, item);
+            continue;
+          }
           const stock = await tx.get(botPath(id, 'products', item.product_id));
           if (!stock) continue;
           restoreStock(stock, item);
@@ -686,6 +747,22 @@ export class PurinCashPayments {
         await release();
         order.status = 'expired';
       } else if (
+        order.resale &&
+        payment.status === 'paid' &&
+        !proof &&
+        order.status === 'awaiting_payment'
+      ) {
+        // Keep the reservation until the provider ledger confirms the allocation.
+      } else if (
+        order.resale &&
+        payment.status === 'paid' &&
+        proof?.status !== 'credited' &&
+        order.status === 'awaiting_payment'
+      ) {
+        await release();
+        order.status = 'refund_required';
+        if (proof) await recordCommission(tx, proof, { accountId: id, orderId: oid }, this.now());
+      } else if (
         payment.status === 'paid' &&
         !['paid', 'delivered', 'refunded', 'refund_required', 'refund_pending'].includes(
           order.status,
@@ -705,6 +782,8 @@ export class PurinCashPayments {
             text: `Pix recebido para pedido encerrado ${oid}. Confira a PurinCash e providencie atendimento/reembolso. Entrega bloqueada.`,
           });
         } else {
+          if (proof) await recordCommission(tx, proof, { accountId: id, orderId: oid }, this.now());
+          for (const item of order.items) if (item.resale_source) await finishShared(tx, item);
           order.status = 'paid';
           order.charge_id = 'purin:' + payment.paymentId;
           await recordPaid(tx, id, shop, order, this.now());

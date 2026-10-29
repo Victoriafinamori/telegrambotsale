@@ -1,4 +1,11 @@
 import {
+  refreshSharedCatalog,
+  reserveShared,
+  restoreShared,
+  consumeShared,
+} from './resale-stock.js';
+import { resaleRecipient } from './resale-finance.js';
+import {
   modeInput,
   configureStock,
   syncStock,
@@ -384,6 +391,7 @@ export class BotStore {
             ...(markup ? { reply_markup: markup } : {}),
           });
       };
+      await refreshSharedCatalog(tx, id, shop);
       const operational =
         account.access_status === 'approved' &&
         ['configuring', 'active'].includes(setup.activation_status);
@@ -462,6 +470,10 @@ export class BotStore {
         ]);
       const release = async (order: Order, status: 'expired' | 'cancelled' | 'rejected') => {
         for (const item of order.items) {
+          if (item.resale_source) {
+            await restoreShared(tx, item);
+            continue;
+          }
           const p = await tx.get(productDoc(item.product_id));
           if (!p) throw Error('Reserved product missing');
           restoreStock(p, item);
@@ -1945,9 +1957,37 @@ export class BotStore {
             const reservation: Order['items'] = [];
             let total = 0,
               valid = !checkoutCoupon || Boolean(coupon && coupon.used < coupon.limit);
+            const shared = checkoutItems.some(
+              (item: { id: string }) => shop.products.find((p) => p.id === item.id)?.resale_source,
+            );
+            if (
+              shared &&
+              (checkoutCoupon ||
+                checkoutItems.some(
+                  (item: { id: string }) =>
+                    !shop.products.find((p) => p.id === item.id)?.resale_source,
+                ) ||
+                shop.payment_mode !== 'manual' ||
+                shop.pix_mode !== 'purincash')
+            ) {
+              valid = false;
+              say('Produtos do fornecedor usam Pix integrado e um carrinho separado, sem cupons.');
+            }
             for (const item of checkoutItems) {
+              if (!valid) break;
               const p = shop.products.find((v) => v.id === item.id && v.enabled),
                 stock = await tx.get(productDoc(item.id));
+              if (p?.resale_source) {
+                try {
+                  reservation.push(await reserveShared(tx, id, p, item.quantity, this.vault));
+                  total += p.price * item.quantity;
+                  continue;
+                } catch (error) {
+                  if (!(error instanceof HttpError)) throw error;
+                  valid = false;
+                  break;
+                }
+              }
               if (!p || !stock || !reserveUnits(stock, item.quantity)) {
                 valid = false;
                 break;
@@ -1960,6 +2000,25 @@ export class BotStore {
                 stock_mode: stock.mode ?? 'individual',
               });
               total += p.price * item.quantity;
+            }
+            let sharedRecipient: Order['resale'] | undefined;
+            if (valid && shared) {
+              try {
+                sharedRecipient = await resaleRecipient(
+                  tx,
+                  id,
+                  'product',
+                  shop.purin_connection!,
+                  reservation.reduce(
+                    (sum, item) => sum + (item.resale_source?.baseCents ?? 0) * item.quantity,
+                    0,
+                  ),
+                );
+              } catch (error) {
+                if (!(error instanceof HttpError)) throw error;
+                valid = false;
+                say(error.message);
+              }
             }
             if (!valid) say('Estoque ou cupom indisponível. Atualize seu carrinho.');
             else {
@@ -1996,6 +2055,7 @@ export class BotStore {
                         : { mp_connection: shop.mp_connection }),
                     }
                   : {}),
+                ...(sharedRecipient ? { resale: sharedRecipient } : {}),
                 items: reservation,
                 total,
                 coupon: checkoutCoupon,
@@ -2004,6 +2064,10 @@ export class BotStore {
                 status: 'awaiting_payment',
               };
               for (const item of reservation) {
+                if (item.resale_source) {
+                  await consumeShared(tx, item);
+                  continue;
+                }
                 const stock = (await tx.get(productDoc(item.product_id)))!;
                 consumeStock(stock, item);
                 syncStock(shop.products.find((v) => v.id === item.product_id)!, stock);
@@ -2011,6 +2075,15 @@ export class BotStore {
               }
               if (coupon) coupon.used++;
               tx.set(orderDoc(oid), order);
+              if (order.resale)
+                tx.set('resale_reconciliation/' + id + '_' + oid, {
+                  id: id + '_' + oid,
+                  kind: 'product',
+                  accountId: id,
+                  orderId: oid,
+                  done: false,
+                  created_at: this.now(),
+                });
               shop.recent_orders = [oid, ...shop.recent_orders].slice(0, 50);
               shop.open_orders.push(oid);
               stats(shop).orders++;

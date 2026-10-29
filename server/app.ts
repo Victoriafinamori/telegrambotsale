@@ -217,6 +217,8 @@ export function createApp(
           config.API_PUBLIC_ORIGIN ?? config.APP_ORIGIN,
         )
       : undefined;
+  if (subscriptions) app.locals.subscriptions = subscriptions;
+  if (purin) app.locals.purin = purin;
   if (services?.bots) app.use('/internal/bot', botRuntimeRouter(services.bots, accounts, gateway));
   app.use('/api', rate('api', 300, 60000));
   app.use('/api', (req, _res, next) => {
@@ -462,19 +464,28 @@ export function createApp(
     const o = await subscriptionOwner(req);
     res.json(await o.service.read(o.id, o.uid));
   });
-  app.get('/api/checkout/plans', rate('public-plans', 120, 60000), async (_req, res) => {
+  app.get('/api/checkout/plans', rate('public-plans', 120, 60000), async (req, res) => {
     if (!subscriptions)
       throw new HttpError(
         503,
         'SUBSCRIPTION_UNAVAILABLE',
         'Checkout temporariamente indisponível.',
       );
-    res.json({ plans: (await subscriptions.settings()).plans });
+    res.json(
+      await subscriptions.publicPlans(
+        req.query.partnerId ? z.uuid().parse(req.query.partnerId) : undefined,
+      ),
+    );
   });
   app.get('/api/checkout/purchase', identity, async (req, res) => {
     if (!subscriptions)
       throw new HttpError(503, 'SUBSCRIPTION_UNAVAILABLE', 'Checkout indisponível.');
-    res.json(await subscriptions.purchaseRead((req as unknown as AuthedRequest).identity));
+    res.json(
+      await subscriptions.purchaseRead(
+        (req as unknown as AuthedRequest).identity,
+        req.query.partnerId ? z.uuid().parse(req.query.partnerId) : undefined,
+      ),
+    );
   });
   app.post(
     '/api/checkout/purchase/create',
@@ -670,6 +681,19 @@ export function createApp(
   app.get('/api/store/resale/products', identity, async (req, res) => {
     const { uid, id } = await resaleOwner(req);
     res.json(await resale!.offers(id, uid));
+  });
+  app.post(
+    '/api/store/resale/products/publish',
+    identity,
+    rate('resale-publish', 20, 60000),
+    async (req, res) => {
+      const { uid, id } = await resaleOwner(req);
+      res.json(await resale!.publishProduct(id, uid, req.body));
+    },
+  );
+  app.get('/api/store/resale/commissions', identity, async (req, res) => {
+    const { uid, id } = await resaleOwner(req);
+    res.json(await resale!.commissions(id, uid));
   });
   app.get('/api/store/resale/plans', identity, async (req, res) => {
     const { uid, id } = await resaleOwner(req);

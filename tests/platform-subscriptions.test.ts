@@ -18,6 +18,7 @@ async function fixture() {
     posts = 0,
     failAfterCreate = false;
   const charges = new Map<string, any>();
+  let ledgerRows: any[] = [];
   await store.transaction(async (tx) => {
     tx.set('merchant_accounts/' + accountId, {
       id: accountId,
@@ -47,7 +48,7 @@ async function fixture() {
     if (init?.method === 'POST') {
       posts++;
       const body = JSON.parse(String(init.body));
-      assert(!body.subaccountId);
+      if (body.subaccountId) assert(Number.isSafeInteger(body.subaccountFeeCents));
       const p = {
         ...body,
         paymentId: 'psc_' + randomUUID().replaceAll('-', ''),
@@ -61,6 +62,10 @@ async function fixture() {
       if (failAfterCreate) throw Error('Unknown response after creation');
       return Response.json(p);
     }
+    if (u.pathname.includes('/transactions'))
+      return Response.json({ subaccountId: 'sacc_affiliate', transactions: ledgerRows });
+    if (u.pathname === '/v1/subaccounts/sacc_affiliate')
+      return Response.json({ subaccountId: 'sacc_affiliate', active: true });
     if (u.pathname === '/v1/charges') return Response.json({ charges: [...charges.values()] });
     const found = charges.get(u.pathname.split('/').at(-1)!);
     return found ? Response.json(found) : Response.json({ error: 'not found' }, { status: 404 });
@@ -102,6 +107,8 @@ async function fixture() {
     store,
     service,
     accountId,
+    generation,
+    setLedger: (rows: any[]) => (ledgerRows = rows),
     charges,
     notify,
     posts: () => posts,
@@ -308,5 +315,144 @@ test('Initial checkout lost creation response never repeats POST; late or confli
   await f.notify(p);
   assert.equal((await f.service.purchaseRead(buyer)).invoice!.status, 'review_required');
   assert.equal((await f.service.purchaseRead(buyer)).hasStore, false);
+  assert.equal(f.posts(), 1);
+});
+
+async function enableAffiliate(f: Awaited<ReturnType<typeof fixture>>) {
+  const partner = randomUUID();
+  await f.store.transaction(async (tx) => {
+    tx.set('merchant_accounts/' + partner, {
+      id: partner,
+      firebase_uid: 'affiliate',
+      access_status: 'approved',
+    });
+    tx.set('merchant_bot_setup/' + partner, { telegram_user_id: '77', bot_id: '88' });
+    tx.set('bot_shops/' + partner, {
+      owner_id: '77',
+      owner_bot_id: '88',
+      purin_subaccount: 'sacc_affiliate',
+      purin_connection: f.generation,
+    });
+    tx.set('purin_subaccount_claims/sacc_affiliate', { account_id: partner });
+    tx.set('resale_profiles/' + partner, { plans: 'approved' });
+    tx.set('resale_partners/' + partner, {
+      id: partner,
+      enabled: true,
+      revision: 1,
+      prices: { monthly: 1999, quarterly: 3450, annual: 9990 },
+    });
+  });
+  return partner;
+}
+test('Affiliate initial purchase and renewal allocate only base in the charge and confirm margin through the recipient ledger once', async () => {
+  const f = await fixture(),
+    partner = await enableAffiliate(f),
+    buyer = {
+      uid: 'new-buyer',
+      email: 'new@example.test',
+      emailVerified: true,
+      secondFactor: false,
+      authTime: Date.now() / 1000,
+    };
+  const input = {
+    plan: 'monthly',
+    requestId: randomUUID(),
+    expectedPriceCents: 1999,
+    name: 'Buyer Test',
+    storeName: 'Buyer Store',
+    partnerId: partner,
+  };
+  const invoice = await f.service.purchaseCreate(buyer, input);
+  const charge = [...f.charges.values()][0];
+  assert.equal(charge.subaccountId, 'sacc_affiliate');
+  assert.equal(charge.subaccountFeeCents, 999);
+  charge.status = 'paid';
+  charge.paidAt = '2026-10-26T12:00:00Z';
+  await f.notify(charge);
+  assert.equal(
+    (await f.service.purchaseCheck(buyer, { invoiceId: invoice.id })).status,
+    'awaiting_credit',
+  );
+  assert.equal((await f.store.list('resale_commissions', { limit: 10 })).length, 0);
+  f.setLedger([
+    { id: 'ledger1', refId: charge.paymentId, type: 'sale', amountCents: 930, feeCents: 999 },
+  ]);
+  await Promise.all([f.notify(charge), f.notify(charge)]);
+  const result = await f.service.purchaseCheck(buyer, { invoiceId: invoice.id });
+  assert.equal(result.status, 'paid');
+  const commissions = await f.store.list('resale_commissions', { limit: 10 });
+  assert.equal(commissions.length, 1);
+  assert.equal(commissions[0].gatewayFeeCents, 70);
+  assert.equal(commissions[0].partnerCents, 930);
+  assert.equal(commissions[0].blackoutFeeCents, 0);
+  const original = (await f.store.get('platform_subscription_invoices/' + invoice.id))!,
+    account = (await f.store.get('merchant_accounts/' + original.account_id))!;
+  assert.equal(account.price_cents, 999);
+  assert.equal(account.resale_partner_id, partner);
+  await f.store.transaction(async (tx) => {
+    tx.set('merchant_accounts/' + account.id, {
+      ...account,
+      billing_started_at: new Date('2026-10-26T12:00:00Z'),
+      paid_through: new Date('2026-11-26T12:00:00Z'),
+    });
+    tx.set('merchant_bot_setup/' + account.id, {
+      activation_status: 'active',
+      telegram_user_id: '99',
+      bot_id: '100',
+    });
+  });
+  const renewal = await f.service.create(account.id, buyer.uid, {
+    plan: 'quarterly',
+    requestId: randomUUID(),
+    expectedPriceCents: 3450,
+  });
+  const second = [...f.charges.values()][1];
+  assert.equal(second.subaccountFeeCents, 2450);
+  assert.equal(second.subaccountId, 'sacc_affiliate');
+  assert.equal(renewal.total, 3450);
+  assert.equal(f.posts(), 2);
+});
+test('Affiliate revocation blocks new charges but cannot divert a previously created allocation', async () => {
+  const f = await fixture(),
+    partner = await enableAffiliate(f),
+    buyer = {
+      uid: 'buyer',
+      email: 'buyer@example.test',
+      emailVerified: true,
+      secondFactor: false,
+      authTime: 1,
+    };
+  const invoice = await f.service.purchaseCreate(buyer, {
+    plan: 'monthly',
+    requestId: randomUUID(),
+    expectedPriceCents: 1999,
+    name: 'Buyer Test',
+    storeName: 'Buyer Store',
+    partnerId: partner,
+  });
+  await f.store.transaction(async (tx) =>
+    tx.set('resale_profiles/' + partner, { plans: 'revoked' }),
+  );
+  await assert.rejects(
+    () =>
+      f.service.purchaseCreate(
+        { ...buyer, uid: 'other', email: 'other@example.test' },
+        {
+          plan: 'monthly',
+          requestId: randomUUID(),
+          expectedPriceCents: 1999,
+          name: 'Other Test',
+          storeName: 'Other Store',
+          partnerId: partner,
+        },
+      ),
+    { code: 'RESELLER_DISABLED' },
+  );
+  const charge = [...f.charges.values()][0];
+  charge.status = 'paid';
+  charge.paidAt = '2026-10-26T12:00:00Z';
+  f.setLedger([{ refId: charge.paymentId, type: 'sale', amountCents: 930, feeCents: 999 }]);
+  await f.notify(charge);
+  assert.equal((await f.service.purchaseCheck(buyer, { invoiceId: invoice.id })).status, 'paid');
   assert.equal(f.posts(), 1);
 });
