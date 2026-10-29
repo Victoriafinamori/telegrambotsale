@@ -101,6 +101,7 @@ export interface Product {
   price: number;
   enabled: boolean;
   stock: number;
+  stock_mode?: 'individual' | 'ghost' | 'infinite';
   banner?: string;
   pix_qr?: string;
   pix_qr_price?: number;
@@ -178,7 +179,13 @@ export interface Order {
   checkout_key_ciphertext?: string;
   mp_connection?: string;
   mp_payment_id?: string;
-  items: { product_id: string; title: string; quantity: number; units: StockUnit[] }[];
+  items: {
+    product_id: string;
+    title: string;
+    quantity: number;
+    stock_mode?: Product['stock_mode'];
+    units: StockUnit[];
+  }[];
   total: number;
   coupon: string;
   created_at: Date;

@@ -1,3 +1,11 @@
+import {
+  modeInput,
+  configureStock,
+  syncStock,
+  reserveUnits,
+  consumeStock,
+  restoreStock,
+} from './stock-modes.js';
 import { stockItems, stockVersion, changeStock } from './stock-management.js';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { fastNavigation, reuseNavigationMessage } from './bot-navigation.js';
@@ -456,9 +464,9 @@ export class BotStore {
         for (const item of order.items) {
           const p = await tx.get(productDoc(item.product_id));
           if (!p) throw Error('Reserved product missing');
-          p.units.push(...item.units);
+          restoreStock(p, item);
           const meta = shop.products.find((v) => v.id === item.product_id);
-          if (meta) meta.stock = p.units.length;
+          if (meta) syncStock(meta, p);
           tx.set(productDoc(item.product_id), p);
         }
         if (order.coupon && shop.coupons[order.coupon]) shop.coupons[order.coupon].used--;
@@ -568,7 +576,7 @@ export class BotStore {
               (p) =>
                 [
                   [
-                    `${p.title} · ${isoMoney(p.price, shop.payment_mode === 'manual' ? 'BRL' : 'XTR')} · ${p.stock} un.`,
+                    `${p.title} · ${isoMoney(p.price, shop.payment_mode === 'manual' ? 'BRL' : 'XTR')} · ${p.stock_mode === 'infinite' ? '∞' : p.stock} un.`,
                     'p:' + p.id,
                   ],
                 ] as [string, string][],
@@ -1089,7 +1097,90 @@ export class BotStore {
                 ]),
               ),
             );
-          else if (/^stock(for|page|unit|add|clear|do):/.test(action)) {
+          else if (action.startsWith('stockmode:')) {
+            const [, pid, mode] = action.split(':');
+            const stock = await tx.get(productDoc(pid));
+            if (!stock || !shop.products.some((p) => p.id === pid)) say('Produto não encontrado.');
+            else if (!mode) {
+              customer.session = null;
+              say(
+                '⚙️ MODO DE ESTOQUE\n\nIndividual: cada compra recebe uma unidade exclusiva.\nFantasma: quantidade limitada e a mesma mensagem de resgate a cada compra.\nInfinito: repete a entrega sem descontar unidades.\n\nOs códigos individuais serão preservados.',
+                buttons([
+                  [['📦 Individual', 'admin:stockmode:' + pid + ':individual']],
+                  [['👻 Fantasma', 'admin:stockmode:' + pid + ':ghost']],
+                  [['∞ Infinito', 'admin:stockmode:' + pid + ':infinite']],
+                  [['Voltar', 'admin:stockfor:' + pid]],
+                ]),
+              );
+            } else if (['individual', 'ghost', 'infinite'].includes(mode)) {
+              const version = stockVersion(stock);
+              if (mode === 'individual') {
+                customer.session = {
+                  step: 'stock_mode_confirm',
+                  product: pid,
+                  mode,
+                  version,
+                  quantity: 0,
+                  text: '',
+                };
+                say(
+                  'Ativar estoque individual? As vendas passarão a usar os códigos e arquivos individuais salvos.',
+                  buttons([
+                    [['Confirmar modo', 'admin:stockactivate:' + pid]],
+                    [['Cancelar', 'admin:stockfor:' + pid]],
+                  ]),
+                );
+              } else {
+                customer.session = {
+                  step: mode === 'ghost' ? 'stock_mode_quantity' : 'stock_mode_content',
+                  product: pid,
+                  mode,
+                  version,
+                  quantity: 0,
+                };
+                say(
+                  mode === 'ghost'
+                    ? '👻 Quantas unidades fantasmas devem ficar disponíveis? Envie um número de 0 a 1000000. Isso define o saldo disponível, não soma ao saldo atual.'
+                    : '∞ Envie o texto ou arquivo que será entregue em todas as compras. Não use uma licença exclusiva, pois ela será repetida. Envie /cancelar para sair.',
+                );
+              }
+            }
+          } else if (action.startsWith('stockactivate:')) {
+            const pid = action.split(':')[1],
+              session = customer.session;
+            const stock = await tx.get(productDoc(pid));
+            if (!stock || session?.step !== 'stock_mode_confirm' || session.product !== pid)
+              say('Esta configuração expirou. Abra o modo de estoque novamente.');
+            else {
+              try {
+                const draft = session.content_ciphertext
+                  ? JSON.parse(
+                      this.vault.open(
+                        session.content_ciphertext,
+                        `${id}:stock-mode:${userId}:${pid}`,
+                      ),
+                    )
+                  : {};
+                const value = modeInput.parse({
+                  productId: pid,
+                  version: session.version,
+                  mode: session.mode,
+                  quantity: session.quantity,
+                  text: draft.text ?? '',
+                });
+                await configureStock(tx, id, shop, stock, value, this.vault, draft.document);
+                this.audit(tx, id, 'store.stock_mode_changed', userId);
+                say(
+                  '✅ Modo de estoque atualizado.',
+                  buttons([[['Ver estoque', 'admin:stockfor:' + pid]]]),
+                );
+              } catch (error) {
+                if (!(error instanceof HttpError)) throw error;
+                say(error.message, buttons([[['Voltar ao estoque', 'admin:stockfor:' + pid]]]));
+              }
+              customer.session = null;
+            }
+          } else if (/^stock(for|page|unit|add|clear|do):/.test(action)) {
             const parts = action.split(':');
             const operation = parts[0],
               pid = parts[1];
@@ -1101,7 +1192,7 @@ export class BotStore {
               if (operation === 'stockdo') {
                 try {
                   changeStock(stock, parts[2], parts[3], parts[4]);
-                  product.stock = stock.units.length;
+                  syncStock(product, stock);
                   tx.set(productDoc(pid), stock);
                   this.audit(tx, id, 'store.stock_' + parts[2], userId);
                 } catch (error) {
@@ -1112,7 +1203,28 @@ export class BotStore {
               const version = stockVersion(stock);
               const units = stockItems(stock, this.vault, id, pid);
               const back = ['Voltar ao estoque', 'admin:stockfor:' + pid] as [string, string];
-              if (operation === 'stockadd') {
+              if (operation === 'stockfor' && stock.mode && stock.mode !== 'individual') {
+                const content = stock.template
+                  ? stockItems({ units: [stock.template] }, this.vault, id, pid)[0]
+                  : null;
+                say(
+                  (stock.mode === 'ghost' ? '👻 ESTOQUE FANTASMA' : '∞ ESTOQUE INFINITO') +
+                    '\n' +
+                    product.title +
+                    '\n\nDisponível: ' +
+                    (stock.mode === 'ghost' ? stock.remaining + ' unidades' : 'sem limite') +
+                    '\n\nEntrega após pagamento:\n' +
+                    (content?.text ?? 'Não configurada') +
+                    '\n\n' +
+                    units.length +
+                    ' unidades individuais preservadas.',
+                  buttons([
+                    [['⚙️ Configurar modo', 'admin:stockmode:' + pid]],
+                    [['📦 Unidades individuais', 'admin:stockpage:' + pid + ':0']],
+                    [['Produtos', 'admin:stock']],
+                  ]),
+                );
+              } else if (operation === 'stockadd') {
                 customer.session = { step: 'stock', product: pid };
                 say(
                   'Envie uma unidade por linha (até 20), ou um arquivo. Envie /cancelar para sair.',
@@ -1201,6 +1313,7 @@ export class BotStore {
                           string,
                         ][][])
                       : []),
+                    [['⚙️ Modo de estoque', 'admin:stockmode:' + pid]],
                     [['Adicionar unidades', 'admin:stockadd:' + pid]],
                     ...(units.length > 1
                       ? ([[['Embaralhar', 'admin:stockdo:' + pid + ':shuffle:' + version]]] as [
@@ -1487,6 +1600,51 @@ export class BotStore {
               customer.session = null;
               say('Produto criado. Use Estoque para adicionar as unidades.', adminMenu());
             }
+          } else if (session.step === 'stock_mode_quantity') {
+            if (!/^\d{1,7}$/.test(text) || Number(text) > 1000000)
+              say('Envie um número inteiro de 0 a 1000000.');
+            else {
+              customer.session = { ...session, step: 'stock_mode_content', quantity: Number(text) };
+              say(
+                'Envie a mensagem de entrega. Exemplo: Abra um ticket para resgatar seu produto. Você também pode enviar um arquivo. Envie /cancelar para sair.',
+              );
+            }
+          } else if (session.step === 'stock_mode_content') {
+            if (!msg.document && (!text.trim() || text.length > 1000))
+              say('Envie um texto de até 1000 caracteres ou um arquivo.');
+            else {
+              customer.session = {
+                ...session,
+                step: 'stock_mode_confirm',
+                content_ciphertext: this.vault.seal(
+                  JSON.stringify({
+                    text: msg.document ? '' : text,
+                    ...(msg.document
+                      ? {
+                          document: {
+                            fileId: msg.document.file_id,
+                            name: msg.document.file_name || 'Arquivo digital',
+                          },
+                        }
+                      : {}),
+                  }),
+                  `${id}:stock-mode:${userId}:${session.product}`,
+                ),
+              };
+              say(
+                'Confira antes de ativar\n\nModo: ' +
+                  (session.mode === 'ghost'
+                    ? 'Fantasma · ' + session.quantity + ' unidades'
+                    : 'Infinito') +
+                  '\nEntrega: ' +
+                  (msg.document?.file_name || text || 'Arquivo digital') +
+                  '\n\nCada unidade comprada recebe este conteúdo. Códigos individuais ficam preservados.',
+                buttons([
+                  [['Ativar modo', 'admin:stockactivate:' + session.product]],
+                  [['Cancelar', 'admin:stockfor:' + session.product]],
+                ]),
+              );
+            }
           } else if (session.step === 'stock') {
             const p = shop.products.find((v) => v.id === session.product),
               stock = await tx.get(productDoc(session.product));
@@ -1526,7 +1684,7 @@ export class BotStore {
                   ),
                 });
               }
-              p.stock = stock.units.length;
+              syncStock(p, stock);
               tx.set(productDoc(p.id), stock);
               customer.session = null;
               say(`${units.length} unidade(s) adicionada(s).`, adminMenu());
@@ -1790,7 +1948,7 @@ export class BotStore {
             for (const item of checkoutItems) {
               const p = shop.products.find((v) => v.id === item.id && v.enabled),
                 stock = await tx.get(productDoc(item.id));
-              if (!p || !stock || stock.units.length < item.quantity) {
+              if (!p || !stock || !reserveUnits(stock, item.quantity)) {
                 valid = false;
                 break;
               }
@@ -1798,7 +1956,8 @@ export class BotStore {
                 product_id: p.id,
                 title: p.title,
                 quantity: item.quantity,
-                units: stock.units.slice(0, item.quantity),
+                units: reserveUnits(stock, item.quantity)!,
+                stock_mode: stock.mode ?? 'individual',
               });
               total += p.price * item.quantity;
             }
@@ -1846,8 +2005,8 @@ export class BotStore {
               };
               for (const item of reservation) {
                 const stock = (await tx.get(productDoc(item.product_id)))!;
-                stock.units.splice(0, item.quantity);
-                shop.products.find((v) => v.id === item.product_id)!.stock = stock.units.length;
+                consumeStock(stock, item);
+                syncStock(shop.products.find((v) => v.id === item.product_id)!, stock);
                 tx.set(productDoc(item.product_id), stock);
               }
               if (coupon) coupon.used++;

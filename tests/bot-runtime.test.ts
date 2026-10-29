@@ -2970,3 +2970,137 @@ test('Inventory management protects reserved units, rejects stale lists and sync
     0,
   );
 });
+
+test('Ghost stock counts reservations without consuming individual units, restores on cancel, and keeps paid delivery immutable', async () => {
+  const f = await fixture(),
+    pid = await f.product(['REAL-ONE', 'REAL-TWO']);
+  const portal = new MerchantConsole(f.store, f.key, f.bots);
+  const configure = async (
+    mode: 'ghost' | 'infinite' | 'individual',
+    quantity: number,
+    text: string,
+  ) =>
+    portal.stockMode(f.a.id, 'merchant', {
+      productId: pid,
+      version: (await portal.inventory(f.a.id, 'merchant', pid)).version,
+      mode,
+      quantity,
+      text,
+    });
+  await assert.rejects(
+    () =>
+      portal.stockMode(f.a.id, 'other', {
+        productId: pid,
+        version: 'a'.repeat(12),
+        mode: 'ghost',
+        quantity: 1,
+        text: 'X',
+      }),
+    { code: 'STORE_NOT_APPROVED' },
+  );
+  await configure('ghost', 1, 'PRIVATE-REDEEM: abra um ticket');
+  assert.equal((await portal.read(f.a.id, 'merchant')).products[0].stock, 1);
+  const orders = await Promise.all([f.order(222222222, pid), f.order(333333333, pid)]);
+  assert.equal(orders.filter(Boolean).length, 1);
+  const oid = orders.find(Boolean)!;
+  const order = (await f.store.get(`bot_shops/${f.a.id}/orders/${oid}`))!;
+  await assert.rejects(() => configure('individual', 0, ''), { code: 'STOCK_RESERVED' });
+  assert.equal((await portal.inventory(f.a.id, 'merchant', pid)).quantity, 0);
+  assert.equal((await portal.inventory(f.a.id, 'merchant', pid)).units.length, 2);
+  await f.click(Number(order.buyer_id), 'cancel:' + oid);
+  await f.click(Number(order.buyer_id), 'cancel:' + oid);
+  assert.equal((await portal.inventory(f.a.id, 'merchant', pid)).quantity, 1);
+  const next = (await f.order(444444444, pid))!;
+  const delivered = await f.effects(
+    (await f.bots.process(f.auth, f.payment(444444444, next))).effectIds,
+  );
+  assert(delivered.some((e) => e.delivery && String(e.payload.text).includes('PRIVATE-REDEEM')));
+  assert.equal((await portal.inventory(f.a.id, 'merchant', pid)).quantity, 0);
+  const stored = await f.store.get(`bot_shops/${f.a.id}/products/${pid}`);
+  assert(!JSON.stringify(stored).includes('PRIVATE-REDEEM'));
+  await configure('individual', 0, '');
+  assert.equal((await portal.read(f.a.id, 'merchant')).products[0].stock, 2);
+});
+
+test('Infinite stock repeats an encrypted template, never consumes or restores copies, and Telegram settings require owner confirmation', async () => {
+  const f = await fixture(),
+    pid = await f.product(['SAVED-ONE']);
+  const portal = new MerchantConsole(f.store, f.key, f.bots);
+  await f.click(111111111, 'admin:stockmode:' + pid + ':infinite');
+  await f.send(111111111, 'REPEAT-PRIVATE');
+  assert.equal((await portal.inventory(f.a.id, 'merchant', pid)).mode, 'individual');
+  assert(
+    !JSON.stringify(await f.store.get(`bot_shops/${f.a.id}/customers/111111111`)).includes(
+      'REPEAT-PRIVATE',
+    ),
+  );
+  await f.click(222222222, 'admin:stockactivate:' + pid);
+  assert.equal((await portal.inventory(f.a.id, 'merchant', pid)).mode, 'individual');
+  await f.click(111111111, 'admin:stockactivate:' + pid);
+  assert.equal((await portal.inventory(f.a.id, 'merchant', pid)).mode, 'infinite');
+  for (const buyer of [222222222, 333333333]) {
+    const oid = (await f.order(buyer, pid))!;
+    assert(oid);
+    const effects = await f.effects(
+      (await f.bots.process(f.auth, f.payment(buyer, oid))).effectIds,
+    );
+    assert(effects.some((e) => e.delivery && String(e.payload.text).includes('REPEAT-PRIVATE')));
+  }
+  const cancelled = (await f.order(444444444, pid))!;
+  await f.click(444444444, 'cancel:' + cancelled);
+  const inventory = await portal.inventory(f.a.id, 'merchant', pid);
+  assert.equal(inventory.units.length, 1);
+  assert.equal((await portal.read(f.a.id, 'merchant')).products[0].stock_mode, 'infinite');
+  await portal.stockMode(f.a.id, 'merchant', {
+    productId: pid,
+    version: inventory.version,
+    mode: 'individual',
+    quantity: 0,
+    text: '',
+  });
+  assert.equal((await portal.read(f.a.id, 'merchant')).products[0].stock, 1);
+});
+
+test('Repeated file delivery snapshots the chosen unit and survives deleting the original saved unit', async () => {
+  const f = await fixture(),
+    pid = await f.product(['ORIGINAL']);
+  const portal = new MerchantConsole(f.store, f.key, f.bots);
+  await f.click(111111111, 'admin:stockadd:' + pid);
+  const update = f.message(111111111, '');
+  update.message!.document = { file_id: 'SAFE_TEST_FILE', file_name: 'manual.pdf' };
+  await f.bots.process(f.auth, update);
+  let inv = await portal.inventory(f.a.id, 'merchant', pid);
+  const file = inv.units.find((u: any) => u.kind === 'document')!;
+  await portal.stockMode(f.a.id, 'merchant', {
+    productId: pid,
+    version: inv.version,
+    mode: 'infinite',
+    quantity: 0,
+    text: '',
+    sourceUnit: file.id,
+  });
+  inv = await portal.inventory(f.a.id, 'merchant', pid);
+  await portal.manageStock(f.a.id, 'merchant', {
+    productId: pid,
+    version: inv.version,
+    action: 'delete',
+    unitId: file.id,
+  });
+  const oid = (await f.order(222222222, pid))!;
+  const effects = await f.effects(
+    (await f.bots.process(f.auth, f.payment(222222222, oid))).effectIds,
+  );
+  assert(
+    effects.some(
+      (e) => e.delivery && e.method === 'sendDocument' && e.payload.document === 'SAFE_TEST_FILE',
+    ),
+  );
+  await f.click(111111111, 'admin:stockmode:' + pid + ':ghost');
+  await f.send(111111111, '3');
+  await f.send(111111111, 'Abra um ticket para resgatar');
+  await f.click(111111111, 'admin:stockactivate:' + pid);
+  inv = await portal.inventory(f.a.id, 'merchant', pid);
+  assert.equal(inv.mode, 'ghost');
+  assert.equal(inv.quantity, 3);
+  assert.equal(inv.text, 'Abra um ticket para resgatar');
+});

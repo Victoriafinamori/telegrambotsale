@@ -6,7 +6,7 @@ export function money(amount: number, currency = 'XTR') {
     : `${amount} ⭐`;
 }
 export function productText(product: Product, shop?: Shop) {
-  return `${product.title}\n${product.description}\n\nPreço: ${money(product.price, shop?.payment_mode === 'manual' ? 'BRL' : 'XTR')}\nDisponíveis: ${product.stock}`;
+  return `${product.title}\n${product.description}\n\nPreço: ${money(product.price, shop?.payment_mode === 'manual' ? 'BRL' : 'XTR')}\nDisponíveis: ${product.stock_mode === 'infinite' ? 'Ilimitado' : product.stock}`;
 }
 export function parsePrice(text: string, manual: boolean) {
   if (!manual) {

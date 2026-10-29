@@ -154,6 +154,11 @@ export function merchantConsoleRouter(
     res.set('Cache-Control', 'no-store');
     res.json(await console.inventory(id, uid, z.string().parse(req.query.productId)));
   });
+  router.post('/stock/mode', async (req, res) => {
+    const { id, uid } = owner(req);
+    await console.stockMode(id, uid, req.body);
+    res.json({ ok: true });
+  });
   router.post('/stock/manage', async (req, res) => {
     const { id, uid } = owner(req);
     await console.manageStock(id, uid, req.body);

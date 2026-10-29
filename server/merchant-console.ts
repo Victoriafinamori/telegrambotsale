@@ -1,3 +1,4 @@
+import { modeInput, configureStock, syncStock } from './stock-modes.js';
 import { stockItems, stockVersion, changeStock } from './stock-management.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -176,6 +177,7 @@ export class MerchantConsole {
           ...fields,
           id: pid,
           stock: current?.stock ?? 0,
+          stock_mode: current?.stock_mode ?? 'individual',
           pix_qr: qr,
           pix_qr_price: qr && qr !== current?.pix_qr ? value.price : (current?.pix_qr_price ?? 0),
         };
@@ -333,7 +335,26 @@ export class MerchantConsole {
       const stock = await tx.get(botPath(id, 'products', productId));
       if (!stock || !shop.products.some((p) => p.id === productId))
         throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'Produto não encontrado.');
-      return { version: stockVersion(stock), units: stockItems(stock, this.vault, id, productId) };
+      return {
+        version: stockVersion(stock),
+        mode: stock.mode ?? 'individual',
+        quantity: stock.remaining ?? 0,
+        text: stock.template
+          ? stockItems({ units: [stock.template] }, this.vault, id, productId)[0].text
+          : '',
+        units: stockItems(stock, this.vault, id, productId),
+      };
+    });
+  }
+  async stockMode(id: string, uid: string, input: unknown) {
+    const value = modeInput.parse(input);
+    await botTransaction(this.store, async (tx) => {
+      const { shop } = await this.owner(tx, id, uid);
+      const stock = await tx.get(botPath(id, 'products', value.productId));
+      if (!stock) throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'Produto não encontrado.');
+      await configureStock(tx, id, shop, stock, value, this.vault);
+      tx.set(botRoot(id), { ...shop, portal_revision: (shop.portal_revision ?? 0) + 1 });
+      this.audit(tx, id, uid, 'store.stock_mode_changed');
     });
   }
   async manageStock(id: string, uid: string, input: unknown) {
@@ -357,7 +378,7 @@ export class MerchantConsole {
       if (!stock || !product)
         throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'Produto não encontrado.');
       changeStock(stock, value.action, value.version, value.unitId);
-      product.stock = stock.units.length;
+      syncStock(product, stock);
       tx.set(target, stock);
       tx.set(botRoot(id), { ...shop, portal_revision: (shop.portal_revision ?? 0) + 1 });
       this.audit(tx, id, uid, 'store.stock_' + value.action);
@@ -392,7 +413,7 @@ export class MerchantConsole {
           ),
         });
       }
-      p.stock = stock.units.length;
+      syncStock(p, stock);
       tx.set(target, stock);
       tx.set(botRoot(id), { ...shop, portal_revision: (shop.portal_revision ?? 0) + 1 });
       tx.set(receipt, { created_at: new Date() });

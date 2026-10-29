@@ -4,7 +4,14 @@ import { SecretVault } from './secret-vault.js';
 import { HttpError } from './types.js';
 export const stockVersion = (stock: Doc) =>
   createHash('sha256')
-    .update(stock.units.map((u: Doc) => u.id).join(','))
+    .update(
+      JSON.stringify([
+        stock.units.map((u: Doc) => u.id),
+        stock.mode ?? 'individual',
+        stock.remaining ?? 0,
+        stock.template?.id ?? '',
+      ]),
+    )
     .digest('hex')
     .slice(0, 12);
 export function stockItems(stock: Doc, vault: SecretVault, account: string, product: string) {

@@ -1,3 +1,4 @@
+import { syncStock } from './stock-modes.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { DocumentStore, DocumentTransaction, Doc } from './document-store.js';
@@ -119,6 +120,7 @@ export class StoreTest {
         id: p.id,
         title: p.title,
         stock: p.stock,
+        stock_mode: p.stock_mode,
         enabled: p.enabled,
       })),
       orders,
@@ -166,6 +168,7 @@ export class StoreTest {
         enabled: p.enabled,
         price: p.price,
         stock: Math.min(10, Math.max(0, p.stock)),
+        stock_mode: p.stock_mode ?? 'individual',
         banner: p.banner ?? '',
       }));
       const shop: Shop = {
@@ -211,12 +214,24 @@ export class StoreTest {
         offset: 0,
       };
       sandbox.records[botRoot(id)] = shop;
-      for (const product of products)
-        sandbox.records[botPath(id, 'products', product.id)] = {
-          units: Array.from({ length: product.stock }, (_, i) =>
-            this.unit(id, product, i + 1, input.deliveryKind),
-          ),
+      for (const product of products) {
+        const stock = {
+          mode: product.stock_mode,
+          remaining: product.stock,
+          template:
+            product.stock_mode !== 'individual'
+              ? this.unit(id, product, 999, input.deliveryKind)
+              : null,
+          units:
+            product.stock_mode === 'individual'
+              ? Array.from({ length: product.stock }, (_, i) =>
+                  this.unit(id, product, i + 1, input.deliveryKind),
+                )
+              : [],
         };
+        syncStock(product, stock);
+        sandbox.records[botPath(id, 'products', product.id)] = stock;
+      }
       const state: State = {
         records: sandbox.records,
         messages: [],
@@ -433,8 +448,9 @@ export class StoreTest {
             'Escolha um produto com menos de dez unidades de teste.',
           );
         const stock = sandbox.records[botPath(id, 'products', product.id)];
-        stock.units.push(this.unit(id, product, stock.units.length + 1, state.deliveryKind));
-        product.stock = stock.units.length;
+        if (stock.mode === 'ghost') stock.remaining++;
+        else stock.units.push(this.unit(id, product, stock.units.length + 1, state.deliveryKind));
+        syncStock(product, stock);
       } else {
         if (!order)
           throw new HttpError(

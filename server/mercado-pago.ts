@@ -1,3 +1,4 @@
+import { restoreStock, syncStock } from './stock-modes.js';
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { DocumentStore, DocumentTransaction, Doc } from './document-store.js';
@@ -542,10 +543,9 @@ export class MercadoPagoPayments {
         for (const item of order.items) {
           const stock = await tx.get(botPath(id, 'products', item.product_id));
           if (!stock) continue;
-          const existing = new Set(stock.units.map((unit: { id: string }) => unit.id));
-          stock.units.push(...item.units.filter((unit) => !existing.has(unit.id)));
+          restoreStock(stock, item);
           const product = shop.products.find((p) => p.id === item.product_id);
-          if (product) product.stock = stock.units.length;
+          if (product) syncStock(product, stock);
           tx.set(botPath(id, 'products', item.product_id), stock);
         }
         if (order.coupon && shop.coupons[order.coupon])
