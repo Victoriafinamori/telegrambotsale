@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Configuração guiada · demonstração</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="local-banner">Demonstração fictícia. Nenhum token será enviado ou salvo.</div>
+    <div id="app">
+      <header>
+        <a class="brand" href="/setup-preview.html">Blackout Create</a
+        ><button data-theme>Tema</button>
+      </header>
+      <main class="merchant-shell" id="preview"></main>
+    </div>
+    <script type="module">
+      import { botGuide, attachBotGuide } from '/onboarding.ts';
+      import { renderSetupProgress } from '/setup-progress.ts';
+      import '/mobile-workspace.css';
+      if (!import.meta.env.DEV) throw Error('Somente desenvolvimento');
+      const host = document.querySelector('#preview');
+      let step = 1;
+      const progress = {
+        completed: 1,
+        total: 5,
+        ready: false,
+        message: 'Conecte seu bot para continuar.',
+        checks: [],
+        steps: [
+          {
+            id: 'payment',
+            title: 'Pagamento confirmado',
+            state: 'done',
+            detail: 'Contratação confirmada.',
+            action: { label: 'Ver contratação', href: '#contrato' },
+          },
+          {
+            id: 'bot',
+            title: 'Conectar bot',
+            state: 'current',
+            detail: 'Conecte seu bot.',
+            action: { label: 'Conectar meu bot', href: '#bot' },
+          },
+          {
+            id: 'owner',
+            title: 'Confirmar responsável',
+            state: 'locked',
+            detail: 'Você confirmará sua conta pelo Telegram.',
+            action: null,
+          },
+          {
+            id: 'store',
+            title: 'Configurar loja',
+            state: 'locked',
+            detail: 'Personalize seu catálogo e atendimento.',
+            action: null,
+          },
+          {
+            id: 'ready',
+            title: 'Loja pronta',
+            state: 'locked',
+            detail: 'Conclua as etapas anteriores.',
+            action: null,
+          },
+        ],
+      };
+      const render = () => {
+        host.innerHTML = `<div class="page-heading"><div><h1>Primeiros passos</h1></div><a class="button-link quiet" href="/stock-preview.html">Voltar à loja</a></div>${renderSetupProgress(progress, 'connection', 'setup-preview', true)}<div data-setup-aux>${botGuide(step >= 3 ? { bot_username: 'LojaDemonstracaoBot', telegram_user_id: '123456789', activation_status: 'pending' } : null, step, false)}</div>`;
+        attachBotGuide(host, 1);
+      };
+      host.addEventListener('click', (e) => {
+        const id = e.target.closest('button')?.id;
+        if (id === 'guide-next' || id === 'guide-back') {
+          step = id === 'guide-next' ? 2 : 1;
+          render();
+          host.querySelector('#guide-content')?.scrollIntoView({ block: 'start' });
+        }
+        if (id === 'toggle-bot-token') {
+          const field = host.querySelector('#bot-token');
+          field.type = field.type === 'password' ? 'text' : 'password';
+          e.target.textContent = field.type === 'password' ? 'Mostrar' : 'Ocultar';
+        }
+        if (id === 'submit-bot-setup') {
+          step = 4;
+          render();
+        }
+        if (id === 'guide-edit') {
+          step = 2;
+          render();
+        }
+      });
+      host.addEventListener('submit', (e) => {
+        e.preventDefault();
+        step = 3;
+        render();
+        host.querySelector('#guide-content')?.scrollIntoView({ block: 'start' });
+      });
+      document
+        .querySelector('[data-theme]')
+        .addEventListener('click', () => document.documentElement.classList.toggle('dark'));
+      render();
+    </script>
+  </body>
+</html>

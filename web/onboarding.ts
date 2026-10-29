@@ -5,6 +5,11 @@ const esc = (v: unknown) =>
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!,
   );
+export function attachBotGuide(root: ParentNode, botIndex: number) {
+  const guide = root.querySelector<HTMLElement>('[data-setup-aux]');
+  const panel = root.querySelector<HTMLElement>(`[data-setup-panel="${botIndex}"]`);
+  if (guide && panel) panel.replaceChildren(guide);
+}
 export function botGuide(
   setup: BotSetup | null,
   step: number,

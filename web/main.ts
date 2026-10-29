@@ -23,7 +23,7 @@ import {
 } from 'firebase/auth';
 import type { MerchantAccount, AdminMerchantAccount } from '../server/types.js';
 import type { BotSetup } from '../server/bot-onboarding.js';
-import { botGuide } from './onboarding.js';
+import { botGuide, attachBotGuide } from './onboarding.js';
 import { adminBotCard, activationLabels } from './admin-bot.js';
 import { mountPurinAdmin } from './purin-admin.js';
 import { mountSubscriptionAdmin } from './subscription.js';
@@ -298,6 +298,11 @@ function merchantView() {
   shell(
     `<main class="merchant-shell"><div class="page-heading"><div><span class="eyebrow">${esc(a.store_name)}</span><h1>${botSetup?.activation_status === 'active' ? 'Sua loja' : 'Primeiros passos'}</h1></div><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div>${approved ? `<p class="welcome-note">${botSetup?.activation_status === 'active' ? 'Acompanhe sua ativação e os dados da contratação.' : 'Seu acesso foi liberado. Siga as etapas para preparar seu bot.'}</p>${setupProgress ? renderSetupProgress(setupProgress, 'connection', setupScope, reviewSetup) : ''}${!botRuntime?.provisioned ? `<div data-setup-aux ${isSetupDismissed(setupScope) && !reviewSetup ? 'hidden' : ''}>${botGuide(botSetup, guideStep, Boolean(config?.emulatorHost), automaticActivation)}</div>` : ''}` : `<section class="card"><h2>${a.access_status === 'suspended' ? 'Acesso suspenso' : 'Sua loja está em análise'}</h2><p>${a.access_status === 'suspended' ? esc(a.suspension_reason || 'Fale com a Blackout Create pelo canal da contratação.') : 'Sua conta já está vinculada. Após a aprovação, você terá um assistente para criar o bot, informar seu token e ID do Telegram e solicitar a ativação na Hyze Cloud.'}</p><p class="note">A mensalidade começa somente após a ativação efetiva do bot.</p><button class="quiet" id="refresh">Atualizar situação</button></section>`}<details class="card contract-details" ${new URLSearchParams(location.hash.split('?')[1] ?? '').has('contract') ? 'open' : ''}><summary>Sua contratação · ${a.reference === 'PILOTO INTERNO BLACKOUT / SEM COBRANCA REAL' ? 'Piloto interno sem cobrança' : money(a.price_cents)}</summary><dl><div><dt>Período contratado</dt><dd>${a.billing_months ?? 1} mês(es)</dd></div><div><dt>Início do ciclo</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div><div><dt>Contato da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Conta</dt><dd>${esc(me!.user.email)}</dd></div></dl></details></main>`,
   );
+  if (setupProgress)
+    attachBotGuide(
+      document,
+      setupProgress.steps.findIndex((step) => step.id === 'bot'),
+    );
   if (new URLSearchParams(location.hash.split('?')[1] ?? '').get('step') === 'bot') {
     const guide = document.querySelector<HTMLElement>('#bot-connection-guide');
     guide?.scrollIntoView({ block: 'start' });

@@ -1,5 +1,72 @@
 /* Mobile uses document scrolling, so the browser can keep focused fields above its keyboard. */
 @media (max-width: 760px) {
+  main.merchant-shell {
+    width: auto;
+    max-width: none;
+    margin: 20px 12px 32px;
+  }
+  .merchant-shell .page-heading {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .merchant-shell .page-heading > div {
+    flex: 1 1 180px;
+    min-width: 0;
+  }
+  .merchant-shell .page-heading > .button-link {
+    min-height: 44px;
+  }
+  .merchant-shell .setup-progress {
+    padding: 16px;
+  }
+  .merchant-shell .sp-heading {
+    gap: 8px;
+  }
+  .merchant-shell .sp-heading h2 {
+    font-size: 21px;
+  }
+  .merchant-shell .sp-detail {
+    padding: 16px;
+  }
+  .merchant-shell .bot-guide .inline-actions {
+    display: flex;
+    flex-direction: column-reverse;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .merchant-shell .bot-guide .inline-actions > button {
+    width: 100%;
+    margin: 0;
+  }
+  .merchant-shell .bot-guide #guide-next {
+    width: 100%;
+  }
+  .merchant-shell .guide-help {
+    padding: 12px;
+  }
+  .merchant-shell .guide-help summary {
+    min-height: 44px;
+    align-content: center;
+  }
+  .merchant-shell .guide-list {
+    padding-left: 20px;
+  }
+  .merchant-shell .secret-field {
+    min-width: 0;
+    align-items: stretch;
+  }
+  .merchant-shell .secret-field > input {
+    width: 0;
+    min-width: 0;
+    flex: 1 1 0;
+  }
+  .merchant-shell .secret-field > button {
+    margin-top: 6px;
+    padding-inline: 10px;
+  }
+  .merchant-shell .bot-guide :is(p, code, dd) {
+    overflow-wrap: anywhere;
+  }
   body:has(#merchant-console-host) {
     overflow: auto;
   }
