@@ -1,3 +1,4 @@
+import { mountResale } from './resale.js';
 import { mountAdminHealth } from './admin-health.js';
 import { renderSetupProgress, isSetupDismissed } from './setup-progress.js';
 import type { SetupProgress } from '../server/setup-progress.js';
@@ -195,7 +196,7 @@ function flash(value: string) {
 function shell(content: string) {
   document.title = 'Blackout Create · Área do cliente';
   document.querySelector('meta[name="robots"]')?.setAttribute('content', 'noindex,nofollow');
-  app.innerHTML = `<header>${brand}<div class="header-actions">${themeControl()}${me ? '<button class="quiet" id="logout">Sair</button>' : ''}</div></header>${config?.emulatorHost ? '<div class="local-banner"><b>Ambiente local de testes</b> · Sem pagamentos ou bots reais. Não informe dados reais.</div>' : ''}<div id="feedback" class="feedback" role="status" ${feedback ? '' : 'hidden'}>${esc(feedback)}</div>${content}<footer>Blackout Create · <a href="#/">Início</a></footer>`;
+  app.innerHTML = `<header>${brand}<div class="header-actions">${themeControl()}${me?.role === 'platform' ? '<a class="button-link quiet" href="#/central">Central da dona</a>' : me?.account ? '<a class="button-link quiet" href="#/revenda">Revenda</a>' : ''}${me ? '<button class="quiet" id="logout">Sair</button>' : ''}</div></header>${config?.emulatorHost ? '<div class="local-banner"><b>Ambiente local de testes</b> · Sem pagamentos ou bots reais. Não informe dados reais.</div>' : ''}<div id="feedback" class="feedback" role="status" ${feedback ? '' : 'hidden'}>${esc(feedback)}</div>${content}<footer>Blackout Create · <a href="#/">Início</a></footer>`;
   syncThemeControl();
 }
 function renderAuth() {
@@ -422,6 +423,11 @@ async function load() {
     renderAuth();
     return;
   }
+  if (route === '#/revenda') {
+    shell('<main class="rs-page" id="resale-host"><p>Carregando opções de revenda…</p></main>');
+    await mountResale(document.querySelector<HTMLElement>('#resale-host')!, api);
+    return;
+  }
   const openManagement =
     route === '#/gestao' ||
     (route === '#/minha-loja' &&
@@ -464,6 +470,11 @@ async function load() {
   if (me.role === 'platform' && route !== '#/minha-loja' && route !== '#/configuracao') {
     if (me.adminMfaRequired) {
       await renderAdminMfa();
+      return;
+    }
+    if (route === '#/central') {
+      shell('<main class="rs-page" id="resale-admin-host"><p>Carregando sua central…</p></main>');
+      await mountResale(document.querySelector<HTMLElement>('#resale-admin-host')!, api, true);
       return;
     }
     if (route === '#/saude' || section === 'health') {

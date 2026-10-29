@@ -76,6 +76,9 @@ export class ResaleCatalog {
     const input = affiliateInput.parse(raw);
     return botTransaction(this.store, async (tx) => {
       await this.owner(tx, id, uid);
+      const profile = await tx.get('resale_profiles/' + id);
+      if (input.enabled && profile?.plans !== 'approved')
+        throw fail('RESELLER_NOT_APPROVED', 'Solicite a revenda de planos e aguarde a aprovação.');
       const base = await tx.get('platform_billing/settings'),
         offer = await tx.get('resale_partners/' + id);
       if ((offer?.revision ?? 0) !== input.revision)
@@ -112,7 +115,13 @@ export class ResaleCatalog {
       const account = await tx.get(accountPath(partnerId)),
         offer = await tx.get('resale_partners/' + partnerId),
         base = await tx.get('platform_billing/settings');
-      if (!account || account.access_status !== 'approved' || !offer?.enabled)
+      const profile = await tx.get('resale_profiles/' + partnerId);
+      if (
+        !account ||
+        account.access_status !== 'approved' ||
+        !offer?.enabled ||
+        profile?.plans !== 'approved'
+      )
         throw fail('RESELLER_DISABLED', 'Revendedor indisponível.');
       if (account.firebase_uid === buyerUid)
         throw fail('SELF_REFERRAL', 'Não é possível comprar pelo próprio vínculo de revenda.');
@@ -153,7 +162,12 @@ export class ResaleCatalog {
         shop = await tx.get('bot_shops/' + supplierId);
       const target = `resale_suppliers/${supplierId}/grants/${input.partnerId}_${input.productId}`,
         current = await tx.get(target);
-      if (!partner || partner.access_status !== 'approved')
+      const profile = await tx.get('resale_profiles/' + input.partnerId);
+      if (
+        !partner ||
+        partner.access_status !== 'approved' ||
+        (input.enabled && profile?.products !== 'approved')
+      )
         throw fail('RESELLER_DISABLED', 'Revendedor indisponível.');
       if (!shop?.products.some((p: Doc) => p.id === input.productId))
         throw fail('PRODUCT_NOT_FOUND', 'Produto não encontrado.');
@@ -196,7 +210,13 @@ export class ResaleCatalog {
         grant = await tx.get(`resale_suppliers/${supplierId}/grants/${partnerId}_${productId}`),
         shop = await tx.get('bot_shops/' + supplierId);
       const product = shop?.products.find((p: Doc) => p.id === productId && p.enabled);
-      if (supplier?.access_status !== 'approved' || !grant?.enabled || !product)
+      const profile = await tx.get('resale_profiles/' + partnerId);
+      if (
+        supplier?.access_status !== 'approved' ||
+        !grant?.enabled ||
+        !product ||
+        profile?.products !== 'approved'
+      )
         throw fail('SUPPLIER_UNAVAILABLE', 'Fornecedor ou autorização indisponível.');
       if (priceCents <= grant.baseCents)
         throw fail('RESELLER_PRICE_TOO_LOW', 'Preço insuficiente para revenda.');

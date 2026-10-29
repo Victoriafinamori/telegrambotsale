@@ -1,6 +1,6 @@
 # Revenda e parceiros Blackout
 
-Estado: camada de domínio inicial. NÃO ligada ao checkout, carteira, Telegram ou rotas HTTP; NÃO habilita vendas em produção.
+Estado: central da dona, adesão opcional, permissões e catálogo conectados às rotas HTTP e aos painéis web. Checkout de revenda, carteira de comissões e comandos de revenda no Telegram ainda pendentes; esta etapa não habilita cobranças de revenda.
 
 ## Regras confirmadas pela dona
 
@@ -32,3 +32,16 @@ Estado: camada de domínio inicial. NÃO ligada ao checkout, carteira, Telegram 
 ## Validação
 
 TypeScript aprovado e três testes de domínio aprovados: autorização/isolamento; preços obsoletos e autorreferência; proteção do valor base e insuficiência de margem. Esta base ainda não deve ser anunciada como checkout de afiliados funcional.
+
+## Central da dona e adesão opcional (implementado)
+
+- Página /#/central, protegida por administração e MFA, com vínculo imutável ao UID da dona e à sua loja fornecedora. Não duplica os documentos de estoque.
+- A primeira vinculação exige uma conta administradora que seja responsável pela própria loja. Outra conta administradora não pode assumir a central depois do vínculo.
+- A dona visualiza o catálogo central, cadastra produtos, consulta/adiciona/remove/embaralha unidades individuais e aprova/revoga participantes e produtos. Os modos infinito/fantasma continuam no editor de estoque da loja que serve de fonte.
+- Página /#/revenda para lojistas: adesão explícita e separada a produtos e planos, seguida de aprovação pela dona. Toda loja começa como lojista comum, sem adesão automática.
+- Classificação Lojista comum / Revendedor calculada pelas aprovações atuais, independente da assinatura e do acesso à loja. Solicitação pendente não concede permissão.
+- Permissões residem em resale_profiles/{accountId}; a autoridade e a fonte central em resale_platform/settings. Rotas derivam a identidade do Firebase; callers não escolhem a loja-alvo nos pedidos de adesão.
+- Os preços de planos só podem ser habilitados após aprovação para planos. A consulta de produtos e a cotação de planos revalidam a modalidade; desligar/revogar tem efeito imediato.
+- O checkout de revenda, a reserva entre lojas e os repasses de comissões continuam pendentes. A interface informa essa limitação e não oferece links de cobrança antes da integração financeira.
+
+Validação desta etapa: 132 testes aprovados (incluindo domínio e HTTP/MFA). Prévia com dados fictícios: filtro de solicitações, aprovação, adesão a planos sem adesão a produtos e largura de 390px sem overflow horizontal.

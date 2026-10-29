@@ -1,3 +1,5 @@
+import { ResaleProgram } from './resale-program.js';
+import { ResaleCatalog } from './resale-catalog.js';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import helmet from 'helmet';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -635,7 +637,108 @@ export function createApp(
     await accounts.consumeRate('mfa-verify:' + tokenHash(user.uid), 10, 15 * 60000);
     res.json(await services.adminMfa.verify(user, binding(req), code));
   });
+  const resaleConsole =
+    services?.bots && config.BOT_TOKEN_ENCRYPTION_KEY
+      ? new MerchantConsole(services.bots.store, config.BOT_TOKEN_ENCRYPTION_KEY, services.bots)
+      : null;
+  const resale =
+    resaleConsole && services?.bots
+      ? new ResaleProgram(services.bots.store, (uid) => accounts.isAdmin(uid), resaleConsole)
+      : null;
+  const catalog = services?.bots ? new ResaleCatalog(services.bots.store) : null;
+  const resaleOwner = async (req: Request) => {
+    if (!resale || !catalog)
+      throw new HttpError(503, 'RESALE_UNAVAILABLE', 'Revenda indisponível.');
+    const uid = (req as unknown as AuthedRequest).identity.uid,
+      account = await accounts.own(uid);
+    if (!account) throw new HttpError(403, 'STORE_REQUIRED', 'Uma loja cadastrada é necessária.');
+    return { uid, id: account.id };
+  };
+  app.get('/api/store/resale', identity, async (req, res) => {
+    const { uid, id } = await resaleOwner(req);
+    res.json(await resale!.own(id, uid));
+  });
+  app.post(
+    '/api/store/resale/request',
+    identity,
+    rate('resale-request', 20, 60000),
+    async (req, res) => {
+      const { uid, id } = await resaleOwner(req);
+      res.json(await resale!.request(id, uid, req.body));
+    },
+  );
+  app.get('/api/store/resale/products', identity, async (req, res) => {
+    const { uid, id } = await resaleOwner(req);
+    res.json(await resale!.offers(id, uid));
+  });
+  app.get('/api/store/resale/plans', identity, async (req, res) => {
+    const { uid, id } = await resaleOwner(req);
+    res.json(await catalog!.affiliateSettings(id, uid));
+  });
+  app.post(
+    '/api/store/resale/plans',
+    identity,
+    rate('affiliate-prices', 20, 60000),
+    async (req, res) => {
+      const { uid, id } = await resaleOwner(req);
+      res.json(await catalog!.saveAffiliate(id, uid, req.body));
+    },
+  );
   app.use('/api/admin', identity, admin);
+  app.get('/api/admin/resale', async (req, res) => {
+    if (!resale) throw new HttpError(503, 'RESALE_UNAVAILABLE', 'Revenda indisponível.');
+    const uid = (req as unknown as AuthedRequest).identity.uid;
+    const [global, partners, grants] = await Promise.all([
+      resale.global(uid),
+      resale.partners(uid),
+      resale.grants(uid),
+    ]);
+    res.json({ global, ...partners, ...grants });
+  });
+  app.post('/api/admin/resale/initialize', async (req, res) => {
+    const { uid, id } = await resaleOwner(req);
+    z.object({}).strict().parse(req.body);
+    res.json(await resale!.initialize(uid, id));
+  });
+  app.post('/api/admin/resale/partners/:id', async (req, res) => {
+    if (!resale) throw new HttpError(503, 'RESALE_UNAVAILABLE', 'Revenda indisponível.');
+    res.json(
+      await resale.decide(
+        (req as unknown as AuthedRequest).identity.uid,
+        idSchema.parse(req.params.id),
+        req.body,
+      ),
+    );
+  });
+  app.post('/api/admin/resale/grants', async (req, res) => {
+    if (!resale) throw new HttpError(503, 'RESALE_UNAVAILABLE', 'Revenda indisponível.');
+    res.json(await resale.grant((req as unknown as AuthedRequest).identity.uid, req.body));
+  });
+  app.get('/api/admin/resale/stock', async (req, res) => {
+    if (!resale) throw new HttpError(503, 'RESALE_UNAVAILABLE', 'Revenda indisponível.');
+    res.set('Cache-Control', 'no-store');
+    res.json(
+      await resale.stock(
+        (req as unknown as AuthedRequest).identity.uid,
+        z.string().parse(req.query.productId),
+      ),
+    );
+  });
+  app.post('/api/admin/resale/global/:operation', async (req, res) => {
+    if (!resale) throw new HttpError(503, 'RESALE_UNAVAILABLE', 'Revenda indisponível.');
+    await accounts.consumeRate(
+      'global-stock:' + (req as unknown as AuthedRequest).identity.uid,
+      60,
+      60000,
+    );
+    res.json(
+      await resale.manageGlobal(
+        (req as unknown as AuthedRequest).identity.uid,
+        String(req.params.operation),
+        req.body,
+      ),
+    );
+  });
   app.get('/api/admin/health', rate('admin-health', 12, 60000), async (req, res) => {
     if (!services?.bots)
       throw new HttpError(503, 'HEALTH_UNAVAILABLE', 'Monitoramento indisponível.');

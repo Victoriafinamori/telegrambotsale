@@ -13,6 +13,12 @@ async function fixture() {
       access_status: 'approved',
     });
     tx.set('merchant_accounts/' + partner, { firebase_uid: 'partner', access_status: 'approved' });
+    tx.set('resale_profiles/' + partner, {
+      id: partner,
+      plans: 'approved',
+      products: 'approved',
+      revision: 1,
+    });
     tx.set('platform_billing/settings', {
       revision: 1,
       prices: { monthly: 999, quarterly: 2450, annual: 8490 },

@@ -3104,3 +3104,77 @@ test('Repeated file delivery snapshots the chosen unit and survives deleting the
   assert.equal(inv.quantity, 3);
   assert.equal(inv.text, 'Abra um ticket para resgatar');
 });
+
+test('Resale HTTP keeps normal merchants separate and protects global inventory with admin MFA', async () => {
+  const f = await fixture();
+  await f.product(['GLOBAL-PRIVATE']);
+  const cfg = {
+    ...testConfig(),
+    PLATFORM_DATABASE: 'firestore' as const,
+    API_AUTH_MODE: 'bearer' as const,
+    BOT_TOKEN_ENCRYPTION_KEY: f.key,
+    ADMIN_MFA_REQUIRED: true,
+  };
+  let secondFactor = false;
+  const auth = {
+    verifyIdToken: async (token: string) => {
+      if (token !== 'merchant') throw Error();
+      return { ...f.identity, secondFactor };
+    },
+    verifySession: async () => {
+      throw Error();
+    },
+    createSession: async () => '',
+  };
+  const server = createApp(cfg, f.p, auth, undefined, {
+    onboarding: f.p.onboarding,
+    bots: f.bots,
+  }).listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const origin = 'http://127.0.0.1:' + (server.address() as AddressInfo).port,
+    headers = {
+      Authorization: 'Bearer merchant',
+      Origin: cfg.APP_ORIGIN,
+      'Content-Type': 'application/json',
+    };
+  try {
+    assert.equal((await fetch(origin + '/api/admin/resale', { headers })).status, 403);
+    const normal = await (await fetch(origin + '/api/store/resale', { headers })).json();
+    assert.equal(normal.kind, 'merchant');
+    assert.deepEqual(normal.permissions, { products: 'none', plans: 'none' });
+    const spoof = await fetch(origin + '/api/store/resale/request', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ accountId: f.a.id, capability: 'plans', enabled: true, revision: 0 }),
+    });
+    assert.equal(spoof.status, 400);
+    await f.p.grantAdmin(f.identity.uid);
+    assert.equal((await fetch(origin + '/api/admin/resale', { headers })).status, 403);
+    secondFactor = true;
+    assert.equal(
+      (
+        await fetch(origin + '/api/admin/resale/initialize', {
+          method: 'POST',
+          headers,
+          body: '{}',
+        })
+      ).status,
+      200,
+    );
+    const global = await (await fetch(origin + '/api/admin/resale', { headers })).json();
+    assert.equal(global.global.configured, true);
+    assert.equal(global.global.catalog.products.length, 1);
+    assert(!JSON.stringify(global).includes('GLOBAL-PRIVATE'));
+    const request = await fetch(origin + '/api/store/resale/request', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ capability: 'plans', enabled: true, revision: 0 }),
+    });
+    assert.equal(request.status, 200);
+    const state = await (await fetch(origin + '/api/store/resale', { headers })).json();
+    assert.equal(state.permissions.plans, 'requested');
+    assert.equal(state.permissions.products, 'none');
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
+  }
+});
