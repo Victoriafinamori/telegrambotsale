@@ -1,3 +1,5 @@
+import { mountResale } from './resale.js';
+import { mountStockBrowser } from './stock-browser.js';
 import { mountStoreTest } from './store-test.js';
 import { renderSetupProgress } from './setup-progress.js';
 import type { SetupProgress } from '../server/setup-progress.js';
@@ -70,6 +72,7 @@ const navigation = [
   ['overview', 'Visão geral'],
   ['products', 'Produtos'],
   ['stock', 'Estoque'],
+  ['resale', 'Revenda integrada'],
   ['orders', 'Pedidos'],
   ['test', 'Testar loja'],
   ['wallet', 'Carteira'],
@@ -82,6 +85,7 @@ const navigation = [
 ] as const;
 const icon = (name: string) => {
   const paths: Record<string, string> = {
+    resale: '<path d="M4 7h15m-4-4 4 4-4 4M20 17H5m4-4-4 4 4 4"/>',
     test: '<path d="M9 3h6M10 3v7l-6 9a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-6-9V3M7 16h10"/>',
     subscription:
       '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M7 3v4M17 3v4M3 11h18m-14 5 3 3 6-6"/>',
@@ -131,9 +135,16 @@ export async function mountMerchantConsole(
       ? 'subscription'
       : location.hash.includes('?wallet=')
         ? 'wallet'
-        : ['overview', 'products', 'stock', 'appearance', 'support', 'payments', 'test'].includes(
-              new URLSearchParams(location.hash.split('?')[1] ?? '').get('section') ?? '',
-            )
+        : [
+              'overview',
+              'products',
+              'stock',
+              'appearance',
+              'support',
+              'payments',
+              'test',
+              'resale',
+            ].includes(new URLSearchParams(location.hash.split('?')[1] ?? '').get('section') ?? '')
           ? new URLSearchParams(location.hash.split('?')[1] ?? '').get('section')!
           : 'overview',
     category: string | null = null,
@@ -144,6 +155,7 @@ export async function mountMerchantConsole(
     next: string | null = null,
     pendingOnly = false,
     busy = false;
+  const stockFilters = { query: '', category: '', availability: 'all' };
   const blobs = new Set<string>();
   const mediaCache = new Map<string, Promise<Blob>>();
   const listLoaded = new Set<string>();
@@ -353,7 +365,8 @@ export async function mountMerchantConsole(
         )}</select></label>${input('price', data.payment_mode === 'manual' ? 'Preço · R$' : 'Preço · Stars', p ? (data.payment_mode === 'manual' ? p.price / 100 : p.price) : '', 'type="number" required min="0.01" max="100000" step="' + (data.payment_mode === 'manual' ? '0.01' : '1') + '"')}</div>${picture('banner', p?.banner ?? '', 'Foto do produto · opcional')}${data.payment_mode === 'manual' ? picture('pix_qr', p?.pix_qr ?? '', 'QR Code Pix deste produto · opcional') + '<p class="mc-note">Envie o QR gerado no seu banco para o preço deste produto. Usado no Pix manual para uma unidade, sem cupom. Carrinhos com vários itens ou quantidade maior recebem os dados Pix manuais. Ao mudar o preço, envie um QR atualizado; o anterior não será usado para o novo valor.</p>' : ''}<label class="mc-check"><input type="checkbox" name="enabled" ${p?.enabled !== false ? 'checked' : ''}> Disponível no catálogo</label><button type="submit">Salvar produto</button></form></section>`;
     }
     if (section === 'stock')
-      body = `<section class="mc-panel mc-inventory"><div class="mc-panel-head"><div><span class="mc-stock-eyebrow">CATÁLOGO · ENTREGA</span><h2>Seu estoque, do seu jeito</h2><p>Escolha um produto para gerenciar unidades e configurar como cada compra será entregue.</p></div><span class="mc-stock-badge">${data.products.length} produtos</span></div><div class="mc-stock-grid">${data.products.map((p) => `<button class="mc-stock-card" data-inventory="${p.id}"><span class="mc-stock-card-top"><span class="mc-stock-symbol">${p.stock_mode === 'infinite' ? '∞' : p.stock_mode === 'ghost' ? '👻' : '📦'}</span><span class="mc-stock-badge">${p.stock_mode === 'infinite' ? 'Infinito' : p.stock_mode === 'ghost' ? 'Fantasma' : 'Individual'}</span></span><strong>${esc(p.title)}</strong><span class="mc-stock-count">${p.stock_mode === 'infinite' ? 'Sem limite' : p.stock.toLocaleString('pt-BR') + ' disponíveis'}</span><span class="mc-stock-card-foot">Gerenciar estoque ${icon('chevron')}</span></button>`).join('') || empty('Seu estoque começa aqui', 'Cadastre um produto no catálogo para escolher seu modo de entrega.')}</div><p class="mc-stock-footnote">Unidades reservadas em pedidos ficam protegidas. Trocar o modo não apaga os códigos individuais.</p></section>${data.products.length ? `<section class="mc-panel"><details class="mc-stock-add"><summary>Adicionar códigos individuais</summary><p>Cada linha é uma unidade exclusiva. Nos modos fantasma e infinito, esses códigos ficam guardados para quando você ativar o modo individual.</p><form data-form="stock"><input type="hidden" name="requestId" value="${crypto.randomUUID()}"><label>Produto<select name="productId">${data.products.map((p) => `<option value="${p.id}">${esc(p.title)}</option>`).join('')}</select></label>${area('units', 'Uma unidade por linha', '', 20020)}<small>Até 20 unidades por envio · 100 códigos individuais por produto. Para enviar arquivos, use /admin → Estoque no Telegram.</small><button type="submit">Adicionar unidades</button></form></details></section>` : ''}`;
+      body =
+        '<section class="mc-panel mc-inventory"><div class="mc-panel-head"><div><h2>Reposição de estoque</h2><p>Comece pelos produtos que estão acabando. Os demais ficam organizados por categoria.</p></div></div><div data-stock-browser></div><p class="mc-stock-footnote">Reservas de pedidos ficam protegidas. Use Repor estoque para adicionar unidades ou configurar o modo de entrega.</p></section>';
     if (section === 'orders')
       body = `<section class="mc-panel"><div class="mc-panel-head"><h2>Pedidos</h2><button class="quiet" data-action="toggle-pending">${pendingOnly ? 'Ver todos' : 'Só aguardando aprovação'}</button></div>${orders.length ? orders.map((o) => `<article class="mc-order"><div class="mc-panel-head"><div><b>Pedido ${o.id}</b><small>${new Date(o.created_at).toLocaleString('pt-BR')}</small></div><span class="badge">${statuses[o.status] ?? esc(o.status)}</span></div><p><b>${esc(o.buyer_name || o.buyer_id)}</b>${o.buyer_username ? ' · @' + esc(o.buyer_username) : ''}</p><p>${o.items.map((i) => `${i.quantity} × ${esc(i.title)}`).join('<br>')}</p><strong>${money(o.total, o.currency)}</strong>${o.rejection_reason ? `<p>Recusa: ${esc(o.rejection_reason)}</p>` : ''}<div class="mc-shortcuts">${o.hasReceipt ? `<button class="quiet" data-receipt="${o.id}">Ver comprovante</button>` : ''}${o.status === 'awaiting_review' ? `<button data-approve="${o.id}" data-revision="${o.receipt_revision}">Aprovar e entregar</button><button class="quiet" data-reject="${o.id}" data-revision="${o.receipt_revision}">Recusar</button>` : ''}</div></article>`).join('') : empty('Nenhum pedido nesta lista', 'As compras feitas no Telegram aparecerão aqui com os itens e a situação do pagamento.')}<div class="mc-shortcuts">${cursor ? '<button class="quiet" data-action="first-orders">Primeira página</button>' : ''}${next ? '<button class="quiet" data-action="next-orders">Próxima página</button>' : ''}</div></section>`;
     if (section === 'appearance')
@@ -378,7 +391,7 @@ export async function mountMerchantConsole(
       })
       .join(
         '',
-      )}</nav><div class="mc-sidebar-footer"><a href="#/revenda" aria-label="Opções de revenda">${icon('products')}<span class="mc-nav-label">Opções de revenda</span></a><a href="https://t.me/${esc(data.botUsername)}" target="_blank" rel="noopener noreferrer" aria-label="Abrir meu bot no Telegram" title="Abrir meu bot no Telegram">${icon('external')}<span class="mc-nav-label">Abrir meu bot</span></a><a href="#/configuracao?review=1" class="mc-back" aria-label="Ativação e conexão" title="Ativação e conexão">${icon('back')}<span class="mc-nav-label">Ativação e conexão</span></a></div></aside><div class="mc-main"><div class="mc-title"><div class="mc-page-heading"><button class="mc-icon-button mc-menu-toggle" data-action="toggle-navigation" aria-controls="mc-sidebar">${icon('menu')}</button><h2 tabindex="-1">${navigation.find(([id]) => id === section)?.[1] ?? (section === 'product-edit' && !selected ? 'Novo produto' : 'Editar produto')}</h2></div><button class="quiet" data-action="refresh">Atualizar</button></div><p id="mc-feedback" class="feedback" role="status" hidden></p>${body}</div></div>`;
+      )}</nav><div class="mc-sidebar-footer"><a href="https://t.me/${esc(data.botUsername)}" target="_blank" rel="noopener noreferrer" aria-label="Abrir meu bot no Telegram" title="Abrir meu bot no Telegram">${icon('external')}<span class="mc-nav-label">Abrir meu bot</span></a><a href="#/configuracao?review=1" class="mc-back" aria-label="Ativação e conexão" title="Ativação e conexão">${icon('back')}<span class="mc-nav-label">Ativação e conexão</span></a></div></aside><div class="mc-main"><div class="mc-title"><div class="mc-page-heading"><button class="mc-icon-button mc-menu-toggle" data-action="toggle-navigation" aria-controls="mc-sidebar">${icon('menu')}</button><h2 tabindex="-1">${navigation.find(([id]) => id === section)?.[1] ?? (section === 'product-edit' && !selected ? 'Novo produto' : 'Editar produto')}</h2></div><button class="quiet" data-action="refresh">Atualizar</button></div><p id="mc-feedback" class="feedback" role="status" hidden></p>${body}</div></div>`;
     if (listLoading || listError) {
       const main = host.querySelector('.mc-main')!;
       if (listLoading && !listLoaded.has(section))
@@ -388,6 +401,27 @@ export async function mountMerchantConsole(
       status.setAttribute('role', listError ? 'alert' : 'status');
       status.textContent = listError || 'Carregando registros…';
       main.querySelector('.mc-title')!.after(status);
+    }
+    if (section === 'stock')
+      mountStockBrowser(
+        host.querySelector<HTMLElement>('[data-stock-browser]')!,
+        data.products,
+        stockFilters,
+        (id) => {
+          void run(() => inventoryDialog(id));
+        },
+      );
+    if (section === 'resale') {
+      const target = document.createElement('div');
+      target.className = 'mc-resale rs-page';
+      host.querySelector('.mc-main')!.append(target);
+      void mountResale(target, api).catch((error) => {
+        if (target.isConnected)
+          target.textContent =
+            error instanceof Error
+              ? error.message
+              : 'Não foi possível carregar a revenda. Use Atualizar para tentar novamente.';
+      });
     }
     syncNavigation();
     mountLivePreview();
@@ -656,7 +690,39 @@ export async function mountMerchantConsole(
         )
         .join(
           '',
-        )}</fieldset><div data-repeat-settings class="mc-repeat-settings"><label data-ghost-quantity>Quantidade fantasma disponível<input name="quantity" type="number" min="0" max="1000000" step="1" value="${result.quantity}"><small>Define o saldo disponível. Cada unidade comprada desconta 1.</small></label><label>Conteúdo da entrega<select name="sourceUnit"><option value="">Escrever uma mensagem</option>${result.text ? '<option value="template">Manter a entrega repetida atual</option>' : ''}${result.units.map((u, i) => `<option value="${u.id}">Repetir unidade ${i + 1} · ${esc(u.text.slice(0, 60))}</option>`).join('')}</select></label><label data-repeat-text>Mensagem após o pagamento<textarea name="deliveryText" rows="3" maxlength="1000" placeholder="Ex.: Abra um ticket com o número do pedido para resgatar seu produto.">${esc(result.text)}</textarea></label><div class="mc-stock-example"><span>ENTREGA ATUAL</span><p>${esc(result.text || 'Defina o que o comprador receberá após o pagamento.')}</p></div><p class="mc-stock-footnote">Esta entrega será repetida. Para arquivos, selecione uma unidade individual ou envie pelo Telegram.</p></div><div class="mc-stock-save"><p data-mode-hint></p><button type="submit">Salvar modo de estoque</button></div></form><details class="mc-saved-stock" ${result.mode === 'individual' ? 'open' : ''}><summary>Unidades individuais salvas <span>${result.units.length}</span></summary><p>${result.mode === 'individual' ? 'Na ordem de entrega.' : 'Preservadas, sem uso nas vendas do modo atual.'} Reservas de pedidos não são alteradas.</p><div class="mc-shortcuts"><button class="quiet" data-stock-action="shuffle" ${result.units.length < 2 ? 'disabled' : ''}>Embaralhar</button><button class="quiet" data-stock-action="clear" ${!result.units.length ? 'disabled' : ''}>Apagar disponíveis</button></div><div class="mc-stock-list">${result.units.map((u, i) => `<article><header><b>${i + 1}. ${u.kind === 'text' ? 'Código / texto' : 'Arquivo digital'}</b><button class="quiet" data-stock-action="delete" data-unit="${u.id}">Excluir</button></header><pre>${esc(u.text)}</pre></article>`).join('') || '<p>Nenhuma unidade individual salva.</p>'}</div></details><p role="status" data-stock-status></p>`;
+        )}</fieldset><div data-repeat-settings class="mc-repeat-settings"><label data-ghost-quantity>Quantidade fantasma disponível<input name="quantity" type="number" min="0" max="1000000" step="1" value="${result.quantity}"><small>Define o saldo disponível. Cada unidade comprada desconta 1.</small></label><label>Conteúdo da entrega<select name="sourceUnit"><option value="">Escrever uma mensagem</option>${result.text ? '<option value="template">Manter a entrega repetida atual</option>' : ''}${result.units.map((u, i) => `<option value="${u.id}">Repetir unidade ${i + 1} · ${esc(u.text.slice(0, 60))}</option>`).join('')}</select></label><label data-repeat-text>Mensagem após o pagamento<textarea name="deliveryText" rows="3" maxlength="1000" placeholder="Ex.: Abra um ticket com o número do pedido para resgatar seu produto.">${esc(result.text)}</textarea></label><div class="mc-stock-example"><span>ENTREGA ATUAL</span><p>${esc(result.text || 'Defina o que o comprador receberá após o pagamento.')}</p></div><p class="mc-stock-footnote">Esta entrega será repetida. Para arquivos, selecione uma unidade individual ou envie pelo Telegram.</p></div><div class="mc-stock-save"><p data-mode-hint></p><button type="submit">Salvar modo de estoque</button></div></form><details class="mc-saved-stock" ${result.mode === 'individual' ? 'open' : ''}><summary>Unidades individuais salvas <span>${result.units.length}</span></summary><p>${result.mode === 'individual' ? 'Na ordem de entrega.' : 'Preservadas, sem uso nas vendas do modo atual.'} Reservas de pedidos não são alteradas.</p><div class="mc-shortcuts"><button class="quiet" data-stock-action="shuffle" ${result.units.length < 2 ? 'disabled' : ''}>Embaralhar</button><button class="quiet" data-stock-action="clear" ${!result.units.length ? 'disabled' : ''}>Apagar disponíveis</button></div><div class="mc-stock-list">${result.units.map((u, i) => `<article><header><b>${i + 1}. ${u.kind === 'text' ? 'Código / texto' : 'Arquivo digital'}</b><button class="quiet" data-stock-action="delete" data-unit="${u.id}">Excluir</button></header><pre>${esc(u.text)}</pre></article>`).join('') || '<p>Nenhuma unidade individual salva.</p>'}</div></details><form data-stock-refill><h3>Adicionar unidades deste produto</h3><p>Uma unidade por linha · até 20 por envio. ${result.mode !== 'individual' ? 'Os códigos ficam guardados até ativar o modo individual.' : 'Cada compra recebe uma unidade exclusiva.'}</p><input type="hidden" name="requestId" value="${crypto.randomUUID()}"><label>Novos códigos ou textos<textarea name="units" rows="4" maxlength="20020" required placeholder="Uma unidade por linha"></textarea></label><button type="submit">Adicionar ao estoque</button></form><p role="status" data-stock-status></p>`;
+      const refill = dialog.querySelector<HTMLFormElement>('[data-stock-refill]')!;
+      dialog.querySelector('[data-mode-form]')!.before(refill);
+      if (result.mode === 'individual')
+        refill.querySelector('textarea')!.setAttribute('autofocus', '');
+      refill.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const fields = new FormData(refill),
+          button = refill.querySelector<HTMLButtonElement>('button')!;
+        button.disabled = true;
+        try {
+          const units = String(fields.get('units') ?? '')
+            .split('\n')
+            .map((v) => v.trim())
+            .filter(Boolean);
+          if (!units.length || units.length > 20)
+            throw new Error('Informe de 1 a 20 unidades por envio.');
+          await api('/store/manage/stock', {
+            productId,
+            units,
+            requestId: fields.get('requestId'),
+          });
+          await get();
+          await load();
+          dialog.querySelector('[data-stock-status]')!.textContent =
+            'Unidades adicionadas ao estoque.';
+        } catch (error) {
+          button.disabled = false;
+          dialog.querySelector('[data-stock-status]')!.textContent =
+            error instanceof Error ? error.message : 'Não foi possível repor o estoque.';
+        }
+      });
       const form = dialog.querySelector<HTMLFormElement>('[data-mode-form]')!;
       const updateMode = () => {
         const mode = new FormData(form).get('mode');

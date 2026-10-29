@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="pt-BR" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Demonstração de estoque · Blackout</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="local-banner">
+      <b>Demonstração com dados fictícios.</b> Alterações ficam apenas nesta aba.
+      <a href="/stock-preview.html?owner=1">Ver Central da dona</a> ·
+      <a href="/stock-preview.html#/minha-loja?section=stock">Ver painel do lojista</a>
+    </div>
+    <div id="merchant-console-host"></div>
+    <script type="module">
+      import { mountMerchantConsole } from '/merchant-console.ts';
+      import { mountResale } from '/resale.ts';
+      if (!import.meta.env.DEV) throw Error('Prévia disponível somente no desenvolvimento.');
+      const products = [
+        ['000000000001', 'Assinatura mensal · exemplo', 'Streaming', 0, 'individual'],
+        ['000000000002', 'Licença de edição · exemplo', 'Ferramentas', 3, 'individual'],
+        ['000000000003', 'Assinatura premium · exemplo', 'Streaming', 2, 'individual'],
+        ['000000000004', 'Pacote de artes digitais', 'Arquivos digitais', 18, 'individual'],
+        ['000000000005', 'Guia digital de boas-vindas', 'Arquivos digitais', 0, 'infinite'],
+        ['000000000006', 'Atendimento personalizado', 'Serviços', 5, 'ghost'],
+        ['000000000007', 'Licença profissional · exemplo', 'Ferramentas', 12, 'individual'],
+      ].map(([id, title, category, stock, stock_mode]) => ({
+        id,
+        title,
+        category,
+        stock,
+        stock_mode,
+        description: 'Produto fictício para demonstração do painel.',
+        price: 1590,
+        enabled: true,
+      }));
+      const data = {
+        title: 'Loja de demonstração',
+        welcome: 'Bem-vindo à loja de demonstração.',
+        banner: '',
+        products,
+        categories: [...new Set(products.map((p) => p.category))],
+        category_emojis: {},
+        support: '',
+        support_name: 'Atendimento',
+        support_phone: '',
+        support_url: '',
+        payment_mode: 'manual',
+        payment_instructions: 'Somente demonstração.',
+        coupons: {},
+        stats: {
+          orders: 0,
+          paid_orders: 0,
+          delivered_orders: 0,
+          rejected_orders: 0,
+          buyers: 0,
+          gross_brl: 0,
+          gross_stars: 0,
+        },
+        pendingReview: 0,
+        pendingPayment: 0,
+        noticeSubscribers: 0,
+        revision: 1,
+        botUsername: 'demonstracao',
+      };
+      const inventory = new Map(
+        products.map((p) => [
+          p.id,
+          {
+            version: 'demo-1',
+            mode: p.stock_mode,
+            quantity: p.stock,
+            text: 'Entrega fictícia para demonstração.',
+            units:
+              p.stock_mode === 'individual'
+                ? Array.from({ length: p.stock }, (_, i) => ({
+                    id: p.id + '-' + i,
+                    kind: 'text',
+                    text: 'DEMO-FICTICIO-' + (i + 1),
+                  }))
+                : [],
+          },
+        ]),
+      );
+      const own = {
+        accountId: '11111111-1111-4111-8111-111111111111',
+        permissions: { products: 'none', plans: 'none' },
+        revision: 0,
+      };
+      const api = async (path, body) => {
+        if (path === '/store/manage') return structuredClone(data);
+        if (path === '/store/resale') return structuredClone(own);
+        if (path === '/store/resale/products') return { products: [] };
+        if (path === '/store/resale/plans')
+          return {
+            enabled: false,
+            revision: 0,
+            prices: {},
+            basePrices: { monthly: 999, quarterly: 2450, annual: 8490 },
+          };
+        if (path === '/store/resale/commissions') return { commissions: [] };
+        if (path === '/store/resale/request') {
+          own.permissions[body.capability] = body.enabled ? 'requested' : 'none';
+          own.revision++;
+          return { ok: true };
+        }
+        if (path === '/admin/resale')
+          return {
+            global: { configured: true, catalog: { products, revision: 1 } },
+            partners: [],
+            grants: [],
+            truncated: false,
+          };
+        if (path.startsWith('/store/manage/stock?') || path.startsWith('/admin/resale/stock?'))
+          return structuredClone(
+            inventory.get(new URLSearchParams(path.split('?')[1]).get('productId')),
+          );
+        if (path === '/store/manage/stock' || path === '/admin/resale/global/stock-add') {
+          const item = inventory.get(body.productId);
+          item.units.push(
+            ...body.units.map((text, i) => ({ id: crypto.randomUUID(), kind: 'text', text })),
+          );
+          item.version = crypto.randomUUID();
+          if (item.mode === 'individual')
+            products.find((p) => p.id === body.productId).stock = item.units.length;
+          return { ok: true };
+        }
+        if (path === '/store/manage/stock/mode') {
+          const item = inventory.get(body.productId),
+            p = products.find((p) => p.id === body.productId);
+          item.mode = p.stock_mode = body.mode;
+          item.quantity = body.quantity;
+          item.text = body.text || item.text;
+          p.stock =
+            body.mode === 'individual'
+              ? item.units.length
+              : body.mode === 'ghost'
+                ? body.quantity
+                : 0;
+          return { ok: true };
+        }
+        throw Error(
+          'Esta ação não está incluída nesta demonstração. Nenhum dado real foi alterado.',
+        );
+      };
+      if (new URLSearchParams(location.search).has('owner')) {
+        const host = document.querySelector('#merchant-console-host');
+        host.className = 'rs-page';
+        await mountResale(host, api, true);
+      } else
+        await mountMerchantConsole(
+          document.querySelector('#merchant-console-host'),
+          api,
+          async () => {
+            throw Error('Sem arquivos reais na demonstração.');
+          },
+        );
+    </script>
+  </body>
+</html>
