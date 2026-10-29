@@ -247,16 +247,55 @@ export class PurinCashPayments {
   }
   async binding(id: string) {
     const shop = await this.store.get(botRoot(id));
+    const account = await this.store.get('merchant_accounts/' + id);
     return {
       subaccountId: shop?.purin_subaccount ?? '',
       connected: Boolean(shop?.purin_connection && shop?.purin_subaccount),
       requested: shop?.purin_requested === true,
       merchantId: id,
+      saleFeePercent:
+        (account?.purin_sale_fee_percent ?? shop?.purin_sale_fee_percent) === 0 ? 0 : 12,
     };
   }
+  async setFeePolicy(id: string, actor: string, raw: unknown) {
+    const input = z
+      .object({ saleFeePercent: z.union([z.literal(0), z.literal(12)]) })
+      .strict()
+      .parse(raw);
+    const shop = await this.store.get(botRoot(id));
+    if (shop?.purin_subaccount)
+      return this.bind(id, actor, { subaccountId: shop.purin_subaccount, ...input });
+    await botTransaction(this.store, async (tx) => {
+      const account = await tx.get('merchant_accounts/' + id);
+      if (!account) throw missing();
+      tx.set('merchant_accounts/' + id, {
+        ...account,
+        purin_sale_fee_percent: input.saleFeePercent,
+      });
+      this.audit(
+        tx,
+        id,
+        actor,
+        input.saleFeePercent === 0
+          ? 'store.purin_sale_fee_exempt'
+          : 'store.purin_sale_fee_standard',
+      );
+    });
+    return this.binding(id);
+  }
   async bind(id: string, actor: string, raw: unknown) {
-    const input = z.object({ subaccountId }).strict().parse(raw),
-      pointer = await this.store.get(root);
+    const input = z
+        .object({ subaccountId, saleFeePercent: z.union([z.literal(0), z.literal(12)]).optional() })
+        .strict()
+        .parse(raw),
+      pointer = await this.store.get(root),
+      existingShop = await this.store.get(botRoot(id)),
+      existingAccount = await this.store.get('merchant_accounts/' + id),
+      saleFeePercent =
+        input.saleFeePercent ??
+        ((existingAccount?.purin_sale_fee_percent ?? existingShop?.purin_sale_fee_percent) === 0
+          ? 0
+          : 12);
     if (!pointer?.generation)
       throw new HttpError(409, 'PURIN_NOT_CONNECTED', 'Conecte a conta principal primeiro.');
     const credentials = await this.credentials(pointer.generation),
@@ -292,7 +331,7 @@ export class PurinCashPayments {
         created_at: claim?.created_at ?? this.now(),
       });
     });
-    await this.applySubaccountFees(input.subaccountId, credentials.token);
+    await this.applySubaccountFees(input.subaccountId, credentials.token, saleFeePercent);
     await botTransaction(this.store, async (tx) => {
       const [account, shop, claimed, current] = await Promise.all([
         tx.get('merchant_accounts/' + id),
@@ -315,19 +354,19 @@ export class PurinCashPayments {
         ...shop,
         purin_connection: pointer.generation,
         purin_subaccount: input.subaccountId,
+        purin_sale_fee_percent: saleFeePercent,
         portal_revision: (shop.portal_revision ?? 0) + 1,
       });
+      tx.set('merchant_accounts/' + id, { ...account, purin_sale_fee_percent: saleFeePercent });
       this.audit(tx, id, actor, 'store.purin_subaccount_bound');
     });
     return this.binding(id);
   }
-  private async applySubaccountFees(sid: string, token: string) {
-    await this.provider(token, '/subaccounts/' + sid, BLACKOUT_PURIN_FEES, 'PUT');
+  private async applySubaccountFees(sid: string, token: string, saleFeePercent = 12) {
+    const fees = { ...BLACKOUT_PURIN_FEES, feePercent: saleFeePercent };
+    await this.provider(token, '/subaccounts/' + sid, fees, 'PUT');
     const sub = await this.provider(token, '/subaccounts/' + sid);
-    if (
-      sub.subaccountId !== sid ||
-      Object.entries(BLACKOUT_PURIN_FEES).some(([key, value]) => sub[key] !== value)
-    )
+    if (sub.subaccountId !== sid || Object.entries(fees).some(([key, value]) => sub[key] !== value))
       throw new HttpError(
         409,
         'PURIN_FEES_NOT_CONFIRMED',
@@ -341,11 +380,21 @@ export class PurinCashPayments {
     const claim = await this.store.get('purin_subaccount_claims/' + sid);
     if (claim?.account_id !== id) throw missing();
     const credentials = await this.credentials(shop.purin_connection);
-    await this.applySubaccountFees(sid, credentials.token);
+    const account = await this.store.get('merchant_accounts/' + id);
+    const saleFeePercent =
+      (account?.purin_sale_fee_percent ?? shop.purin_sale_fee_percent) === 0 ? 0 : 12;
+    await this.applySubaccountFees(sid, credentials.token, saleFeePercent);
     await botTransaction(this.store, async (tx) => {
-      this.audit(tx, id, actor, 'store.purin_fees_12_percent_and_100_cents');
+      this.audit(
+        tx,
+        id,
+        actor,
+        saleFeePercent === 0
+          ? 'store.purin_fees_exempt_and_100_cents'
+          : 'store.purin_fees_12_percent_and_100_cents',
+      );
     });
-    return { ...BLACKOUT_PURIN_FEES };
+    return { ...BLACKOUT_PURIN_FEES, feePercent: saleFeePercent };
   }
   async requestActivation(id: string, uid: string) {
     await botTransaction(this.store, async (tx) => {

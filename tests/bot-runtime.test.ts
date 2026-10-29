@@ -745,7 +745,7 @@ async function purinFixture(failCreate = false) {
       if (init?.method === 'PUT') {
         subFees = JSON.parse(String(init.body));
         assert.deepEqual(subFees, {
-          feePercent: 12,
+          feePercent: subFees.feePercent === 0 ? 0 : 12,
           feeFixedCents: 0,
           payoutFeePercent: 0,
           payoutFeeFixedCents: 100,
@@ -888,6 +888,29 @@ test('Purin fee policy configures new bindings and refuses updates to another me
     code: 'PURIN_SUBACCOUNT_USED',
   });
   assert.equal(p.posts(), 0, 'Configuring fees never creates a charge or payout');
+});
+
+test('Purin preserves the owner-selected sale exemption on rebind and fee refresh without changing withdrawal fees', async () => {
+  const p = await purinFixture();
+  const savedShop = await p.f.store.get('bot_shops/' + p.f.a.id);
+  await p.f.store.transaction(async (tx) => {
+    tx.delete('bot_shops/' + p.f.a.id);
+  });
+  await p.service.setFeePolicy(p.f.a.id, 'admin', { saleFeePercent: 0 });
+  assert.equal((await p.service.binding(p.f.a.id)).saleFeePercent, 0);
+  await p.f.store.transaction(async (tx) => {
+    tx.set('bot_shops/' + p.f.a.id, savedShop!);
+  });
+  await p.service.bind(p.f.a.id, 'admin', { subaccountId: 'sacc_pilot' });
+  assert.equal((await p.service.binding(p.f.a.id)).saleFeePercent, 0);
+  await p.service.bind(p.f.a.id, 'admin', { subaccountId: 'sacc_pilot' });
+  assert.deepEqual(await p.service.applyFees(p.f.a.id, 'admin'), {
+    feePercent: 0,
+    feeFixedCents: 0,
+    payoutFeePercent: 0,
+    payoutFeeFixedCents: 100,
+  });
+  assert.equal(p.posts(), 0);
 });
 
 test('Purin receiver verification rejection remains actionable and permits retry only after a definite rejection', async () => {

@@ -830,6 +830,16 @@ export function createApp(
       ),
     );
   });
+  app.post('/api/admin/accounts/:id/purin/policy', async (req, res) => {
+    if (!purin) throw new HttpError(503, 'PAYMENTS_UNAVAILABLE', 'Pagamentos indisponíveis.');
+    res.json(
+      await purin.setFeePolicy(
+        idSchema.parse(req.params.id),
+        (req as unknown as AuthedRequest).identity.uid,
+        req.body,
+      ),
+    );
+  });
   app.get('/api/admin/accounts', async (req, res) => {
     const offset = z.coerce.number().int().min(0).max(100000).default(0).parse(req.query.offset);
     const queue = z.enum(['all', 'activation']).default('all').parse(req.query.queue);

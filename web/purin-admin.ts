@@ -11,11 +11,12 @@ export async function mountPurinAdmin(host: HTMLElement, api: Api, merchantId?: 
       connected: boolean;
       subaccountId?: string;
       requested?: boolean;
+      saleFeePercent?: number;
       withdrawalsEnabled?: boolean;
     }>(base);
     if (!host.isConnected) return;
     host.innerHTML = merchantId
-      ? `<h3>Pix automático Blackout</h3><p>${status.connected ? 'Subconta vinculada: ' + esc(status.subaccountId) : status.requested ? 'Este lojista solicitou a ativação.' : 'Sem subconta vinculada.'}</p><p>Crie a subconta na PurinCash e use este identificador externo:</p><input aria-label="Identificador externo do lojista" readonly value="${esc(merchantId)}"><form><label>ID da subconta<input name="subaccountId" required pattern="sacc_[A-Za-z0-9_-]+" maxlength="125" placeholder="sacc_…" value="${esc(status.subaccountId)}"></label><button type="submit">Verificar e vincular subconta</button></form>`
+      ? `<h3>Pix automático Blackout</h3><p>${status.connected ? 'Subconta vinculada: ' + esc(status.subaccountId) : status.requested ? 'Este lojista solicitou a ativação.' : 'Sem subconta vinculada.'}</p><p>Crie a subconta na PurinCash e use este identificador externo:</p><input aria-label="Identificador externo do lojista" readonly value="${esc(merchantId)}"><form data-sale-policy><label>Comissão Blackout nas vendas<select name="saleFeePercent"><option value="12" ${status.saleFeePercent === 0 ? '' : 'selected'}>Padrão · 12%</option><option value="0" ${status.saleFeePercent === 0 ? 'selected' : ''}>Isenta · 0%</option></select></label><p>A isenção vale para esta loja. Saques: R$ 1 Blackout, além das tarifas Purin. Nas revendas compartilhadas, o custo do fornecedor continua retido.</p><button type="submit">Salvar comissão desta loja</button></form><form><label>ID da subconta<input name="subaccountId" required pattern="sacc_[A-Za-z0-9_-]+" maxlength="125" placeholder="sacc_…" value="${esc(status.subaccountId)}"></label><button type="submit">Verificar e vincular subconta</button></form>`
       : `<h2>Pix automático Blackout · PurinCash</h2><p>${status.connected ? 'Conta principal conectada. Preencha somente para atualizar a conexão.' : 'Conecte a conta principal para ativar os lojistas.'}</p><p>Comissão Blackout: 12% sobre o líquido após a tarifa Purin, sem valor fixo por venda. Saques: R$ 1,00 Blackout por solicitação, além da tarifa Purin. O vínculo de novas subcontas configura essas taxas automaticamente. O dinheiro permanece na carteira principal, atribuído às subcontas. Os lojistas consultam o saldo e solicitam saques na carteira Blackout após a habilitação.</p><details ${status.connected ? '' : 'open'}><summary>${status.connected ? 'Atualizar credenciais' : 'Configurar conexão'}</summary><p>Na PurinCash, crie uma chave de produção com Criar cobranças, Consultar cobranças e Gerenciar subcontas. Cole também o Webhook Secret da conta. A permissão Sacar de subconta é habilitada separadamente. Saques da conta principal não são necessários.</p><form><label>API Key de produção<input name="accessToken" type="password" autocomplete="off" required pattern="ps_live_[A-Za-z0-9_-]+" maxlength="520" placeholder="ps_live_…"></label><label>Webhook Secret da conta<input name="webhookSecret" type="password" autocomplete="off" required minlength="16" maxlength="512"></label><button type="submit">Validar e conectar PurinCash</button></form></details>`;
     host.insertAdjacentHTML(
       'beforeend',
@@ -36,20 +37,35 @@ export async function mountPurinAdmin(host: HTMLElement, api: Api, merchantId?: 
     try {
       const data = Object.fromEntries(new FormData(form));
       const withdrawals = form.hasAttribute('data-withdrawals');
+      const policy = form.hasAttribute('data-sale-policy');
       await api(
-        withdrawals ? base + '/withdrawals' : merchantId ? base : base + '/connect',
-        withdrawals ? { enabled: data.enabled === 'on' } : data,
+        policy
+          ? base + '/policy'
+          : withdrawals
+            ? base + '/withdrawals'
+            : merchantId
+              ? base
+              : base + '/connect',
+        policy
+          ? { saleFeePercent: Number(data.saleFeePercent) }
+          : withdrawals
+            ? { enabled: data.enabled === 'on' }
+            : merchantId
+              ? { subaccountId: data.subaccountId }
+              : data,
       );
       form.reset();
       await render();
       const feedback = host.querySelector<HTMLElement>('[data-purin-feedback]');
       if (feedback) {
         feedback.hidden = false;
-        feedback.textContent = withdrawals
-          ? 'Habilitação de saques atualizada.'
-          : merchantId
-            ? 'Subconta verificada e vinculada. O lojista já pode escolher Pix automático Blackout em Pagamentos.'
-            : 'Conta PurinCash conectada. Selecione um lojista para vincular sua subconta.';
+        feedback.textContent = policy
+          ? 'Comissão desta loja salva. O custo do fornecedor continua preservado nas revendas.'
+          : withdrawals
+            ? 'Habilitação de saques atualizada.'
+            : merchantId
+              ? 'Subconta verificada e vinculada. O lojista já pode escolher Pix automático Blackout em Pagamentos.'
+              : 'Conta PurinCash conectada. Selecione um lojista para vincular sua subconta.';
       }
     } catch (error) {
       const feedback = host.querySelector<HTMLElement>('[data-purin-feedback]');
