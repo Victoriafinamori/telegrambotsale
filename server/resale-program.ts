@@ -105,12 +105,18 @@ export class ResaleProgram {
   async own(accountId: string, uid: string) {
     return botTransaction(this.store, async (tx) => {
       await this.merchant(tx, accountId, uid);
-      const p = await tx.get(profilePath(accountId));
+      const p = await tx.get(profilePath(accountId)),
+        settings = await tx.get(root);
       return {
         accountId,
         permissions: permissions(p),
         revision: p?.revision ?? 0,
-        kind: p?.products === 'approved' || p?.plans === 'approved' ? 'reseller' : 'merchant',
+        kind:
+          settings?.supplier_id === accountId && settings.owner_uid === uid
+            ? 'owner'
+            : p?.products === 'approved' || p?.plans === 'approved'
+              ? 'reseller'
+              : 'merchant',
       };
     });
   }
@@ -143,7 +149,7 @@ export class ResaleProgram {
     });
   }
   async partners(uid: string) {
-    await this.authority(uid);
+    const settings = await this.authority(uid);
     const rows = await this.store.list('merchant_accounts', { limit: 201 });
     const partners = await Promise.all(
       rows.slice(0, 200).map(async (a) => {
@@ -155,7 +161,12 @@ export class ResaleProgram {
           accessStatus: a.access_status,
           permissions: permissions(p),
           revision: p?.revision ?? 0,
-          kind: p?.products === 'approved' || p?.plans === 'approved' ? 'reseller' : 'merchant',
+          kind:
+            settings?.supplier_id === a.id
+              ? 'owner'
+              : p?.products === 'approved' || p?.plans === 'approved'
+                ? 'reseller'
+                : 'merchant',
         };
       }),
     );
