@@ -399,10 +399,20 @@ export class MerchantConsole {
           .min(1)
           .max(40)
           .optional(),
-        units: z.array(z.string().trim().min(1).max(1000)).min(1).max(20),
+        units: z.array(z.string().trim().min(1).max(1000)).max(20).default([]),
+        mode: z.enum(['individual', 'ghost', 'infinite']).default('individual'),
+        quantity: z.number().int().min(0).max(1000000).default(0),
+        text: z.string().trim().max(1000).default(''),
         requestId: z.uuid(),
       })
       .strict()
+      .refine(
+        (v) =>
+          v.mode === 'individual'
+            ? v.units.length > 0
+            : Boolean(v.productIds) && Boolean(v.text) && !v.units.length,
+        'Informe as unidades individuais ou a mensagem da entrega repetida.',
+      )
       .refine(
         (v) => Boolean(v.productId) !== Boolean(v.productIds),
         'Escolha um produto ou uma seleção de produtos.',
@@ -414,7 +424,15 @@ export class MerchantConsole {
       .parse(input);
     const productIds = value.productIds ?? [value.productId!];
     const fingerprint = createHash('sha256')
-      .update(JSON.stringify({ productIds: [...productIds].sort(), units: value.units }))
+      .update(
+        JSON.stringify({
+          productIds: [...productIds].sort(),
+          units: value.units,
+          ...(value.mode !== 'individual'
+            ? { mode: value.mode, quantity: value.quantity, text: value.text }
+            : {}),
+        }),
+      )
       .digest('hex');
     await botTransaction(this.store, async (tx) => {
       const { shop } = await this.owner(tx, id, uid),
@@ -446,13 +464,7 @@ export class MerchantConsole {
               'SUPPLIER_STOCK',
               'Produtos de outro fornecedor devem ser abastecidos na loja de origem.',
             );
-          if (value.productIds && p.stock_mode && p.stock_mode !== 'individual')
-            throw new HttpError(
-              409,
-              'BATCH_STOCK_MODE',
-              'A reposição em lote usa apenas estoques individuais. Nenhum estoque foi alterado.',
-            );
-          if (stock.units.length + value.units.length > 100)
+          if (value.mode === 'individual' && stock.units.length + value.units.length > 100)
             throw new HttpError(
               409,
               'STOCK_LIMIT',
@@ -462,6 +474,24 @@ export class MerchantConsole {
         }),
       );
       for (const { p, target, stock } of targets) {
+        if (
+          value.productIds &&
+          (value.mode !== 'individual' || (stock.mode ?? 'individual') !== 'individual')
+        )
+          await configureStock(
+            tx,
+            id,
+            shop,
+            stock,
+            {
+              productId: p.id,
+              version: stockVersion(stock),
+              mode: value.mode,
+              quantity: value.quantity,
+              text: value.text,
+            },
+            this.vault,
+          );
         for (const text of value.units) {
           const unit = randomBytes(8).toString('hex');
           stock.units.push({
@@ -481,6 +511,7 @@ export class MerchantConsole {
         fingerprint,
         product_count: productIds.length,
         units_per_product: value.units.length,
+        mode: value.mode,
       });
       this.audit(
         tx,

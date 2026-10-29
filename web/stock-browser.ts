@@ -1,4 +1,4 @@
-import { mountStockBatch } from './stock-batch.js';
+import { mountStockBatch, type BatchStockSettings } from './stock-batch.js';
 import './stock-browser.css';
 import {
   stockPriority,
@@ -16,7 +16,12 @@ export function mountStockBrowser(
   products: StockProduct[],
   state: StockFilters,
   open: (id: string) => void,
-  batch?: (ids: string[], units: string[], requestId: string) => Promise<void>,
+  batch?: (
+    ids: string[],
+    units: string[],
+    requestId: string,
+    settings: BatchStockSettings,
+  ) => Promise<void>,
 ) {
   const categories = [...new Set(products.map((p) => p.category))].sort((a, b) =>
     a.localeCompare(b, 'pt-BR'),

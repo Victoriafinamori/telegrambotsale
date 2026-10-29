@@ -192,10 +192,9 @@ html.dark .stock-status[data-priority='1'] {
   gap: 10px;
   font-weight: 600;
 }
-.stock-batch-dialog textarea {
+.stock-batch-dialog :is(textarea, select, input) {
   width: 100%;
   box-sizing: border-box;
-  min-height: 144px;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -203,7 +202,17 @@ html.dark .stock-status[data-priority='1'] {
   color: var(--ink);
   font: inherit;
   line-height: 1.5;
+}
+.stock-batch-dialog textarea {
+  min-height: 144px;
   resize: vertical;
+}
+.stock-batch-dialog form {
+  display: grid;
+  gap: 18px;
+}
+.stock-batch-dialog [hidden] {
+  display: none;
 }
 .stock-batch-dialog [data-error]:not(:empty) {
   color: var(--ink);

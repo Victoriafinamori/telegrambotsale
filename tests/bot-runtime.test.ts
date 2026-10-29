@@ -2755,6 +2755,89 @@ test('Announcement unsubscribe and cancellation stop queued messages; 429 can re
   assert.equal(await f.bots.claim(f.auth, `n${cancelled}_444444444`), null);
 });
 
+test('Batch ghost and infinite modes preserve saved units, encrypt each template and reject reserved targets atomically', async () => {
+  const f = await fixture(true, undefined, 'merchant', '123456789', 'manual'),
+    portal = new MerchantConsole(f.store, f.key, f.bots);
+  const ids: string[] = [];
+  for (const title of ['Repetido A', 'Repetido B']) {
+    const current = await portal.read(f.a.id, 'merchant');
+    ids.push(
+      (
+        await portal.saveProduct(f.a.id, 'merchant', {
+          title,
+          description: 'Teste',
+          category: 'Digital',
+          price: 1000,
+          enabled: true,
+          banner: '',
+          revision: current.revision,
+        })
+      ).id,
+    );
+  }
+  await portal.addStock(f.a.id, 'merchant', {
+    productIds: ids,
+    units: ['UNIDADE SALVA'],
+    requestId: crypto.randomUUID(),
+  });
+  const ghost = {
+    productIds: ids,
+    mode: 'ghost',
+    quantity: 7,
+    text: 'Abra um ticket para resgatar',
+    requestId: crypto.randomUUID(),
+  };
+  await Promise.all([
+    portal.addStock(f.a.id, 'merchant', ghost),
+    portal.addStock(f.a.id, 'merchant', ghost),
+  ]);
+  for (const id of ids) {
+    const inventory = await portal.inventory(f.a.id, 'merchant', id);
+    assert.equal(inventory.mode, 'ghost');
+    assert.equal(inventory.quantity, 7);
+    assert.equal(inventory.text, ghost.text);
+    assert.equal(inventory.units.length, 1);
+  }
+  const a = (await f.store.get(`bot_shops/${f.a.id}/products/${ids[0]}`))!,
+    b = (await f.store.get(`bot_shops/${f.a.id}/products/${ids[1]}`))!;
+  assert.notEqual(a.template.ciphertext, b.template.ciphertext);
+  await assert.rejects(
+    () => portal.addStock(f.a.id, 'merchant', { ...ghost, quantity: 8 }),
+    (e: any) => e.code === 'STOCK_REQUEST_CHANGED',
+  );
+  await f.store.transaction(async (tx) => {
+    const path = `bot_shops/${f.a.id}/products/${ids[1]}`;
+    tx.set(path, { ...(await tx.get(path)), shared_reserved: 1 });
+  });
+  const infinite = { ...ghost, mode: 'infinite', quantity: 0, requestId: crypto.randomUUID() };
+  await assert.rejects(
+    () => portal.addStock(f.a.id, 'merchant', infinite),
+    (e: any) => e.code === 'STOCK_RESERVED',
+  );
+  assert.equal((await portal.inventory(f.a.id, 'merchant', ids[0])).mode, 'ghost');
+  await f.store.transaction(async (tx) => {
+    const path = `bot_shops/${f.a.id}/products/${ids[1]}`;
+    tx.set(path, { ...(await tx.get(path)), shared_reserved: 0 });
+  });
+  await portal.addStock(f.a.id, 'merchant', infinite);
+  for (const id of ids)
+    assert.equal((await portal.inventory(f.a.id, 'merchant', id)).mode, 'infinite');
+  await portal.addStock(f.a.id, 'merchant', {
+    productIds: ids,
+    mode: 'individual',
+    units: ['NOVA UNIDADE'],
+    requestId: crypto.randomUUID(),
+  });
+  for (const id of ids) {
+    const inv = await portal.inventory(f.a.id, 'merchant', id);
+    assert.equal(inv.mode, 'individual');
+    assert.equal(inv.units.length, 2);
+  }
+  await assert.rejects(() =>
+    portal.addStock(f.a.id, 'merchant', { ...ghost, text: '', requestId: crypto.randomUUID() }),
+  );
+});
+
 test('Batch stock refill copies encrypted units to every selected product once and rejects the whole batch if any target fails', async () => {
   const f = await fixture(true, undefined, 'merchant', '123456789', 'manual'),
     portal = new MerchantConsole(f.store, f.key, f.bots);

@@ -119,6 +119,16 @@
         if (path === '/store/manage/stock' || path === '/admin/resale/global/stock-add') {
           for (const productId of body.productIds ?? [body.productId]) {
             const item = inventory.get(productId);
+            if (body.mode && body.mode !== 'individual') {
+              const p = products.find((p) => p.id === productId);
+              item.mode = p.stock_mode = body.mode;
+              item.quantity = body.quantity;
+              item.text = body.text;
+              p.stock = body.mode === 'infinite' ? 1000000 : body.quantity;
+              continue;
+            }
+            if (body.productIds)
+              item.mode = products.find((p) => p.id === productId).stock_mode = 'individual';
             item.units.push(
               ...body.units.map((text, i) => ({ id: crypto.randomUUID(), kind: 'text', text })),
             );
@@ -128,7 +138,7 @@
           }
           return { ok: true };
         }
-        if (path === '/store/manage/stock/mode') {
+        if (path === '/store/manage/stock/mode' || path === '/admin/resale/global/stock-mode') {
           const item = inventory.get(body.productId),
             p = products.find((p) => p.id === body.productId);
           item.mode = p.stock_mode = body.mode;
@@ -139,7 +149,7 @@
               ? item.units.length
               : body.mode === 'ghost'
                 ? body.quantity
-                : 0;
+                : 1000000;
           return { ok: true };
         }
         throw Error(

@@ -171,7 +171,7 @@
   font-weight: 400;
 }
 .rs-card :is(input, select, textarea),
-.rs-stock-dialog :is(input, textarea) {
+.rs-stock-dialog :is(input, textarea, select) {
   min-width: 0;
   width: 100%;
   box-sizing: border-box;

@@ -74,8 +74,13 @@ export async function mountResale(host: HTMLElement, api: Api, admin = false) {
         (id) => {
           void run(() => stockDialog(id));
         },
-        async (productIds, units, requestId) => {
-          await api('/admin/resale/global/stock-add', { productIds, units, requestId });
+        async (productIds, units, requestId, settings) => {
+          await api('/admin/resale/global/stock-add', {
+            productIds,
+            units,
+            requestId,
+            ...settings,
+          });
           await refresh();
           feedback(`Reposição concluída em ${productIds.length} produtos.`);
         },
@@ -163,7 +168,7 @@ export async function mountResale(host: HTMLElement, api: Api, admin = false) {
             }),
         ),
       );
-      dialog.querySelector('form')!.addEventListener('submit', (e) => {
+      dialog.querySelector('form[data-stock-add]')!.addEventListener('submit', (e) => {
         e.preventDefault();
         e.stopPropagation();
         const units = String(new FormData(e.target as HTMLFormElement).get('units'))
@@ -178,7 +183,45 @@ export async function mountResale(host: HTMLElement, api: Api, admin = false) {
           });
         });
       });
-      dialog.querySelector('.rs-card-heading')!.after(dialog.querySelector('form')!);
+      dialog
+        .querySelector('.rs-card-heading')!
+        .after(dialog.querySelector('form[data-stock-add]')!);
+      dialog
+        .querySelector('[data-stock-add]')!
+        .insertAdjacentHTML(
+          'beforebegin',
+          `<form data-stock-mode><label>Modo de estoque<select name="mode"><option value="individual">Individual</option><option value="ghost">Fantasma</option><option value="infinite">Infinito</option></select></label><div data-repeat><label data-ghost>Quantidade fantasma disponível<input name="quantity" type="number" min="0" max="1000000" step="1" value="${inventory.quantity}"><small>Substitui o saldo disponível; não soma ao anterior.</small></label><label>Entrega repetida<select name="sourceUnit"><option value="">Escrever uma mensagem</option>${inventory.text ? '<option value="template">Manter a entrega atual</option>' : ''}${inventory.units.map((u: any, i: number) => `<option value="${esc(u.id)}">Repetir unidade ${i + 1} · ${esc(u.text.slice(0, 60))}</option>`).join('')}</select></label><label data-message>Mensagem após o pagamento<textarea name="text" rows="3" maxlength="1000">${esc(inventory.text)}</textarea></label></div><p class="rs-muted">As unidades individuais ficam preservadas. Pedidos reservados impedem a troca de modo.</p><button type="submit">Salvar modo de estoque</button></form>`,
+        );
+      const modeForm = dialog.querySelector<HTMLFormElement>('[data-stock-mode]')!,
+        modeSelect = modeForm.querySelector<HTMLSelectElement>('[name=mode]')!,
+        source = modeForm.querySelector<HTMLSelectElement>('[name=sourceUnit]')!;
+      modeSelect.value = inventory.mode;
+      source.value = inventory.text ? 'template' : '';
+      const updateMode = () => {
+        modeForm.querySelector<HTMLElement>('[data-repeat]')!.hidden =
+          modeSelect.value === 'individual';
+        modeForm.querySelector<HTMLElement>('[data-ghost]')!.hidden = modeSelect.value !== 'ghost';
+        modeForm.querySelector<HTMLElement>('[data-message]')!.hidden = Boolean(source.value);
+      };
+      modeForm.addEventListener('change', updateMode);
+      updateMode();
+      modeForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const fields = new FormData(modeForm);
+        void work(async () => {
+          await api('/admin/resale/global/stock-mode', {
+            productId,
+            version: inventory.version,
+            mode: fields.get('mode'),
+            quantity: Number(fields.get('quantity')),
+            text: String(fields.get('text') || ''),
+            ...(source.value && modeSelect.value !== 'individual'
+              ? { sourceUnit: source.value }
+              : {}),
+          });
+        });
+      });
     };
     const work = async (fn: () => Promise<void>) => {
       dialog.querySelectorAll('button').forEach((b) => (b.disabled = true));

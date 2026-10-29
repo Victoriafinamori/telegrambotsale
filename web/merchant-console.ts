@@ -410,8 +410,8 @@ export async function mountMerchantConsole(
         (id) => {
           void run(() => inventoryDialog(id));
         },
-        async (productIds, units, requestId) => {
-          await api('/store/manage/stock', { productIds, units, requestId });
+        async (productIds, units, requestId, settings) => {
+          await api('/store/manage/stock', { productIds, units, requestId, ...settings });
           await get();
           render();
           alert(`Reposição concluída em ${productIds.length} produtos.`);
