@@ -195,6 +195,15 @@ html.dark .stock-status[data-priority='1'] {
 .stock-batch-dialog textarea {
   width: 100%;
   box-sizing: border-box;
+  min-height: 144px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  line-height: 1.5;
+  resize: vertical;
 }
 .stock-batch-dialog [data-error]:not(:empty) {
   color: var(--ink);
