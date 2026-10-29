@@ -1,7 +1,7 @@
 import { refreshSharedCatalog } from './resale-stock.js';
 import { modeInput, configureStock, syncStock } from './stock-modes.js';
 import { stockItems, stockVersion, changeStock } from './stock-management.js';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { DocumentStore, DocumentTransaction, Doc } from './document-store.js';
 import type { Shop, Product, Order, Announcement } from './bot-types.js';
@@ -390,37 +390,104 @@ export class MerchantConsole {
   async addStock(id: string, uid: string, input: unknown) {
     const value = z
       .object({
-        productId: z.string().regex(/^[a-f0-9]{12}$/),
+        productId: z
+          .string()
+          .regex(/^[a-f0-9]{12}$/)
+          .optional(),
+        productIds: z
+          .array(z.string().regex(/^[a-f0-9]{12}$/))
+          .min(1)
+          .max(40)
+          .optional(),
         units: z.array(z.string().trim().min(1).max(1000)).min(1).max(20),
         requestId: z.uuid(),
       })
       .strict()
+      .refine(
+        (v) => Boolean(v.productId) !== Boolean(v.productIds),
+        'Escolha um produto ou uma seleção de produtos.',
+      )
+      .refine(
+        (v) => !v.productIds || new Set(v.productIds).size === v.productIds.length,
+        'A seleção contém produtos repetidos.',
+      )
       .parse(input);
+    const productIds = value.productIds ?? [value.productId!];
+    const fingerprint = createHash('sha256')
+      .update(JSON.stringify({ productIds: [...productIds].sort(), units: value.units }))
+      .digest('hex');
     await botTransaction(this.store, async (tx) => {
       const { shop } = await this.owner(tx, id, uid),
         receipt = botPath(id, 'stock_requests', value.requestId);
-      if (await tx.get(receipt)) return;
-      const p = shop.products.find((p) => p.id === value.productId),
-        target = botPath(id, 'products', value.productId),
-        stock = await tx.get(target);
-      if (!p || !stock) throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'Produto não encontrado.');
-      if (stock.units.length + value.units.length > 100)
-        throw new HttpError(409, 'STOCK_LIMIT', 'Limite de 100 unidades disponíveis por produto.');
-      for (const text of value.units) {
-        const unit = randomBytes(8).toString('hex');
-        stock.units.push({
-          id: unit,
-          ciphertext: this.vault.seal(
-            JSON.stringify({ kind: 'text', text }),
-            `${id}:stock:${p.id}:${unit}`,
-          ),
-        });
+      const prior = await tx.get(receipt);
+      if (prior) {
+        if (prior.fingerprint && prior.fingerprint !== fingerprint)
+          throw new HttpError(
+            409,
+            'STOCK_REQUEST_CHANGED',
+            'Este envio já foi usado com outro conteúdo. Atualize o estoque antes de preparar outro envio.',
+          );
+        return;
       }
-      syncStock(p, stock);
-      tx.set(target, stock);
+      const targets = await Promise.all(
+        productIds.map(async (productId) => {
+          const p = shop.products.find((p) => p.id === productId),
+            target = botPath(id, 'products', productId),
+            stock = await tx.get(target);
+          if (!p || !stock)
+            throw new HttpError(
+              404,
+              'PRODUCT_NOT_FOUND',
+              'Um produto selecionado não foi encontrado. Nenhum estoque foi alterado.',
+            );
+          if (p.resale_source)
+            throw new HttpError(
+              409,
+              'SUPPLIER_STOCK',
+              'Produtos de outro fornecedor devem ser abastecidos na loja de origem.',
+            );
+          if (value.productIds && p.stock_mode && p.stock_mode !== 'individual')
+            throw new HttpError(
+              409,
+              'BATCH_STOCK_MODE',
+              'A reposição em lote usa apenas estoques individuais. Nenhum estoque foi alterado.',
+            );
+          if (stock.units.length + value.units.length > 100)
+            throw new HttpError(
+              409,
+              'STOCK_LIMIT',
+              `O produto ${p.title} ultrapassaria 100 unidades. Nenhum estoque foi alterado.`,
+            );
+          return { p, target, stock };
+        }),
+      );
+      for (const { p, target, stock } of targets) {
+        for (const text of value.units) {
+          const unit = randomBytes(8).toString('hex');
+          stock.units.push({
+            id: unit,
+            ciphertext: this.vault.seal(
+              JSON.stringify({ kind: 'text', text }),
+              `${id}:stock:${p.id}:${unit}`,
+            ),
+          });
+        }
+        syncStock(p, stock);
+        tx.set(target, stock);
+      }
       tx.set(botRoot(id), { ...shop, portal_revision: (shop.portal_revision ?? 0) + 1 });
-      tx.set(receipt, { created_at: new Date() });
-      this.audit(tx, id, uid, 'store.stock_added_web');
+      tx.set(receipt, {
+        created_at: new Date(),
+        fingerprint,
+        product_count: productIds.length,
+        units_per_product: value.units.length,
+      });
+      this.audit(
+        tx,
+        id,
+        uid,
+        value.productIds ? 'store.stock_added_batch_web' : 'store.stock_added_web',
+      );
     });
   }
   async coupon(id: string, uid: string, input: unknown) {

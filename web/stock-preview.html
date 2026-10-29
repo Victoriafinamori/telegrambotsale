@@ -117,13 +117,15 @@
             inventory.get(new URLSearchParams(path.split('?')[1]).get('productId')),
           );
         if (path === '/store/manage/stock' || path === '/admin/resale/global/stock-add') {
-          const item = inventory.get(body.productId);
-          item.units.push(
-            ...body.units.map((text, i) => ({ id: crypto.randomUUID(), kind: 'text', text })),
-          );
-          item.version = crypto.randomUUID();
-          if (item.mode === 'individual')
-            products.find((p) => p.id === body.productId).stock = item.units.length;
+          for (const productId of body.productIds ?? [body.productId]) {
+            const item = inventory.get(productId);
+            item.units.push(
+              ...body.units.map((text, i) => ({ id: crypto.randomUUID(), kind: 'text', text })),
+            );
+            item.version = crypto.randomUUID();
+            if (item.mode === 'individual')
+              products.find((p) => p.id === productId).stock = item.units.length;
+          }
           return { ok: true };
         }
         if (path === '/store/manage/stock/mode') {

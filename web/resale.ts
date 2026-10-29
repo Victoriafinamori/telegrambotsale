@@ -67,9 +67,19 @@ export async function mountResale(host: HTMLElement, api: Api, admin = false) {
           `<section class="rs-card"><h2>Extrato de revenda</h2><p>Créditos confirmados no extrato da sua subconta Purin. O saldo disponível e o saque continuam na carteira.</p>${commissions.map((c) => `<article class="rs-permission"><div><b>${c.kind === 'plan' ? 'Plano Blackout' : 'Produto do fornecedor'}</b><small>Venda ${money(c.grossCents)} · Base ${money(c.baseCents)} · Purin ${money(c.gatewayFeeCents)}</small></div><strong>${money(c.partnerCents)}</strong><span class="rs-badge">${c.status === 'credited' ? 'Creditado' : 'Em conferência'}</span></article>`).join('') || '<p>Nenhuma comissão confirmada ainda.</p>'}<a class="button-link quiet" href="#/minha-loja?wallet=1">Abrir carteira</a></section>`);
     const stockHost = host.querySelector<HTMLElement>('[data-global-stock-browser]');
     if (stockHost)
-      mountStockBrowser(stockHost, data.global.catalog.products, stockFilters, (id) => {
-        void run(() => stockDialog(id));
-      });
+      mountStockBrowser(
+        stockHost,
+        data.global.catalog.products,
+        stockFilters,
+        (id) => {
+          void run(() => stockDialog(id));
+        },
+        async (productIds, units, requestId) => {
+          await api('/admin/resale/global/stock-add', { productIds, units, requestId });
+          await refresh();
+          feedback(`Reposição concluída em ${productIds.length} produtos.`);
+        },
+      );
     const selector = host.querySelector<HTMLSelectElement>('[data-filter]');
     if (selector) selector.value = filter;
   };

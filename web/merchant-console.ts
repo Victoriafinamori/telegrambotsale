@@ -410,6 +410,12 @@ export async function mountMerchantConsole(
         (id) => {
           void run(() => inventoryDialog(id));
         },
+        async (productIds, units, requestId) => {
+          await api('/store/manage/stock', { productIds, units, requestId });
+          await get();
+          render();
+          alert(`Reposição concluída em ${productIds.length} produtos.`);
+        },
       );
     if (section === 'resale') {
       const target = document.createElement('div');

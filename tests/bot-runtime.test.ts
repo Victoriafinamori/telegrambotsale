@@ -2755,6 +2755,81 @@ test('Announcement unsubscribe and cancellation stop queued messages; 429 can re
   assert.equal(await f.bots.claim(f.auth, `n${cancelled}_444444444`), null);
 });
 
+test('Batch stock refill copies encrypted units to every selected product once and rejects the whole batch if any target fails', async () => {
+  const f = await fixture(true, undefined, 'merchant', '123456789', 'manual'),
+    portal = new MerchantConsole(f.store, f.key, f.bots);
+  const ids: string[] = [];
+  for (const title of ['Produto A', 'Produto B']) {
+    const current = await portal.read(f.a.id, 'merchant');
+    const p = await portal.saveProduct(f.a.id, 'merchant', {
+      title,
+      description: 'Produto de teste',
+      category: 'Digital',
+      price: 1000,
+      enabled: true,
+      banner: '',
+      revision: current.revision,
+    });
+    ids.push(p.id);
+  }
+  const request = {
+    productIds: ids,
+    units: ['MESMO-CONTEUDO', 'OUTRA-UNIDADE'],
+    requestId: '12345678-1234-4234-8234-123456789099',
+  };
+  await Promise.all([
+    portal.addStock(f.a.id, 'merchant', request),
+    portal.addStock(f.a.id, 'merchant', request),
+  ]);
+  for (const id of ids)
+    assert.deepEqual(
+      (await portal.inventory(f.a.id, 'merchant', id)).units.map((u: { text?: string }) => u.text),
+      request.units,
+    );
+  const a = (await f.store.get(`bot_shops/${f.a.id}/products/${ids[0]}`))!,
+    b = (await f.store.get(`bot_shops/${f.a.id}/products/${ids[1]}`))!;
+  assert.notEqual(a.units[0].ciphertext, b.units[0].ciphertext);
+  assert(!JSON.stringify(a).includes('MESMO-CONTEUDO'));
+  await assert.rejects(
+    () => portal.addStock(f.a.id, 'merchant', { ...request, units: ['ALTERADO'] }),
+    { code: 'STOCK_REQUEST_CHANGED' },
+  );
+  await assert.rejects(() => portal.addStock(f.a.id, 'other', request), {
+    code: 'STORE_NOT_APPROVED',
+  });
+  await assert.rejects(
+    () =>
+      portal.addStock(f.a.id, 'merchant', {
+        ...request,
+        productIds: [ids[0], 'ffffffffffff'],
+        requestId: '12345678-1234-4234-8234-123456789098',
+      }),
+    { code: 'PRODUCT_NOT_FOUND' },
+  );
+  assert.equal((await portal.inventory(f.a.id, 'merchant', ids[0])).units.length, 2);
+  await f.store.transaction(async (tx) => {
+    const path = `bot_shops/${f.a.id}/products/${ids[1]}`,
+      raw = (await tx.get(path))!;
+    tx.set(path, {
+      ...raw,
+      units: Array.from({ length: 100 }, (_, i) => ({ ...raw.units[0], id: 'capacity-' + i })),
+    });
+  });
+  await assert.rejects(
+    () =>
+      portal.addStock(f.a.id, 'merchant', {
+        ...request,
+        requestId: '12345678-1234-4234-8234-123456789097',
+      }),
+    { code: 'STOCK_LIMIT' },
+  );
+  assert.equal(
+    (await portal.inventory(f.a.id, 'merchant', ids[0])).units.length,
+    2,
+    'A full target cannot leave another product partially replenished',
+  );
+});
+
 test('Web console edits the same catalog and stock as Telegram, rejects stale edits and never exposes inventory secrets', async () => {
   const f = await fixture(true, undefined, 'merchant', '123456789', 'manual'),
     portal = new MerchantConsole(f.store, f.key, f.bots);
