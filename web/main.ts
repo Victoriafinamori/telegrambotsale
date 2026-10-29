@@ -226,7 +226,7 @@ function accountRow(a: AdminMerchantAccount) {
 function adminView() {
   const a = accounts.find((a) => a.id === selected);
   shell(
-    `<main class="workspace"><div class="page-heading"><div><span class="eyebrow">Administração da plataforma</span><h1>Lojistas</h1></div><button id="new-account">Adicionar lojista</button></div><nav class="tabs"><button data-section="accounts" class="${section === 'accounts' ? 'active' : ''}">Lojistas</button><button data-section="activations" class="${section === 'activations' ? 'active' : ''}">Ativações</button><button data-section="health" class="${section === 'health' ? 'active' : ''}">Saúde dos bots</button><button data-section="audit" class="${section === 'audit' ? 'active' : ''}">Histórico</button></nav>${section === 'audit' ? '<section class="card" id="audit-list">Carregando histórico…</section>' : `<section class="card compact">${accounts.map(accountRow).join('') || `<div class="empty"><b>${section === 'activations' ? 'Nenhuma ativação pendente' : 'Comece pelo primeiro lojista'}</b><p>${section === 'activations' ? 'Os bots enviados e liberados aparecerão aqui.' : 'Cadastre a contratação recebida e gere o convite de acesso.'}</p></div>`}</section><div class="pagination"><button class="quiet" id="previous" ${offset === 0 ? 'disabled' : ''}>Anterior</button><span>Página ${offset / 50 + 1}</span><button class="quiet" id="next" ${accounts.length < 50 ? 'disabled' : ''}>Próxima</button></div>`}${a && section !== 'audit' ? `<section class="card detail"><div class="card-heading"><h2>${esc(a.store_name)}</h2><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div><dl><div><dt>Lojista</dt><dd>${esc(a.name)}</dd></div><div><dt>E-mail</dt><dd>${esc(a.email)}</dd></div><div><dt>Canal da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Referência</dt><dd>${esc(a.reference || 'Não informada')}</dd></div><div><dt>Valor do ciclo contratado</dt><dd>${money(a.price_cents)}</dd></div><div><dt>Início da assinatura</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div></dl><p class="note">Liberar o acesso ao painel não ativa o bot. O período contratado começa somente após a ativação efetiva do bot.</p>${a.suspension_reason ? `<p class="warning">${esc(a.suspension_reason)}</p>` : ''}${adminBotSetup ? adminBotCard(adminBotSetup, a.access_status === 'approved', date) : ''}<div class="inline-actions">${!a.purchase_confirmed_at ? '<button id="confirm-purchase">Confirmar contratação</button>' : ''}${a.purchase_confirmed_at && !a.firebase_uid && a.access_status !== 'suspended' ? '<button id="issue-invite">Gerar convite</button>' : ''}${a.firebase_uid && a.access_status === 'pending' ? '<button id="approve">Liberar acesso ao painel</button>' : ''}${a.access_status !== 'suspended' ? '<button class="quiet" id="suspend">Suspender acesso ao painel</button>' : '<button class="quiet" id="restore">Remover suspensão</button>'}</div>${inviteLink ? `<div class="invite-box"><label for="invite-link">Convite · copie e envie pelo canal da contratação</label><input id="invite-link" value="${esc(inviteLink)}" readonly><button class="quiet" id="copy-invite">Copiar convite</button><small>Uso único, válido por 7 dias e vinculado ao e-mail cadastrado. Gerar outro invalida o anterior.</small></div>` : ''}</section>` : ''}</main>`,
+    `<main class="workspace"><div class="page-heading"><div><span class="eyebrow">Administração da plataforma</span><h1>Lojistas</h1></div><button id="new-account">Adicionar lojista</button></div><nav class="tabs"><button data-section="accounts" class="${section === 'accounts' ? 'active' : ''}">Lojistas</button><button data-section="activations" class="${section === 'activations' ? 'active' : ''}">Ativações</button><button data-section="health" class="${section === 'health' ? 'active' : ''}">Saúde dos bots</button><button data-section="audit" class="${section === 'audit' ? 'active' : ''}">Histórico</button></nav>${section === 'audit' ? '<section class="card" id="audit-list">Carregando histórico…</section>' : `<section class="card compact">${accounts.map(accountRow).join('') || `<div class="empty"><b>${section === 'activations' ? 'Nenhuma ativação pendente' : 'Comece pelo primeiro lojista'}</b><p>${section === 'activations' ? 'Os bots enviados e liberados aparecerão aqui.' : 'Cadastre a contratação recebida e gere o convite de acesso.'}</p></div>`}</section><div class="pagination"><button class="quiet" id="previous" ${offset === 0 ? 'disabled' : ''}>Anterior</button><span>Página ${offset / 50 + 1}</span><button class="quiet" id="next" ${accounts.length < 50 ? 'disabled' : ''}>Próxima</button></div>`}${a && section !== 'audit' ? `<section class="card detail"><div class="card-heading"><h2>${esc(a.store_name)}</h2><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div><dl><div><dt>Lojista</dt><dd>${esc(a.name)}</dd></div><div><dt>E-mail</dt><dd>${esc(a.email)} ${!a.firebase_uid ? '<button class="text-button" id="edit-email">Editar e-mail</button>' : ''}</dd></div><div><dt>Canal da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Referência</dt><dd>${esc(a.reference || 'Não informada')}</dd></div><div><dt>Valor do ciclo contratado</dt><dd>${money(a.price_cents)}</dd></div><div><dt>Início da assinatura</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div></dl><p class="note">Liberar o acesso ao painel não ativa o bot. O período contratado começa somente após a ativação efetiva do bot.</p>${a.suspension_reason ? `<p class="warning">${esc(a.suspension_reason)}</p>` : ''}${adminBotSetup ? adminBotCard(adminBotSetup, a.access_status === 'approved', date) : ''}<div class="inline-actions">${!a.purchase_confirmed_at ? '<button id="confirm-purchase">Confirmar contratação</button>' : ''}${a.purchase_confirmed_at && !a.firebase_uid && a.access_status !== 'suspended' ? '<button id="issue-invite">Gerar convite</button>' : ''}${a.firebase_uid && a.access_status === 'pending' ? '<button id="approve">Liberar acesso ao painel</button>' : ''}${a.access_status !== 'suspended' ? '<button class="quiet" id="suspend">Suspender acesso ao painel</button>' : '<button class="quiet" id="restore">Remover suspensão</button>'}</div>${inviteLink ? `<div class="invite-box"><label for="invite-link">Convite · copie e envie pelo canal da contratação</label><input id="invite-link" value="${esc(inviteLink)}" readonly><button class="quiet" id="copy-invite">Copiar convite</button><small>Uso único, válido por 7 dias e vinculado ao e-mail cadastrado. Gerar outro invalida o anterior.</small></div>` : ''}</section>` : ''}</main>`,
   );
   if (section !== 'audit') {
     const workspace = document.querySelector('.workspace');
@@ -729,6 +729,7 @@ document.addEventListener('submit', (event) => {
     ![
       'auth-form',
       'registration-form',
+      'email-correction-form',
       'suspend-form',
       'bot-setup-form',
       'bot-activation-form',
@@ -825,6 +826,17 @@ document.addEventListener('submit', (event) => {
         return;
       }
       await exchange();
+    } else if (form.id === 'email-correction-form') {
+      await api('/admin/accounts/' + String(fields.get('accountId')) + '/email', {
+        email: String(fields.get('email')),
+        expectedEmail: String(fields.get('expectedEmail')),
+      });
+      inviteLink = '';
+      document.querySelector('dialog')?.remove();
+      await load();
+      flash(
+        'E-mail corrigido. O convite anterior foi invalidado; gere um novo convite para o lojista.',
+      );
     } else if (form.id === 'registration-form') {
       const value = {
         name: String(fields.get('name')),
@@ -927,6 +939,15 @@ document.addEventListener('click', (event) => {
     dialog(
       'Token para ativação',
       '<p>Este segredo permite controlar o bot. A consulta será registrada no histórico. Use-o somente na configuração privada do servidor na Hyze Cloud.</p><button id="reveal-bot-token">Consultar token protegido</button>',
+    );
+    return;
+  }
+  if (button.id === 'edit-email') {
+    const account = accounts.find((a) => a.id === selected);
+    if (!account || account.firebase_uid) return;
+    dialog(
+      'Corrigir e-mail do lojista',
+      `<form id="email-correction-form"><input type="hidden" name="accountId" value="${esc(account.id)}"><input type="hidden" name="expectedEmail" value="${esc(account.email)}"><p>${esc(account.store_name)} · ${esc(account.name)}</p><label>E-mail correto<input name="email" type="email" required maxlength="254" autocomplete="off" value="${esc(account.email)}"></label><p class="note">A loja e as configurações serão preservadas. O convite anterior deixará de funcionar; após salvar, gere um novo convite.</p><button type="submit">Salvar e-mail correto</button></form>`,
     );
     return;
   }

@@ -8,6 +8,7 @@ export type AccountService = Pick<
   | 'history'
   | 'register'
   | 'confirm'
+  | 'changeEmail'
   | 'invite'
   | 'inspect'
   | 'accept'

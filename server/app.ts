@@ -977,6 +977,15 @@ export function createApp(
       account: await accounts.register(value, (req as unknown as AuthedRequest).identity.uid),
     });
   });
+  app.post('/api/admin/accounts/:id/email', rate('admin-email', 30, 60000), async (req, res) => {
+    res.json({
+      account: await accounts.changeEmail(
+        idSchema.parse(req.params.id),
+        req.body,
+        (req as unknown as AuthedRequest).identity.uid,
+      ),
+    });
+  });
   app.post('/api/admin/accounts/:id/confirm-purchase', async (req, res) =>
     res.json({
       account: await accounts.confirm(

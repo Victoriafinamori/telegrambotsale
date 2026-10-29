@@ -1,4 +1,11 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { z } from 'zod';
+export const emailCorrection = z
+  .object({
+    email: z.string().trim().toLowerCase().max(254).pipe(z.email()),
+    expectedEmail: z.string().trim().toLowerCase().max(254).pipe(z.email()),
+  })
+  .strict();
 import {
   HttpError,
   type Connection,
@@ -101,6 +108,43 @@ export class Accounts {
       ).rows[0];
       await this.audit(db, actor, 'purchase.confirmed', id);
       return updated;
+    });
+  }
+  async changeEmail(id: string, input: unknown, actor: string) {
+    const value = emailCorrection.parse(input);
+    return this.db.transaction(async (db) => {
+      const a = await this.locked(db, id);
+      if (a.firebase_uid)
+        throw new HttpError(
+          409,
+          'EMAIL_LINKED',
+          'O lojista já vinculou sua conta. O e-mail de login precisa ser alterado pelo próprio titular.',
+        );
+      if (a.email === value.email) return a;
+      if (a.email !== value.expectedEmail)
+        throw new HttpError(
+          409,
+          'ACCOUNT_CHANGED',
+          'O cadastro mudou. Atualize a página antes de editar.',
+        );
+      try {
+        const updated = (
+          await db.query<MerchantAccount>(
+            'UPDATE merchant_accounts SET email=$2 WHERE id=$1 RETURNING *',
+            [id, value.email],
+          )
+        ).rows[0];
+        await db.query(
+          'UPDATE merchant_invitations SET revoked_at=now() WHERE account_id=$1 AND used_at IS NULL AND revoked_at IS NULL',
+          [id],
+        );
+        await this.audit(db, actor, 'account.email_corrected', id);
+        return updated;
+      } catch (e) {
+        if ((e as { code?: string }).code === '23505')
+          throw new HttpError(409, 'EMAIL_EXISTS', 'Já existe uma contratação com esse e-mail.');
+        throw e;
+      }
     });
   }
   async invite(id: string, actor: string) {

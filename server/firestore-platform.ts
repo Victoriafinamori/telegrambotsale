@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { tokenHash, type Registration } from './accounts.js';
+import { tokenHash, emailCorrection, type Registration } from './accounts.js';
 import {
   HttpError,
   type Identity,
@@ -186,6 +186,40 @@ export class FirestorePlatform implements AccountService {
     return this.mutate(id, actor, 'purchase.confirmed', (a) =>
       a.purchase_confirmed_at ? a : { ...a, purchase_confirmed_at: new Date() },
     );
+  }
+  async changeEmail(id: string, input: unknown, actor: string) {
+    const value = emailCorrection.parse(input);
+    return this.store.transaction(async (tx) => {
+      const a = await this.account(tx, id);
+      if (a.firebase_uid)
+        throw new HttpError(
+          409,
+          'EMAIL_LINKED',
+          'O lojista já vinculou sua conta. O e-mail de login precisa ser alterado pelo próprio titular.',
+        );
+      if (a.email === value.email) return pick<MerchantAccount>(a, accountFields);
+      if (a.email !== value.expectedEmail)
+        throw new HttpError(
+          409,
+          'ACCOUNT_CHANGED',
+          'O cadastro mudou. Atualize a página antes de editar.',
+        );
+      const newPath = 'platform_emails/' + tokenHash(value.email),
+        oldPath = 'platform_emails/' + tokenHash(a.email);
+      const [existing, old] = await Promise.all([tx.get(newPath), tx.get(oldPath)]);
+      if (existing && existing.account_id !== id)
+        throw new HttpError(409, 'EMAIL_EXISTS', 'Já existe uma contratação com esse e-mail.');
+      const next = {
+        ...a,
+        email: value.email,
+        invitation_generation: (a.invitation_generation ?? 0) + 1,
+      };
+      tx.set(accountPath(id), next);
+      tx.set(newPath, { account_id: id });
+      if (old?.account_id === id) tx.delete(oldPath);
+      this.audit(tx, actor, 'account.email_corrected', id);
+      return pick<MerchantAccount>(next, accountFields);
+    });
   }
   async approve(id: string, actor: string) {
     return this.mutate(id, actor, 'access.approved', (a) => {
