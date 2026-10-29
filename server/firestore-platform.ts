@@ -294,6 +294,13 @@ export class FirestorePlatform implements AccountService {
       if (!invite) throw inviteError();
       const a = await this.account(tx, invite.account_id),
         link = await tx.get(uidPath(identity.uid));
+      if (
+        invite.used_at &&
+        a.firebase_uid === identity.uid &&
+        link?.account_id === a.id &&
+        a.email === identity.email.trim().toLowerCase()
+      )
+        return pick<MerchantAccount>(a, accountFields);
       if (!this.available(invite, a)) throw inviteError();
       if (a.email !== identity.email.trim().toLowerCase())
         throw new HttpError(
@@ -303,11 +310,18 @@ export class FirestorePlatform implements AccountService {
         );
       if (link)
         throw new HttpError(409, 'ALREADY_BOUND', 'Essa conta já está vinculada a uma loja.');
-      const next = { ...a, firebase_uid: identity.uid };
+      const next = {
+        ...a,
+        firebase_uid: identity.uid,
+        access_status: 'approved',
+        approved_at: a.approved_at || new Date(),
+        suspension_reason: null,
+      };
       tx.set(accountPath(a.id), next);
       tx.set(uidPath(identity.uid), { account_id: a.id });
       tx.set(path, { ...invite, used_at: new Date() });
       this.audit(tx, identity.uid, 'invitation.accepted', a.id);
+      this.audit(tx, identity.uid, 'access.approved_by_invitation', a.id);
       return pick<MerchantAccount>(next, accountFields);
     });
   }

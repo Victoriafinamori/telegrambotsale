@@ -62,15 +62,26 @@ test('Firestore domain: invitation uniqueness, revocation, concurrent claim, app
   await assert.rejects(() => p.accept(invite.token, identity('other')), {
     code: 'INVITE_EMAIL_MISMATCH',
   });
+  await assert.rejects(
+    () => p.accept(invite.token, { ...identity('merchant'), emailVerified: false }),
+    { code: 'EMAIL_UNVERIFIED' },
+  );
   const claims = await Promise.allSettled([
     p.accept(invite.token, identity('merchant')),
     p.accept(invite.token, identity('merchant')),
   ]);
-  assert.equal(claims.filter((r) => r.status === 'fulfilled').length, 1);
+  assert.equal(claims.filter((r) => r.status === 'fulfilled').length, 2);
+  assert.equal((await p.own('merchant'))?.access_status, 'approved');
+  assert.equal((await p.own('merchant'))?.billing_started_at, null);
   await p.approve(a.id, 'admin');
   assert.equal((await p.own('merchant'))?.access_status, 'approved');
   assert.equal(await p.own('other'), null);
   await p.suspend(a.id, 'Review', 'admin');
+  assert.equal(
+    (await p.accept(invite.token, identity('merchant'))).access_status,
+    'suspended',
+    'Retrying an accepted invitation never reverses a suspension',
+  );
   assert.equal((await p.own('merchant'))?.access_status, 'suspended');
   await p.restore(a.id, 'admin');
   assert.equal((await p.own('merchant'))?.access_status, 'approved');

@@ -168,13 +168,27 @@ export class Accounts {
         );
       const a = await this.locked(db, candidate.account_id);
       const invitation = (
-        await db.query<{ id: string }>(
-          'SELECT id FROM merchant_invitations WHERE token_hash=$1 AND used_at IS NULL AND revoked_at IS NULL AND expires_at>now() FOR UPDATE',
+        await db.query<{
+          id: string;
+          used_at: Date | null;
+          revoked_at: Date | null;
+          expires_at: Date;
+        }>(
+          'SELECT id,used_at,revoked_at,expires_at FROM merchant_invitations WHERE token_hash=$1 FOR UPDATE',
           [tokenHash(token)],
         )
       ).rows[0];
       if (
+        invitation?.used_at &&
+        a.firebase_uid === identity.uid &&
+        a.email === identity.email.trim().toLowerCase()
+      )
+        return a;
+      if (
         !invitation ||
+        invitation.used_at ||
+        invitation.revoked_at ||
+        invitation.expires_at <= new Date() ||
         a.firebase_uid ||
         !a.purchase_confirmed_at ||
         a.access_status === 'suspended'
@@ -197,12 +211,13 @@ export class Accounts {
         throw new HttpError(409, 'ALREADY_BOUND', 'Essa conta já está vinculada a uma loja.');
       const updated = (
         await db.query<MerchantAccount>(
-          'UPDATE merchant_accounts SET firebase_uid=$1 WHERE id=$2 RETURNING *',
+          "UPDATE merchant_accounts SET firebase_uid=$1,access_status='approved',approved_at=COALESCE(approved_at,now()),suspension_reason=NULL WHERE id=$2 RETURNING *",
           [identity.uid, a.id],
         )
       ).rows[0];
       await db.query('UPDATE merchant_invitations SET used_at=now() WHERE id=$1', [invitation.id]);
       await this.audit(db, identity.uid, 'invitation.accepted', a.id);
+      await this.audit(db, identity.uid, 'access.approved_by_invitation', a.id);
       return updated;
     });
   }

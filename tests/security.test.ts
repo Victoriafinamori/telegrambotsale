@@ -71,8 +71,12 @@ test('Acesso manual e convites: autorização, isolamento, revogação e ausênc
     assert.equal((await stranger.request('/invitations/accept', { token: current })).status, 403);
     const claim = await merchant.request('/invitations/accept', { token: current });
     assert.equal(claim.status, 200);
-    assert.equal((await merchant.request('/invitations/accept', { token: current })).status, 410);
-    assert.equal((await merchant.request('/store')).status, 403);
+    assert.equal((await merchant.request('/invitations/accept', { token: current })).status, 200);
+    assert.equal(
+      (await merchant.request('/store')).status,
+      200,
+      'The owner-issued invitation grants access without another approval',
+    );
     assert.equal(
       (await merchant.request('/admin/accounts/' + account.id + '/approve', {})).status,
       403,
@@ -102,7 +106,7 @@ test('Acesso manual e convites: autorização, isolamento, revogação e ausênc
     await admin.request('/admin/accounts/' + account.id + '/restore', {});
     assert.equal((await merchant.request('/store')).status, 200);
     const events = await (await admin.request('/admin/audit')).json();
-    assert(events.events.some((v: { action: string }) => v.action === 'access.approved'));
+    assert(events.events.some((v: { action: string }) => v.action === 'access.approved_by_invitation'));
     assert(!JSON.stringify(events).includes(current));
     await f.db.query('DELETE FROM platform_admins WHERE firebase_uid=$1', ['admin']);
     assert.equal((await admin.request('/admin/accounts')).status, 403);
@@ -218,8 +222,9 @@ test('Limites persistidos e convite vencido ou consumido em concorrência', asyn
       f.accounts.accept(invitation.token, identity),
       f.accounts.accept(invitation.token, identity),
     ]);
-    assert.equal(results.filter((v) => v.status === 'fulfilled').length, 1);
-    assert.equal(results.filter((v) => v.status === 'rejected').length, 1);
+    assert.equal(results.filter((v) => v.status === 'fulfilled').length, 2);
+    assert.equal((await f.accounts.own('a'))?.access_status, 'approved');
+    assert.equal(results.filter((v) => v.status === 'rejected').length, 0);
     assert.equal(
       (await f.db.query('SELECT * FROM merchant_accounts WHERE firebase_uid=$1', ['a'])).rows
         .length,

@@ -1,4 +1,5 @@
 import { mountResale } from './resale.js';
+import { PendingInvitation, isPortalRoute } from './access-flow.js';
 import { mountAdminHealth } from './admin-health.js';
 import { renderSetupProgress, isSetupDismissed } from './setup-progress.js';
 import type { SetupProgress } from '../server/setup-progress.js';
@@ -101,7 +102,19 @@ function serviceUrl(path: string) {
     throw Error('Invalid API origin');
   return url.origin + path;
 }
-const inviteToken = () => new URLSearchParams(location.hash.split('?')[1] || '').get('token');
+let invitationStorage: Storage | undefined;
+try {
+  invitationStorage = localStorage;
+} catch {
+  /* Private browsing may block storage. */
+}
+const pendingInvitation = new PendingInvitation(invitationStorage);
+const inviteToken = () => pendingInvitation.read(location.hash);
+let invitationAuthStarted = false;
+const verificationReturnUrl = () => {
+  const token = inviteToken();
+  return location.origin + (token ? '/#/convite?token=' + encodeURIComponent(token) : '');
+};
 async function api<T = Record<string, unknown>>(
   path: string,
   body?: unknown,
@@ -204,7 +217,7 @@ function renderAuth() {
     reset = authMode === 'reset',
     verify = authMode === 'verify';
   shell(
-    `<main class="auth-shell"><section class="card auth-card"><span class="eyebrow">${inviteToken() ? 'Convite de acesso' : 'Sua loja no Telegram'}</span><h1>${verify ? 'Confirme seu e-mail' : reset ? 'Recuperar acesso' : signup ? 'Crie seu acesso' : 'Bem-vindo de volta'}</h1><p>${verify ? 'Abra o link de confirmação enviado ao seu e-mail. Depois, continue aqui.' : reset ? 'Enviaremos as instruções de recuperação se houver uma conta com esse e-mail.' : signup ? (new URLSearchParams(location.hash.split('?')[1] ?? '').get('checkout') === '1' ? 'Crie seu acesso para vincular o pagamento e a loja ao seu e-mail.' : 'Use o mesmo e-mail informado na contratação.') : 'Entre para acompanhar a ativação do bot e sua assinatura.'}</p>${verify ? `<div class="inline-actions"><button id="verified">Já confirmei meu e-mail</button><button class="quiet" id="resend">Reenviar confirmação</button></div><button class="text-button" data-auth-mode="login">Voltar para entrar</button>` : `<form id="auth-form"><label for="email">E-mail</label><input id="email" name="email" type="email" required maxlength="254" autocomplete="email" value="${esc(authEmail)}">${reset ? '' : `<label for="password">Senha</label><input id="password" name="password" type="password" minlength="${signup ? 12 : 1}" maxlength="128" required autocomplete="${signup ? 'new-password' : 'current-password'}">${signup ? '<small>Use pelo menos 12 caracteres e uma senha exclusiva.</small>' : ''}`}<button type="submit">${reset ? 'Enviar instruções' : signup ? 'Criar acesso' : 'Entrar'}</button></form><div class="auth-links"><button class="text-button" data-auth-mode="${signup || reset ? 'login' : 'signup'}">${signup || reset ? 'Já tenho acesso' : 'Primeiro acesso? Criar conta'}</button>${!reset && !signup ? '<button class="text-button" data-auth-mode="reset">Esqueci minha senha</button>' : ''}</div>`}${config?.emulatorHost && !verify ? '<details class="local-accounts"><summary>Contas locais de teste</summary><p>Senha: <code>BlackoutLocal!2026</code></p><button class="quiet" data-local-account="admin@blackout.test">Administrador local</button><button class="quiet" data-local-account="lojista@blackout.test">Lojista local</button></details>' : ''}<small class="auth-note">A contratação pode ocorrer pelo WhatsApp, Telegram, Discord ou outro canal. A Blackout Create cadastra sua loja e libera o convite.</small></section></main>`,
+    `<main class="auth-shell"><section class="card auth-card"><span class="eyebrow">${inviteToken() ? 'Convite de acesso' : 'Sua loja no Telegram'}</span><h1>${verify ? 'Confirme seu e-mail' : reset ? 'Recuperar acesso' : signup ? 'Crie seu acesso' : 'Bem-vindo de volta'}</h1><p>${verify ? (inviteToken() ? 'Confirme seu e-mail pelo link recebido. Ao voltar para esta aba, sua loja será vinculada automaticamente.' : 'Abra o link de confirmação enviado ao seu e-mail. Depois, continue aqui.') : reset ? 'Enviaremos as instruções de recuperação se houver uma conta com esse e-mail.' : signup ? (new URLSearchParams(location.hash.split('?')[1] ?? '').get('checkout') === '1' ? 'Crie seu acesso para vincular o pagamento e a loja ao seu e-mail.' : 'Use o mesmo e-mail informado na contratação.') : 'Entre para acompanhar a ativação do bot e sua assinatura.'}</p>${verify ? `<div class="inline-actions"><button id="verified">Já confirmei meu e-mail</button><button class="quiet" id="resend">Reenviar confirmação</button></div><button class="text-button" data-auth-mode="login">Voltar para entrar</button>` : `<form id="auth-form"><label for="email">E-mail</label><input id="email" name="email" type="email" required maxlength="254" autocomplete="email" value="${esc(authEmail)}">${reset ? '' : `<label for="password">Senha</label><input id="password" name="password" type="password" minlength="${signup ? 12 : 1}" maxlength="128" required autocomplete="${signup ? 'new-password' : 'current-password'}">${signup ? '<small>Use pelo menos 12 caracteres e uma senha exclusiva.</small>' : ''}`}<button type="submit">${reset ? 'Enviar instruções' : signup ? 'Criar acesso' : 'Entrar'}</button></form><div class="auth-links"><button class="text-button" data-auth-mode="${signup || reset ? 'login' : 'signup'}">${signup || reset ? 'Já tenho acesso' : 'Primeiro acesso? Criar conta'}</button>${!reset && !signup ? '<button class="text-button" data-auth-mode="reset">Esqueci minha senha</button>' : ''}</div>`}${config?.emulatorHost && !verify ? '<details class="local-accounts"><summary>Contas locais de teste</summary><p>Senha: <code>BlackoutLocal!2026</code></p><button class="quiet" data-local-account="admin@blackout.test">Administrador local</button><button class="quiet" data-local-account="lojista@blackout.test">Lojista local</button></details>' : ''}<small class="auth-note">A contratação pode ocorrer pelo WhatsApp, Telegram, Discord ou outro canal. A Blackout Create cadastra sua loja e libera o convite.</small></section></main>`,
   );
 }
 function accountRow(a: AdminMerchantAccount) {
@@ -321,7 +334,20 @@ function merchantView() {
   }
 }
 async function load() {
-  const route = location.hash.split('?')[0];
+  let route = location.hash.split('?')[0];
+  const pendingToken = inviteToken();
+  if (!pendingToken && invitationAuthStarted) {
+    invitationAuthStarted = false;
+    if (authMode === 'signup') authMode = 'login';
+  }
+  if (pendingToken && route !== '#/convite') {
+    route = '#/convite';
+    history.replaceState(
+      null,
+      '',
+      location.pathname + '#/convite?token=' + encodeURIComponent(pendingToken),
+    );
+  }
   if (route.startsWith('#/pagar/')) {
     await mountPixCheckout(app, route, async (path, body) => {
       let response: Response;
@@ -352,23 +378,24 @@ async function load() {
     });
     return;
   }
-  if (
-    !inviteToken() &&
-    ![
-      '#/comprar',
-      '#/entrar',
-      '#/conta',
-      '#/convite',
-      '#/minha-loja',
-      '#/gestao',
-      '#/configuracao',
-    ].includes(route)
-  ) {
+  if (!pendingToken && !isPortalRoute(route)) {
     renderLanding();
     return;
   }
+  shell(
+    `<main class="auth-shell"><section class="card"><h1>${pendingToken ? 'Abrindo seu convite' : 'Abrindo seu painel'}</h1><p role="status">Conferindo seu acesso à Blackout…</p></section></main>`,
+  );
   try {
     await ensureServices();
+    if (pendingToken && auth.currentUser && pendingInvitation.accountCreated) {
+      await reload(auth.currentUser);
+      await auth.currentUser.getIdToken(true);
+      if (!auth.currentUser.emailVerified) {
+        authMode = 'verify';
+        renderAuth();
+        return;
+      }
+    }
   } catch {
     renderPortalUnavailable();
     return;
@@ -380,7 +407,8 @@ async function load() {
     else if (
       e instanceof ApiError &&
       e.code === 'EMAIL_UNVERIFIED' &&
-      (route === '#/comprar' ||
+      (pendingToken ||
+        route === '#/comprar' ||
         new URLSearchParams(location.hash.split('?')[1] ?? '').get('checkout') === '1')
     ) {
       me = null;
@@ -405,18 +433,27 @@ async function load() {
     return;
   }
   if (token) {
-    const info = await api<{ storeName: string; emailHint: string }>('/invitations/inspect', {
-      token,
-    });
     if (!me) {
+      let info: { storeName: string; emailHint: string };
+      try {
+        info = await api('/invitations/inspect', { token });
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 410) pendingInvitation.clear();
+        shell(
+          `<main class="auth-shell"><section class="card"><h1>Confira seu convite</h1><p role="alert">${esc(error instanceof Error ? error.message : 'Não foi possível conferir o convite. Tente abri-lo novamente.')}</p><a class="button-link" href="#/entrar">Ir para meu acesso</a></section></main>`,
+        );
+        return;
+      }
+      if (!invitationAuthStarted && authMode !== 'verify') {
+        authMode = pendingInvitation.accountCreated ? 'login' : 'signup';
+        invitationAuthStarted = true;
+      }
       renderAuth();
       document.querySelector('.auth-card>p')!.textContent =
-        `Convite para ${info.storeName}. Entre ou crie sua conta com o e-mail cadastrado (${info.emailHint}).`;
+        `Convite para ${info.storeName}. ${authMode === 'signup' ? 'Crie seu acesso' : 'Entre'} com o e-mail cadastrado (${info.emailHint}). Após confirmar o e-mail, sua loja será vinculada automaticamente.`;
       return;
     }
-    shell(
-      `<main class="auth-shell"><section class="card"><span class="eyebrow">Convite de acesso</span><h1>${esc(info.storeName)}</h1><p>Você está conectado como ${esc(me.user.email)}. O convite deve corresponder ao e-mail cadastrado na contratação.</p><button id="accept-invite">Vincular minha loja</button></section></main>`,
-    );
+    await finishInvitation(token);
     return;
   }
   if (!me) {
@@ -568,6 +605,23 @@ async function load() {
     merchantView();
   }
 }
+async function finishInvitation(token: string) {
+  shell(
+    '<main class="auth-shell"><section class="card"><h1>Preparando sua loja</h1><p role="status">Confirmando seu convite e liberando o painel…</p></section></main>',
+  );
+  try {
+    await api('/invitations/accept', { token });
+    pendingInvitation.clear();
+    history.replaceState(null, '', location.pathname + '#/configuracao?step=bot');
+    await load();
+  } catch (error) {
+    const expired = error instanceof ApiError && error.status === 410;
+    if (expired) pendingInvitation.clear();
+    shell(
+      `<main class="auth-shell"><section class="card"><h1>${expired ? 'Convite indisponível' : 'Vamos conferir seu acesso'}</h1><p role="alert">${esc(error instanceof Error ? error.message : 'Não foi possível concluir o vínculo. Tente novamente.')}</p>${expired ? '<p>Peça à Blackout um novo convite para o e-mail cadastrado.</p>' : '<button id="resume-invitation">Tentar novamente</button>'}<button class="quiet" id="logout">Sair e usar outra conta</button></section></main>`,
+    );
+  }
+}
 async function renderAdminMfa() {
   const status = await api<{ enabled: boolean; available: boolean }>('/security/admin-mfa/status');
   let enrollment = '';
@@ -662,7 +716,10 @@ async function exchange() {
         (location.hash.startsWith('#/comprar') ||
         new URLSearchParams(location.hash.split('?')[1] ?? '').get('checkout') === '1'
           ? '#/comprar'
-          : '#/conta'),
+          : isPortalRoute(location.hash) &&
+              !['#/entrar', '#/convite'].includes(location.hash.split('?')[0])
+            ? location.hash
+            : '#/conta'),
     );
   await load();
 }
@@ -754,12 +811,14 @@ document.addEventListener('submit', (event) => {
       }
       if (authMode === 'signup') {
         await createUserWithEmailAndPassword(auth, authEmail, password);
-        await sendEmailVerification(auth.currentUser!, { url: location.origin });
+        if (inviteToken()) pendingInvitation.markAccountCreated();
+        await sendEmailVerification(auth.currentUser!, { url: verificationReturnUrl() });
         authMode = 'verify';
         renderAuth();
         return;
       }
       await signInWithEmailAndPassword(auth, authEmail, password);
+      if (inviteToken()) pendingInvitation.markAccountCreated();
       if (!auth.currentUser!.emailVerified) {
         authMode = 'verify';
         renderAuth();
@@ -951,13 +1010,10 @@ document.addEventListener('click', (event) => {
     else if (button.id === 'resend') {
       if (!auth.currentUser)
         throw new ApiError('LOGIN_REQUIRED', 'Entre novamente para reenviar a confirmação.', 401);
-      await sendEmailVerification(auth.currentUser, { url: location.origin });
+      await sendEmailVerification(auth.currentUser, { url: verificationReturnUrl() });
       flash('Confirmação reenviada. Confira seu e-mail.');
-    } else if (button.id === 'accept-invite') {
-      await api('/invitations/accept', { token: inviteToken() });
-      history.replaceState(null, '', location.pathname + '#/conta');
+    } else if (button.id === 'resume-invitation') {
       await load();
-      flash('Loja vinculada. Aguarde a aprovação da Blackout Create.');
     } else if (button.id === 'confirm-purchase') {
       await api('/admin/accounts/' + selected + '/confirm-purchase', {});
       await load();
@@ -998,4 +1054,10 @@ document.addEventListener('click', (event) => {
   });
 });
 window.addEventListener('hashchange', () => void task(load));
+const resumeVerifiedInvitation = () => {
+  if (!document.hidden && inviteToken() && authMode === 'verify' && auth?.currentUser)
+    void task(exchange);
+};
+window.addEventListener('focus', resumeVerifiedInvitation);
+document.addEventListener('visibilitychange', resumeVerifiedInvitation);
 await task(load);
