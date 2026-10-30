@@ -983,7 +983,7 @@ document.addEventListener('click', (event) => {
       const link = await api<{ url: string }>('/store/telegram-link', {});
       dialog(
         'Confirme sua conta no Telegram',
-        `<p>Abra este link com a conta pessoal do Telegram cujo ID você informou no cadastro e toque em <b>Iniciar</b>. Ele vence em 10 minutos e só pode ser usado uma vez.</p><a class="button-link" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Confirmar no meu bot</a><p>Depois, volte ao site e clique em Atualizar situação. Você pode configurar os produtos e o estoque pelo painel do site.</p>`,
+        `<ol class="guide-list"><li>Toque em <b>Confirmar no meu bot</b> abaixo.</li><li>Abra com a <b>mesma conta pessoal</b> do ID cadastrado e toque em <b>Iniciar</b> no Telegram.</li><li>Aguarde a mensagem <b>Responsável confirmado</b> e volte ao site para atualizar a situação.</li></ol><a class="button-link" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Confirmar no meu bot</a><p class="note">Não digite apenas /start: a confirmação precisa do código incluído neste link. Se já abriu a conversa sem confirmar, volte aqui e toque no botão novamente. O link vence em 10 minutos.</p><p>Se o bot não responder, a hospedagem pode estar desconectada. Confira a situação antes de repetir.</p>`,
       );
     } else if (button.id === 'enroll-admin-mfa') {
       const result = await api<{ secret: string }>('/security/admin-mfa/enroll', {});

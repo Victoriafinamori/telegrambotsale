@@ -919,6 +919,28 @@ export class BotStore {
             say(
               'Este vínculo está vencido ou não corresponde à sua conta. Gere outro link no site.',
             );
+        } else if (
+          cmd === '/start' &&
+          !argument &&
+          operational &&
+          !shop.owner_id &&
+          userId === setup.telegram_user_id
+        ) {
+          say(
+            'Seu bot está conectado. Falta confirmar sua conta como responsável.\n\nVolte ao site Blackout, toque em “Confirmar minha conta no Telegram” e abra o novo link com esta mesma conta. Depois toque em Iniciar no Telegram.\n\nDigitar apenas /start não confirma o vínculo. O link é válido por 10 minutos.',
+            {
+              inline_keyboard: [
+                [
+                  {
+                    text: 'Voltar à confirmação no site',
+                    url:
+                      (this.checkoutOrigin ?? 'https://blackout-create.web.app') +
+                      '/#/configuracao',
+                  },
+                ],
+              ],
+            },
+          );
         } else if (cmd === '/cancelar' || cmd === 'admin:cancel') {
           customer.session = null;
           saveCustomer();

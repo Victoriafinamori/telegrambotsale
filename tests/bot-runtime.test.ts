@@ -2008,6 +2008,11 @@ test('Bot binds Telegram owner through the authenticated merchant, once, and sco
   const f = await fixture(false),
     other = await fixture(false, f.store, 'other', '223456789');
   assert.equal((await f.bots.status(f.a.id)).ownerVerified, false);
+  const plainStart = await f.send(111111111, '/start');
+  assert.match(String(plainStart[0].payload.text), /Digitar apenas \/start não confirma/);
+  assert.equal((await f.bots.status(f.a.id)).ownerVerified, false);
+  const buyerStart = await f.send(222222222, '/start');
+  assert(!JSON.stringify(buyerStart).includes('Voltar à confirmação no site'));
   const link = await f.bots.ownerLink(f.a.id, 'merchant'),
     argument = new URL(link.url).searchParams.get('start');
   await assert.rejects(() => f.bots.ownerLink(f.a.id, 'other'), {
