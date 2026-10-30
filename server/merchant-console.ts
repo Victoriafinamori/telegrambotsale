@@ -1,4 +1,5 @@
 import { refreshSharedCatalog } from './resale-stock.js';
+import { productGrant } from './resale-grant.js';
 import { modeInput, configureStock, syncStock } from './stock-modes.js';
 import { stockItems, stockVersion, changeStock } from './stock-management.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -173,6 +174,18 @@ export class MerchantConsole {
         throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'Produto não encontrado.');
       if (!current && shop.products.length >= 40)
         throw new HttpError(409, 'PRODUCT_LIMIT', 'Limite de 40 produtos atingido.');
+      if (current?.resale_source) {
+        const source = current.resale_source,
+          supplier = await tx.get(botRoot(source.supplierId));
+        const original = supplier?.products.find((p: Product) => p.id === source.productId);
+        const grant = await productGrant(tx, source.supplierId, id, source.productId, original);
+        if (!grant?.enabled || value.price <= grant.baseCents)
+          throw new HttpError(
+            409,
+            'RESELLER_PRICE_TOO_LOW',
+            'O preço de revenda deve ser maior que o valor de fornecedor atual.',
+          );
+      }
       const { revision, ...fields } = value,
         qr = value.pix_qr ?? current?.pix_qr ?? '',
         product: Product = {

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Doc, DocumentStore, DocumentTransaction } from './document-store.js';
 import { botTransaction } from './bot-data.js';
 import { HttpError } from './types.js';
+import { productGrant } from './resale-grant.js';
 
 const cents = z.number().int().min(1).max(10000000);
 const identifier = z.uuid();
@@ -213,9 +214,9 @@ export class ResaleCatalog {
     return botTransaction(this.store, async (tx) => {
       await this.owner(tx, partnerId, uid);
       const supplier = await tx.get(accountPath(supplierId)),
-        grant = await tx.get(`resale_suppliers/${supplierId}/grants/${partnerId}_${productId}`),
         shop = await tx.get('bot_shops/' + supplierId);
       const product = shop?.products.find((p: Doc) => p.id === productId && p.enabled);
+      const grant = await productGrant(tx, supplierId, partnerId, productId, product);
       const profile = await tx.get('resale_profiles/' + partnerId);
       if (
         supplier?.access_status !== 'approved' ||
@@ -233,6 +234,8 @@ export class ResaleCatalog {
         productId,
         title: product.title,
         description: product.description,
+        banner: '',
+        category: product.category,
         stock: product.stock,
         stockMode: product.stock_mode ?? 'individual',
         priceCents,

@@ -5,6 +5,7 @@ import { botPath, botRoot } from './bot-data.js';
 import { SecretVault } from './secret-vault.js';
 import { HttpError } from './types.js';
 import { reserveUnits, consumeStock, restoreStock, syncStock } from './stock-modes.js';
+import { productGrant } from './resale-grant.js';
 export async function refreshSharedCatalog(tx: DocumentTransaction, id: string, shop: Shop) {
   if (!shop.products.some((p) => p.resale_source)) return;
   const profile = await tx.get('resale_profiles/' + id);
@@ -16,12 +17,14 @@ export async function refreshSharedCatalog(tx: DocumentTransaction, id: string, 
       tx.get('merchant_accounts/' + source.supplierId),
     ]);
     const product = supplier?.products.find((v: Product) => v.id === source.productId && v.enabled);
+    const resolved =
+      grant ?? (await productGrant(tx, source.supplierId, id, source.productId, product));
     p.stock =
       profile?.products === 'approved' &&
-      grant?.enabled &&
+      resolved?.enabled &&
       account?.access_status === 'approved' &&
       product &&
-      p.price > grant.baseCents
+      p.price > resolved.baseCents
         ? product.stock
         : 0;
     p.stock_mode = product?.stock_mode ?? 'individual';
@@ -44,13 +47,15 @@ export async function reserveShared(
   const original = supplier?.products.find((v: Product) => v.id === source.productId && v.enabled),
     target = botPath(source.supplierId, 'products', source.productId),
     stock = await tx.get(target);
+  const resolved =
+    grant ?? (await productGrant(tx, source.supplierId, id, source.productId, original));
   if (
     !original ||
     !stock ||
-    !grant?.enabled ||
+    !resolved?.enabled ||
     profile?.products !== 'approved' ||
     account?.access_status !== 'approved' ||
-    p.price <= grant.baseCents
+    p.price <= resolved.baseCents
   )
     throw new HttpError(409, 'SUPPLIER_UNAVAILABLE', 'Produto do fornecedor indisponível.');
   const selected = reserveUnits(stock, quantity);
@@ -71,7 +76,7 @@ export async function reserveShared(
     quantity,
     units,
     stock_mode: stock.mode ?? 'individual',
-    resale_source: { ...source, baseCents: grant.baseCents, originalUnits: selected },
+    resale_source: { ...source, baseCents: resolved.baseCents, originalUnits: selected },
   } as Order['items'][number];
 
   return item;

@@ -3377,94 +3377,185 @@ test('Resale HTTP keeps normal merchants separate and protects global inventory 
   }
 });
 
-test('Shared product checkout reserves central stock, protects supplier base in Pix, credits margin once and restores cancellation to origin', async () => {
+test('Approved reseller publishes customized global product and cannot lower its price to the supplier cost', async () => {
+  const { ResaleProgram } = await import('../server/resale-program.js');
   const p = await purinFixture(),
     f = p.f,
     supplier = randomUUID(),
-    sourcePid = 'abcdef123456';
+    sourcePid = 'abcdef123456',
+    portal = new MerchantConsole(f.store, f.key, f.bots);
   await botTransaction(f.store, async (tx) => {
-    const local = await tx.get('bot_shops/' + f.a.id);
+    tx.set('resale_platform/settings', { supplier_id: supplier, owner_uid: 'supplier' });
     tx.set('merchant_accounts/' + supplier, {
       id: supplier,
       firebase_uid: 'supplier',
       access_status: 'approved',
     });
     tx.set('resale_profiles/' + f.a.id, { products: 'approved' });
-    const source = {
-      id: sourcePid,
-      title: 'Produto central',
-      description: 'Compartilhado',
-      category: 'Global',
-      price: 500,
-      stock: 2,
-      enabled: true,
-    };
-    const vault = new SecretVault(f.key);
-    tx.set('bot_shops/' + supplier, { products: [source], portal_revision: 0 });
-    tx.set('bot_shops/' + supplier + '/products/' + sourcePid, {
-      units: ['CENTRAL-ONE', 'CENTRAL-TWO'].map((text, i) => ({
-        id: 'unit' + i,
-        ciphertext: vault.seal(
-          JSON.stringify({ kind: 'text', text }),
-          supplier + ':stock:' + sourcePid + ':unit' + i,
-        ),
-      })),
+    tx.set('bot_shops/' + supplier, {
+      products: [
+        {
+          id: sourcePid,
+          title: 'Global',
+          description: 'Original',
+          category: 'Streaming',
+          price: 899,
+          stock: 2,
+          enabled: true,
+        },
+      ],
     });
-    tx.set('resale_suppliers/' + supplier + '/grants/' + f.a.id + '_' + sourcePid, {
-      partnerId: f.a.id,
-      productId: sourcePid,
-      enabled: true,
-      baseCents: 500,
-      revision: 1,
-    });
-    const product = local!.products.find((v: any) => v.id === p.pid);
-    product.price = 1000;
-    product.resale_source = { supplierId: supplier, productId: sourcePid };
-    tx.set('bot_shops/' + f.a.id, local!);
   });
-  const result = await f.click(333333333, 'buy:' + p.pid);
-  const summary = result.find((e) => String(e.payload.text).includes('Pix automático'))!;
-  assert(summary);
-  const oid = (summary.payload.reply_markup as any).inline_keyboard[0][0].callback_data.slice(
-    'pix-generate:'.length,
+  const program = new ResaleProgram(f.store, async () => false, portal);
+  await assert.rejects(
+    () => program.publishProduct(f.a.id, 'merchant', { productId: sourcePid, priceCents: 899 }),
+    { code: 'SUPPLIER_UNAVAILABLE' },
   );
+  const published = await program.publishProduct(f.a.id, 'merchant', {
+    productId: sourcePid,
+    priceCents: 1600,
+    description: 'Minha descrição',
+    banner: 'OWN_BANNER',
+  });
+  let catalog = await portal.read(f.a.id, 'merchant');
+  const product = catalog.products.find((p) => p.id === published.id)!;
+  assert.equal(product.description, 'Minha descrição');
+  assert.equal(product.banner, 'OWN_BANNER');
+  assert.equal(product.stock, 2);
+  assert.equal(product.resale_source?.supplierId, supplier);
+  await assert.rejects(
+    () =>
+      portal.saveProduct(f.a.id, 'merchant', {
+        id: product.id,
+        title: product.title,
+        description: product.description,
+        category: product.category,
+        price: 899,
+        enabled: true,
+        banner: 'OWN_BANNER',
+        revision: catalog.revision,
+      }),
+    { code: 'RESELLER_PRICE_TOO_LOW' },
+  );
+  await program.publishProduct(f.a.id, 'merchant', { productId: sourcePid, priceCents: 1700 });
+  catalog = await portal.read(f.a.id, 'merchant');
+  assert.equal(catalog.products.filter((p) => p.id === product.id).length, 1);
+  assert.equal(catalog.products.find((p) => p.id === product.id)?.description, 'Minha descrição');
+  const chooser = await f.click(111111111, 'admin:new');
+  assert(JSON.stringify(chooser).includes('Estoque global Blackout'));
+  const globalList = await f.click(111111111, 'admin:globalproducts:0');
+  assert(JSON.stringify(globalList).includes('Global'));
+  await f.click(111111111, 'admin:globalpick:' + sourcePid);
+  const tooLow = await f.send(111111111, '8,99');
+  assert(JSON.stringify(tooLow).includes('maior'));
+  const posted = await f.send(111111111, '18,00');
+  assert(JSON.stringify(posted).includes('Produto publicado'));
+  await f.click(111111111, 'admin:field:description:' + product.id);
+  await f.send(111111111, 'Descrição pelo Telegram');
+  await f.click(111111111, 'admin:field:price:' + product.id);
+  await f.send(111111111, '8,99');
+  catalog = await portal.read(f.a.id, 'merchant');
+  assert.equal(catalog.products.find((p) => p.id === product.id)?.price, 1800);
   assert.equal(
-    (await f.store.get('bot_shops/' + supplier + '/products/' + sourcePid))!.units.length,
-    1,
+    catalog.products.find((p) => p.id === product.id)?.description,
+    'Descrição pelo Telegram',
   );
-  const base = await f.bots.checkoutForBot(f.auth, '333333333', oid);
-  await p.service.create(base);
-  const charge = [...p.charges.values()][0];
-  assert.equal(charge.subaccountFeeCents, 500);
-  assert.equal(charge.subaccountId, 'sacc_pilot');
-  charge.status = 'paid';
-  await p.notify(charge);
-  await p.notify(charge);
-  const order = (await f.store.get('bot_shops/' + f.a.id + '/orders/' + oid))!;
-  assert.equal(order.status, 'paid');
-  const effects = await f.effects(order.delivery_effects);
-  assert(effects.some((e) => String(e.payload.text).includes('CENTRAL-ONE')));
-  const commissions = await f.store.list('resale_commissions', { limit: 10 });
-  assert.equal(commissions.length, 1);
-  assert.equal(commissions[0].partnerCents, 430);
-  assert.equal(commissions[0].baseCents, 500);
-  assert.equal(
-    (await f.store.get('bot_shops/' + supplier + '/products/' + sourcePid))!.shared_reserved,
-    0,
-  );
-  const second = await f.click(444444444, 'buy:' + p.pid),
-    card = second.find((e) => String(e.payload.text).includes('Pix automático'))!;
-  const secondOid = (card.payload.reply_markup as any).inline_keyboard[0][0].callback_data.slice(
-    'pix-generate:'.length,
-  );
-  assert.equal(
-    (await f.store.get('bot_shops/' + supplier + '/products/' + sourcePid))!.units.length,
-    0,
-  );
-  await f.click(444444444, 'cancel:' + secondOid);
-  await f.click(444444444, 'cancel:' + secondOid);
-  assert.equal(
-    (await f.store.get('bot_shops/' + supplier + '/products/' + sourcePid))!.units.length,
-    1,
-  );
+  const buyer = await f.click(222222222, 'admin:globalproducts:0');
+  assert(!JSON.stringify(buyer).includes('admin:globalpick:'));
 });
+
+for (const globalDefault of [false, true])
+  test(`Shared product checkout (${globalDefault ? 'global catalog' : 'specific grant'}) reserves central stock, protects supplier base in Pix, credits margin once and restores cancellation to origin`, async () => {
+    const p = await purinFixture(),
+      f = p.f,
+      supplier = randomUUID(),
+      sourcePid = 'abcdef123456';
+    await botTransaction(f.store, async (tx) => {
+      const local = await tx.get('bot_shops/' + f.a.id);
+      tx.set('merchant_accounts/' + supplier, {
+        id: supplier,
+        firebase_uid: 'supplier',
+        access_status: 'approved',
+      });
+      tx.set('resale_profiles/' + f.a.id, { products: 'approved' });
+      const source = {
+        id: sourcePid,
+        title: 'Produto central',
+        description: 'Compartilhado',
+        category: 'Global',
+        price: 500,
+        stock: 2,
+        enabled: true,
+      };
+      const vault = new SecretVault(f.key);
+      tx.set('bot_shops/' + supplier, { products: [source], portal_revision: 0 });
+      tx.set('bot_shops/' + supplier + '/products/' + sourcePid, {
+        units: ['CENTRAL-ONE', 'CENTRAL-TWO'].map((text, i) => ({
+          id: 'unit' + i,
+          ciphertext: vault.seal(
+            JSON.stringify({ kind: 'text', text }),
+            supplier + ':stock:' + sourcePid + ':unit' + i,
+          ),
+        })),
+      });
+      if (globalDefault)
+        tx.set('resale_platform/settings', { supplier_id: supplier, owner_uid: 'supplier' });
+      else
+        tx.set('resale_suppliers/' + supplier + '/grants/' + f.a.id + '_' + sourcePid, {
+          partnerId: f.a.id,
+          productId: sourcePid,
+          enabled: true,
+          baseCents: 500,
+          revision: 1,
+        });
+      const product = local!.products.find((v: any) => v.id === p.pid);
+      product.price = 1000;
+      product.resale_source = { supplierId: supplier, productId: sourcePid };
+      tx.set('bot_shops/' + f.a.id, local!);
+    });
+    const result = await f.click(333333333, 'buy:' + p.pid);
+    const summary = result.find((e) => String(e.payload.text).includes('Pix automático'))!;
+    assert(summary);
+    const oid = (summary.payload.reply_markup as any).inline_keyboard[0][0].callback_data.slice(
+      'pix-generate:'.length,
+    );
+    assert.equal(
+      (await f.store.get('bot_shops/' + supplier + '/products/' + sourcePid))!.units.length,
+      1,
+    );
+    const base = await f.bots.checkoutForBot(f.auth, '333333333', oid);
+    await p.service.create(base);
+    const charge = [...p.charges.values()][0];
+    assert.equal(charge.subaccountFeeCents, 500);
+    assert.equal(charge.subaccountId, 'sacc_pilot');
+    charge.status = 'paid';
+    await p.notify(charge);
+    await p.notify(charge);
+    const order = (await f.store.get('bot_shops/' + f.a.id + '/orders/' + oid))!;
+    assert.equal(order.status, 'paid');
+    const effects = await f.effects(order.delivery_effects);
+    assert(effects.some((e) => String(e.payload.text).includes('CENTRAL-ONE')));
+    const commissions = await f.store.list('resale_commissions', { limit: 10 });
+    assert.equal(commissions.length, 1);
+    assert.equal(commissions[0].partnerCents, 430);
+    assert.equal(commissions[0].baseCents, 500);
+    assert.equal(
+      (await f.store.get('bot_shops/' + supplier + '/products/' + sourcePid))!.shared_reserved,
+      0,
+    );
+    const second = await f.click(444444444, 'buy:' + p.pid),
+      card = second.find((e) => String(e.payload.text).includes('Pix automático'))!;
+    const secondOid = (card.payload.reply_markup as any).inline_keyboard[0][0].callback_data.slice(
+      'pix-generate:'.length,
+    );
+    assert.equal(
+      (await f.store.get('bot_shops/' + supplier + '/products/' + sourcePid))!.units.length,
+      0,
+    );
+    await f.click(444444444, 'cancel:' + secondOid);
+    await f.click(444444444, 'cancel:' + secondOid);
+    assert.equal(
+      (await f.store.get('bot_shops/' + supplier + '/products/' + sourcePid))!.units.length,
+      1,
+    );
+  });

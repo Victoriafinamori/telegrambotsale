@@ -117,7 +117,38 @@
           };
         if (path === '/store/manage') return structuredClone(data);
         if (path === '/store/resale') return structuredClone(own);
-        if (path === '/store/resale/products') return { products: [] };
+        if (path === '/store/resale/products')
+          return {
+            products: new URLSearchParams(location.search).has('reseller')
+              ? [
+                  {
+                    productId: 'abcdef123456',
+                    title: 'Produto do estoque global · exemplo',
+                    description: 'Descrição do fornecedor para personalizar.',
+                    category: 'Estoque global',
+                    banner: '',
+                    baseCents: 899,
+                    stock: 3,
+                    stockMode: 'individual',
+                  },
+                ]
+              : [],
+          };
+        if (path === '/store/resale/products/publish') {
+          products.push({
+            id: 'abcdef000001',
+            title: 'Produto do estoque global · exemplo',
+            category: 'Estoque global',
+            description: body.description,
+            banner: body.banner,
+            price: body.priceCents,
+            stock: 3,
+            enabled: true,
+            resale_source: { supplierId: 'demo', productId: body.productId },
+          });
+          data.revision++;
+          return { id: 'abcdef000001' };
+        }
         if (path === '/store/resale/plans')
           return {
             enabled: false,

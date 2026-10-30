@@ -100,6 +100,43 @@ test('Ordinary merchants start with no resale permissions and opt in independent
     { code: 'RESALE_CHANGED' },
   );
 });
+test('Approval exposes the global catalog by default; supplier prices and explicit blocks remain authoritative', async () => {
+  const { service, store, catalog } = await fixture();
+  await service.initialize('owner', supplier);
+  assert.equal((await service.offers(partner, 'partner')).products.length, 0);
+  await service.request(partner, 'partner', { capability: 'products', enabled: true, revision: 0 });
+  await service.decide('owner', partner, {
+    capability: 'products',
+    status: 'approved',
+    revision: 1,
+  });
+  const offers = await service.offers(partner, 'partner');
+  assert.equal(offers.products.length, 1);
+  assert.equal(offers.products[0].baseCents, 999);
+  await assert.rejects(() => catalog.quoteProduct(supplier, partner, 'partner', pid, 999), {
+    code: 'RESELLER_PRICE_TOO_LOW',
+  });
+  await service.grant('owner', {
+    partnerId: partner,
+    productId: pid,
+    baseCents: 899,
+    enabled: true,
+    revision: 0,
+  });
+  assert.equal((await service.offers(partner, 'partner')).products[0].baseCents, 899);
+  await service.grant('owner', {
+    partnerId: partner,
+    productId: pid,
+    baseCents: 899,
+    enabled: false,
+    revision: 1,
+  });
+  assert.equal((await service.offers(partner, 'partner')).products.length, 0);
+  await assert.rejects(() => catalog.quoteProduct(supplier, partner, 'partner', pid, 1600), {
+    code: 'SUPPLIER_UNAVAILABLE',
+  });
+});
+
 test('Supplier grants expose only approved products, with immediate revocation and separate plans permission', async () => {
   const { service, catalog } = await fixture();
   await service.initialize('owner', supplier);

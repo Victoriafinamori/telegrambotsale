@@ -5,6 +5,8 @@ import {
   consumeShared,
 } from './resale-stock.js';
 import { resaleRecipient } from './resale-finance.js';
+import { sharedOffer, publishSharedProduct } from './resale-product.js';
+import { productGrant } from './resale-grant.js';
 import {
   modeInput,
   configureStock,
@@ -1119,7 +1121,61 @@ export class BotStore {
             say(buyer ? buyerSummary(buyer) : 'Comprador não encontrado.');
           } else if (action === 'pending') await listOrders(true, undefined, true);
           else if (action.startsWith('history:')) await listOrders(true, action.slice(8));
-          else if (action === 'new') {
+          else if (
+            action === 'new' &&
+            (await tx.get('resale_profiles/' + id))?.products === 'approved'
+          ) {
+            customer.session = null;
+            say(
+              'Qual estoque deseja usar?',
+              buttons([
+                [['Estoque global Blackout', 'admin:globalproducts:0']],
+                [['Produto próprio', 'admin:newown']],
+                [['Voltar', 'admin']],
+              ]),
+            );
+          } else if (action.startsWith('globalproducts:')) {
+            const global = await tx.get('resale_platform/settings'),
+              supplier = global ? await tx.get('bot_shops/' + global.supplier_id) : null;
+            const offers: Product[] = [];
+            if (
+              global &&
+              (await tx.get('resale_profiles/' + id))?.products === 'approved' &&
+              global?.supplier_id !== id
+            ) {
+              for (const p of (supplier?.products ?? []) as Product[]) {
+                if (!p.enabled || p.resale_source) continue;
+                const grant = await productGrant(tx, global.supplier_id, id, p.id, p);
+                if (grant?.enabled) offers.push(p);
+              }
+            }
+            const page = Math.max(0, Number(action.slice(15)) || 0),
+              shown = offers.slice(page * 8, page * 8 + 8);
+            say(
+              'Estoque global · escolha o produto. O preço de fornecedor será mostrado antes de publicar.',
+              buttons([
+                ...shown.map((p) => [[p.title, 'admin:globalpick:' + p.id]] as [string, string][]),
+                ...(page > 0
+                  ? ([[['Anterior', 'admin:globalproducts:' + (page - 1)]]] as [string, string][][])
+                  : []),
+                ...(offers.length > (page + 1) * 8
+                  ? ([[['Próxima', 'admin:globalproducts:' + (page + 1)]]] as [string, string][][])
+                  : []),
+                [['Voltar', 'admin:new']],
+              ]),
+            );
+          } else if (action.startsWith('globalpick:')) {
+            try {
+              const offer = await sharedOffer(tx, id, action.slice(11));
+              customer.session = { step: 'resale_price', product: offer.product.id };
+              say(
+                `${offer.product.title}\n\nFornecedor: ${money(offer.baseCents, 'BRL')}.\nEstoque: ${offer.product.stock_mode === 'infinite' ? 'infinito' : offer.product.stock}.\n\nEnvie seu preço de venda, maior que o custo do fornecedor. Ex.: 16,00. Envie /cancelar para sair.`,
+              );
+            } catch (e) {
+              if (!(e instanceof HttpError)) throw e;
+              say(e.message, adminMenu());
+            }
+          } else if (action === 'new' || action === 'newown') {
             customer.session = { step: 'product_title' };
             say('Qual é o nome do produto? Envie /cancelar para sair.');
           } else if (['stock', 'edit'].includes(action))
@@ -1571,6 +1627,31 @@ export class BotStore {
           } else if (!owner) {
             customer.session = null;
             say('Operação indisponível.');
+          } else if (session.step === 'resale_price') {
+            const price = parsePrice(text, true);
+            try {
+              const offer = await sharedOffer(tx, id, session.product);
+              if (price === null || price <= offer.baseCents)
+                say(
+                  `O preço precisa ser maior que ${money(offer.baseCents, 'BRL')}. Envie outro valor.`,
+                );
+              else {
+                const linked = await publishSharedProduct(tx, id, shop, session.product, price);
+                customer.session = null;
+                this.audit(tx, id, 'resale.product_published_telegram', userId);
+                say(
+                  'Produto publicado com estoque global. Você pode personalizar a descrição e o banner.',
+                  buttons([
+                    [['Editar descrição', 'admin:field:description:' + linked.id]],
+                    [['Banner do produto', 'admin:productbanner:' + linked.id]],
+                    [['Voltar', 'admin']],
+                  ]),
+                );
+              }
+            } catch (e) {
+              if (!(e instanceof HttpError)) throw e;
+              say(e.message, adminMenu());
+            }
           } else if (session.step === 'product_title') {
             if (text.length < 1 || text.length > 70) say('Use de 1 a 70 caracteres.');
             else {
@@ -1817,7 +1898,12 @@ export class BotStore {
               say('Produto não encontrado.');
             } else if (field === 'price') {
               const price = parsePrice(text, shop.payment_mode === 'manual');
+              const offer = p.resale_source
+                ? await sharedOffer(tx, id, p.resale_source.productId).catch(() => null)
+                : null;
               if (price === null) say('Preço inválido.');
+              else if (p.resale_source && (!offer || price <= offer.baseCents))
+                say('O preço de revenda deve ser maior que o valor atual do fornecedor.');
               else {
                 p.price = price;
                 customer.session = null;
