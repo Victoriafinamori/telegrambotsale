@@ -23,7 +23,7 @@ import {
 } from 'firebase/auth';
 import type { MerchantAccount, AdminMerchantAccount } from '../server/types.js';
 import type { BotSetup } from '../server/bot-onboarding.js';
-import { botGuide, attachBotGuide } from './onboarding.js';
+import { botGuide, attachBotGuide, ownerConfirmationContent } from './onboarding.js';
 import { adminBotCard, activationLabels } from './admin-bot.js';
 import { mountPurinAdmin } from './purin-admin.js';
 import { mountSubscriptionAdmin } from './subscription.js';
@@ -981,9 +981,17 @@ document.addEventListener('click', (event) => {
   void task(async () => {
     if (button.id === 'connect-telegram-owner') {
       const link = await api<{ url: string }>('/store/telegram-link', {});
-      dialog(
-        'Confirme sua conta no Telegram',
-        `<ol class="guide-list"><li>Toque em <b>Confirmar no meu bot</b> abaixo.</li><li>Abra com a <b>mesma conta pessoal</b> do ID cadastrado e toque em <b>Iniciar</b> no Telegram.</li><li>Aguarde a mensagem <b>Responsável confirmado</b> e volte ao site para atualizar a situação.</li></ol><a class="button-link" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Confirmar no meu bot</a><p class="note">Não digite apenas /start: a confirmação precisa do código incluído neste link. Se já abriu a conversa sem confirmar, volte aqui e toque no botão novamente. O link vence em 10 minutos.</p><p>Se o bot não responder, a hospedagem pode estar desconectada. Confira a situação antes de repetir.</p>`,
+      dialog('Confirme sua conta no Telegram', ownerConfirmationContent(link.url));
+    } else if (
+      button.id === 'refresh-owner-confirmation' ||
+      button.id === 'refresh-owner-progress'
+    ) {
+      document.querySelector('dialog')?.remove();
+      await load();
+      flash(
+        botRuntime?.ownerVerified
+          ? 'Responsável confirmado no Telegram. Continue a configuração da sua loja.'
+          : 'A confirmação ainda não apareceu. Abra o link com a conta do ID cadastrado e toque em Iniciar.',
       );
     } else if (button.id === 'enroll-admin-mfa') {
       const result = await api<{ secret: string }>('/security/admin-mfa/enroll', {});

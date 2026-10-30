@@ -5,6 +5,9 @@ const esc = (v: unknown) =>
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!,
   );
+export function ownerConfirmationContent(url: string) {
+  return `<ol class="guide-list"><li>Toque em <b>Confirmar no meu bot</b> abaixo.</li><li>Abra com a <b>mesma conta pessoal</b> do ID cadastrado e toque em <b>Iniciar</b> no Telegram.</li><li>Aguarde a mensagem <b>Responsável confirmado</b> e volte para esta janela.</li></ol><div class="owner-confirmation-actions"><a class="button-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Confirmar no meu bot</a><button type="button" class="quiet" id="refresh-owner-confirmation">Já confirmei no Telegram · Atualizar situação</button></div><p class="note">Não digite apenas /start: a confirmação precisa do código incluído neste link. Se já abriu a conversa sem confirmar, toque no primeiro botão novamente. O link vence em 10 minutos.</p><p>Se o bot não responder, a hospedagem pode estar desconectada. Confira a situação antes de repetir.</p>`;
+}
 export function attachBotGuide(root: ParentNode, botIndex: number) {
   const guide = root.querySelector<HTMLElement>('[data-setup-aux]');
   const panel = root.querySelector<HTMLElement>(`[data-setup-panel="${botIndex}"]`);

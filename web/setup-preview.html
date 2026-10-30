@@ -16,7 +16,7 @@
       <main class="merchant-shell" id="preview"></main>
     </div>
     <script type="module">
-      import { botGuide, attachBotGuide } from '/onboarding.ts';
+      import { botGuide, attachBotGuide, ownerConfirmationContent } from '/onboarding.ts';
       import { renderSetupProgress } from '/setup-progress.ts';
       import '/mobile-workspace.css';
       if (!import.meta.env.DEV) throw Error('Somente desenvolvimento');
@@ -66,10 +66,35 @@
           },
         ],
       };
+      const ownerDemo = new URLSearchParams(location.search).has('owner');
+      if (ownerDemo) {
+        progress.completed = 2;
+        progress.steps[1].state = 'done';
+        progress.steps[2].state = 'current';
+        progress.steps[2].action = { label: 'Confirmar no Telegram', command: 'owner' };
+      }
       const render = () => {
         host.innerHTML = `<div class="page-heading"><div><h1>Primeiros passos</h1></div><a class="button-link quiet" href="/stock-preview.html">Voltar à loja</a></div>${renderSetupProgress(progress, 'connection', 'setup-preview', true)}<div data-setup-aux>${botGuide(step >= 3 ? { bot_username: 'LojaDemonstracaoBot', telegram_user_id: '123456789', activation_status: 'pending' } : null, step, false)}</div>`;
         attachBotGuide(host, 1);
       };
+      document.addEventListener('click', (e) => {
+        const id = e.target.closest('button')?.id;
+        if (id === 'connect-telegram-owner') {
+          const dialog = document.createElement('dialog');
+          dialog.innerHTML = `<div class="card-heading"><h2>Confirme sua conta no Telegram</h2><button type="button" data-close>Fechar</button></div>${ownerConfirmationContent('https://t.me/ExampleBot?start=demo_ficticio')}`;
+          document.body.append(dialog);
+          dialog.querySelector('[data-close]').addEventListener('click', () => dialog.remove());
+          dialog.showModal();
+        }
+        if (id === 'refresh-owner-confirmation' || id === 'refresh-owner-progress') {
+          document.querySelector('dialog')?.remove();
+          document.querySelector('[data-preview-status]')?.remove();
+          host.insertAdjacentHTML(
+            'afterbegin',
+            '<p role="status" data-preview-status>Demonstração: situação atualizada. A confirmação ainda está pendente.</p>',
+          );
+        }
+      });
       host.addEventListener('click', (e) => {
         const id = e.target.closest('button')?.id;
         if (id === 'guide-next' || id === 'guide-back') {

@@ -1,3 +1,14 @@
+.owner-confirmation-actions {
+  display: grid;
+  gap: 12px;
+  margin: 20px 0;
+}
+.owner-confirmation-actions :is(button, a) {
+  width: 100%;
+  white-space: normal;
+  line-height: 1.5;
+  min-height: 48px;
+}
 /* Mobile uses document scrolling, so the browser can keep focused fields above its keyboard. */
 @media (max-width: 760px) {
   main.merchant-shell {
