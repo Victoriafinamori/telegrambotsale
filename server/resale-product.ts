@@ -30,6 +30,30 @@ export async function sharedOffer(tx: DocumentTransaction, accountId: string, pr
     baseCents: grant.baseCents as number,
   };
 }
+// One consistent snapshot, with independent grants read together rather than serially.
+export async function sharedCatalog(tx: DocumentTransaction, accountId: string) {
+  const [settings, profile] = await Promise.all([
+    tx.get('resale_platform/settings'),
+    tx.get('resale_profiles/' + accountId),
+  ]);
+  if (!settings || settings.supplier_id === accountId || profile?.products !== 'approved')
+    return [];
+  const supplier = await tx.get('bot_shops/' + settings.supplier_id);
+  const products = ((supplier?.products ?? []) as Product[]).filter(
+    (p) => p.enabled && !p.resale_source,
+  );
+  const offers = await Promise.all(
+    products.map(async (p) => {
+      try {
+        return await sharedOffer(tx, accountId, p.id);
+      } catch (e) {
+        if (e instanceof HttpError) return null;
+        throw e;
+      }
+    }),
+  );
+  return offers.filter((p) => p !== null);
+}
 export async function publishSharedProduct(
   tx: DocumentTransaction,
   accountId: string,

@@ -7,7 +7,7 @@ import { botTransaction } from './bot-data.js';
 import { HttpError } from './types.js';
 import type { MerchantConsole } from './merchant-console.js';
 import { ResaleCatalog } from './resale-catalog.js';
-import { publishSharedProduct } from './resale-product.js';
+import { publishSharedProduct, sharedCatalog } from './resale-product.js';
 import type { Shop } from './bot-types.js';
 import { productInput } from './merchant-console.js';
 const root = 'resale_platform/settings';
@@ -219,41 +219,25 @@ export class ResaleProgram {
     return new ResaleCatalog(this.store, this.now).grantProduct(settings.supplier_id, uid, raw);
   }
   async offers(accountId: string, uid: string) {
-    const own = await this.own(accountId, uid);
-    if (own.permissions.products !== 'approved') return { products: [] };
-    const settings = await this.store.get(root);
-    if (!settings) return { products: [] };
-    const grants = await this.store.list(`resale_suppliers/${settings.supplier_id}/grants`, {
-      limit: 1000,
-      equals: ['partnerId', accountId],
+    return botTransaction(this.store, async (tx) => {
+      await this.merchant(tx, accountId, uid);
+      const offers = await sharedCatalog(tx, accountId);
+      return {
+        products: offers.map(({ product: p, baseCents, supplierId }) => ({
+          supplierId,
+          productId: p.id,
+          title: p.title,
+          description: p.description,
+          category: p.category,
+          banner: '',
+          stock: p.stock,
+          stockMode: p.stock_mode ?? 'individual',
+          baseCents,
+        })),
+      };
     });
-    const source = await this.store.get('bot_shops/' + settings.supplier_id);
-    const rows = (source?.products ?? [])
-      .filter((p: Doc) => p.enabled && !p.resale_source)
-      .map((p: Doc) => {
-        const grant = grants.find((g) => g.productId === p.id);
-        return grant ?? { enabled: true, productId: p.id, baseCents: p.price };
-      });
-    const catalog = new ResaleCatalog(this.store, this.now);
-    const products = [];
-    for (const row of rows) {
-      if (!row.enabled) continue;
-      try {
-        products.push(
-          await catalog.quoteProduct(
-            settings.supplier_id,
-            accountId,
-            uid,
-            row.productId,
-            row.baseCents + 1,
-          ),
-        );
-      } catch (error) {
-        if (!(error instanceof HttpError)) throw error;
-      }
-    }
-    return { products: products.map(({ priceCents, ...p }) => p) };
   }
+
   async publishProduct(accountId: string, uid: string, raw: unknown) {
     const input = z
       .object({

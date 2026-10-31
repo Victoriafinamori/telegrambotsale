@@ -170,6 +170,8 @@ export async function mountMerchantConsole(
     stockMode: string;
   }[] = [];
   let resaleSource = '';
+  let globalCategory = '';
+  let globalSearch = '';
   let navigationRequest = 0;
   let listLoading = false;
   let listError = '';
@@ -321,6 +323,17 @@ export async function mountMerchantConsole(
               : [value('support_phone'), value('support_url'), value('support')]
                   .filter(Boolean)
                   .join('\n');
+    const margin = host.querySelector<HTMLElement>('[data-resale-margin]');
+    const offer = resaleOffers.find(
+      (o) => o.productId === (selected?.resale_source?.productId ?? resaleSource),
+    );
+    if (margin && offer) {
+      const cents = Math.round(Number(value('price')) * 100);
+      margin.textContent =
+        Number.isFinite(cents) && cents > offer.baseCents
+          ? `Fornecedor: ${money(offer.baseCents)} · Sua margem antes da tarifa Purin: ${money(cents - offer.baseCents)}`
+          : `Informe um preço maior que ${money(offer.baseCents)} para ter margem na venda.`;
+    }
     preview.innerHTML = `<h3>Prévia no Telegram</h3><p class="mc-preview-note">Atualiza enquanto você edita. As mudanças só entram no bot depois de salvar.</p><div class="mc-telegram-preview"><div class="mc-preview-media"></div><strong>${esc(title)}</strong><p class="mc-preview-message">${esc(text || 'Seu texto aparecerá aqui.')}</p>${kind === 'product' ? `<b>${Number.isFinite(Number(value('price'))) ? esc(money(Math.round(Number(value('price')) * (data.payment_mode === 'manual' ? 100 : 1)), data.payment_mode === 'manual' ? 'BRL' : 'XTR')) : 'Preço do produto'}</b>` : ''}</div><div class="mc-preview-controls" aria-hidden="true">${(kind === 'appearance' ? ['Produtos', 'Minhas compras', 'Suporte'] : kind === 'product' ? ['Comprar', 'Voltar'] : kind === 'support' ? ['Falar com o suporte'] : kind === 'payments' ? ['Enviar comprovante'] : []).map((label) => `<span>${label}</span>`).join('')}</div><small>Representação aproximada; o Telegram adapta fontes e botões ao aparelho.</small>`;
     if (image) preview.querySelector('.mc-preview-media')!.append(image.cloneNode());
   };
@@ -366,6 +379,31 @@ export async function mountMerchantConsole(
             }</div></section>`
           : `<section class="mc-panel"><div class="mc-panel-head"><div><button class="text-button" data-action="all-categories">Voltar às categorias</button><h2 tabindex="-1">${esc(category)}</h2><p>${products.length} ${products.length === 1 ? 'produto nesta categoria' : 'produtos nesta categoria'}</p></div><button data-action="new-product">Adicionar produto</button></div><div class="mc-category-tools"><button class="quiet" data-action="rename-category">${icon('appearance')}Editar categoria</button><button class="quiet" data-action="delete-category">${icon('trash')}Excluir categoria</button></div><p class="mc-order-help">Use as setas para definir a ordem dos produtos no Telegram.</p><div class="mc-product-list">${products.map((p, index) => `<div class="mc-product-row" data-product-id="${p.id}"><button class="mc-product" data-edit="${p.id}"><span class="mc-product-image" ${p.banner ? `data-asset="${esc(p.banner)}"` : ''}>Sem foto</span><span><strong>${esc(p.title)}</strong><small>${p.enabled ? 'Disponível' : 'Oculto'}</small></span><span><b>${money(p.price, data.payment_mode === 'manual' ? 'BRL' : 'XTR')}</b><small>${p.stock_mode === 'infinite' ? '∞' : p.stock} un. · Editar</small></span></button><div class="mc-product-order" role="group" aria-label="Ordem de ${esc(p.title)}"><button class="mc-icon-button" data-move="${p.id}" data-direction="up" aria-label="Mover ${esc(p.title)} para cima" title="Mover para cima" ${index === 0 ? 'disabled' : ''}>${icon('up')}</button><button class="mc-icon-button" data-move="${p.id}" data-direction="down" aria-label="Mover ${esc(p.title)} para baixo" title="Mover para baixo" ${index === products.length - 1 ? 'disabled' : ''}>${icon('down')}</button></div></div>`).join('') || empty('Esta categoria ainda está vazia', 'Use Adicionar produto para começar.')}</div></section>`;
     }
+    if (section === 'products' && resaleOffers.length)
+      body =
+        `<section class="mc-global-intro"><div class="mc-global-mark" aria-hidden="true">${icon('products')}</div><div><span class="mc-global-eyebrow">REVENDA LIBERADA</span><h2>Venda sem abastecer estoque</h2><p>Escolha um produto da Blackout, defina seu preço e publique na sua loja. A entrega usa o estoque global.</p></div><button data-action="global-catalog">Escolher produtos ${icon('chevron')}</button></section>` +
+        body;
+    if (section === 'global-catalog') {
+      const categories = [...new Set(resaleOffers.map((p) => p.category))].sort((a, b) =>
+        a.localeCompare(b, 'pt-BR'),
+      );
+      const offers = resaleOffers.filter(
+        (p) =>
+          (!globalCategory || p.category === globalCategory) &&
+          (p.title + ' ' + p.category)
+            .toLocaleLowerCase('pt-BR')
+            .includes(globalSearch.toLocaleLowerCase('pt-BR')),
+      );
+      body = `<section class="mc-panel mc-global-catalog"><div class="mc-panel-head"><div><span class="mc-global-eyebrow">ESTOQUE GLOBAL BLACKOUT</span><h2>Escolha o que você quer vender</h2><p>1. Escolha o produto · 2. Defina seu preço · 3. Publique</p></div><button class="quiet" data-section="products">Voltar aos meus produtos</button></div><p class="mc-note">O custo do fornecedor fica com a Blackout. Sua margem, descontada a tarifa Purin, vai para sua carteira. Sem os 12% adicionais. Você não precisa enviar códigos nem repor estes produtos.</p><div class="mc-global-filters"><label>Buscar produto<input type="search" data-global-search value="${esc(globalSearch)}" placeholder="Ex.: Netflix" autocomplete="off"></label><label>Categoria<select data-global-category><option value="">Todas as categorias</option>${categories.map((c) => `<option ${globalCategory === c ? 'selected' : ''} value="${esc(c)}">${esc(c)}</option>`).join('')}</select></label></div><div class="mc-global-grid">${
+        offers
+          .map((p) => {
+            const current = data.products.find((v) => v.resale_source?.productId === p.productId);
+            return `<article class="mc-global-card"><div class="mc-global-card-top"><span>${esc(p.category)}</span><span class="mc-global-stock ${p.stock === 0 ? 'is-empty' : ''}">${p.stockMode === 'infinite' ? 'Sem limite' : p.stock > 0 ? p.stock + ' disponíveis' : 'Sem estoque agora'}</span></div><h3>${esc(p.title)}</h3><p>${esc(p.description || 'Personalize a descrição e o banner antes de publicar.')}</p><div class="mc-global-cost"><span>Custo por venda</span><strong>${money(p.baseCents)}</strong></div><small>${current ? 'Já está na sua loja. Edite sem duplicar.' : 'Você escolhe o preço final na próxima etapa.'}</small><button data-global-product="${p.productId}">${current ? 'Editar na minha loja' : 'Escolher produto'} ${icon('chevron')}</button></article>`;
+          })
+          .join('') ||
+        empty('Nenhum produto encontrado', 'Tente outro nome ou escolha Todas as categorias.')
+      }</div></section>`;
+    }
     if (section === 'product-edit') {
       const offer = resaleOffers.find(
         (o) => o.productId === (selected?.resale_source?.productId ?? resaleSource),
@@ -385,7 +423,7 @@ export async function mountMerchantConsole(
               enabled: true,
             } as Product)
           : undefined);
-      body = `<section class="mc-panel"><div class="mc-panel-head"><h2>${selected ? 'Editar produto' : 'Novo produto'}</h2><button class="quiet" data-section="products">Voltar ao catálogo</button></div><form data-form="product">${!selected && resaleOffers.length ? `<label>Origem do produto<select data-resale-source><option value="">Produto próprio · estoque da minha loja</option><optgroup label="Estoque global Blackout">${resaleOffers.map((o) => `<option value="${o.productId}" ${resaleSource === o.productId ? 'selected' : ''}>${esc(o.title)} · fornecedor ${money(o.baseCents)}</option>`).join('')}</optgroup></select></label>` : ''}${offer ? `<p class="mc-note">Estoque global · fornecedor: <b>${money(offer.baseCents)}</b>. Seu preço deve ser maior. Personalize a descrição e a foto; a entrega usa o estoque da Blackout.</p>` : ''}${revision()}${selected ? `<input type="hidden" name="id" value="${selected.id}">` : ''}${input('title', 'Nome do produto', p?.title ?? '', 'required maxlength="70"' + (offer && !selected ? ' readonly' : ''))}${area('description', 'Descrição', p?.description ?? '', 400)}<div class="mc-form-row"><label>Categoria<select name="category" required ${offer && !selected ? 'disabled' : ''}><option value="">Escolha uma categoria</option>${[
+      body = `<section class="mc-panel">${offer ? '<div class="mc-global-steps"><span>✓ Produto escolhido</span><b>2 · Defina o preço</b><span>3 · Publique na loja</span></div>' : ''}<div class="mc-panel-head"><h2>${offer ? esc(offer.title) : selected ? 'Editar produto' : 'Novo produto'}</h2><button class="quiet" data-section="products">Voltar ao catálogo</button></div><form data-form="product">${!selected && resaleOffers.length ? `<label>Origem do produto<select data-resale-source><option value="">Produto próprio · estoque da minha loja</option><optgroup label="Estoque global Blackout">${resaleOffers.map((o) => `<option value="${o.productId}" ${resaleSource === o.productId ? 'selected' : ''}>${esc(o.title)} · fornecedor ${money(o.baseCents)}</option>`).join('')}</optgroup></select></label>` : ''}${offer ? `<p class="mc-note">Estoque global · fornecedor: <b>${money(offer.baseCents)}</b>. Seu preço deve ser maior. Personalize a descrição e a foto; a entrega usa o estoque da Blackout. Não é preciso cadastrar códigos ou arquivos.</p>` : ''}${revision()}${selected ? `<input type="hidden" name="id" value="${selected.id}">` : ''}${input('title', 'Nome do produto', p?.title ?? '', 'required maxlength="70"' + (offer && !selected ? ' readonly' : ''))}${area('description', 'Descrição', p?.description ?? '', 400)}<div class="mc-form-row"><label>Categoria<select name="category" required ${offer && !selected ? 'disabled' : ''}><option value="">Escolha uma categoria</option>${[
         ...new Set([
           ...(data.categories ?? []),
           ...data.products.map((v) => v.category),
@@ -399,7 +437,7 @@ export async function mountMerchantConsole(
         )
         .join(
           '',
-        )}</select></label>${input('price', data.payment_mode === 'manual' ? 'Preço · R$' : 'Preço · Stars', p ? (data.payment_mode === 'manual' ? p.price / 100 : p.price) : '', 'type="number" required min="' + (offer ? (offer.baseCents + 1) / 100 : 0.01) + '" max="100000" step="' + (data.payment_mode === 'manual' ? '0.01' : '1') + '"')}</div>${picture('banner', p?.banner ?? '', 'Foto do produto · opcional')}${data.payment_mode === 'manual' && !offer && !selected?.resale_source ? picture('pix_qr', p?.pix_qr ?? '', 'QR Code Pix deste produto · opcional') + '<p class="mc-note">Envie o QR gerado no seu banco para o preço deste produto. Usado no Pix manual para uma unidade, sem cupom. Carrinhos com vários itens ou quantidade maior recebem os dados Pix manuais. Ao mudar o preço, envie um QR atualizado; o anterior não será usado para o novo valor.</p>' : ''}<label class="mc-check"><input type="checkbox" name="enabled" ${p?.enabled !== false ? 'checked' : ''}> Disponível no catálogo</label><button type="submit">Salvar produto</button></form></section>`;
+        )}</select></label>${input('price', data.payment_mode === 'manual' ? 'Preço · R$' : 'Preço · Stars', offer && !selected ? '' : p ? (data.payment_mode === 'manual' ? p.price / 100 : p.price) : '', 'type="number" required min="' + (offer ? (offer.baseCents + 1) / 100 : 0.01) + '" max="100000" step="' + (data.payment_mode === 'manual' ? '0.01' : '1') + '"')}</div>${picture('banner', p?.banner ?? '', 'Foto do produto · opcional')}${data.payment_mode === 'manual' && !offer && !selected?.resale_source ? picture('pix_qr', p?.pix_qr ?? '', 'QR Code Pix deste produto · opcional') + '<p class="mc-note">Envie o QR gerado no seu banco para o preço deste produto. Usado no Pix manual para uma unidade, sem cupom. Carrinhos com vários itens ou quantidade maior recebem os dados Pix manuais. Ao mudar o preço, envie um QR atualizado; o anterior não será usado para o novo valor.</p>' : ''}<label class="mc-check"><input type="checkbox" name="enabled" ${p?.enabled !== false ? 'checked' : ''}> Disponível no catálogo</label>${offer ? '<div class="mc-global-margin" role="status" data-resale-margin></div><p class="mc-note">Sua margem será reduzida pela tarifa Purin. O valor exato aparece no extrato após o pagamento. Sem os 12% adicionais.</p>' : ''}<button type="submit">${offer && !selected ? 'Publicar na minha loja' : 'Salvar produto'}</button></form></section>`;
     }
     if (section === 'stock')
       body =
@@ -423,12 +461,14 @@ export async function mountMerchantConsole(
       body = `<section class="mc-panel"><div class="mc-panel-head"><div><h2>Avisos</h2><p>${data.noticeSubscribers} inscritos no recebimento</p></div></div><form data-form="notice"><input type="hidden" name="requestId" value="${crypto.randomUUID()}">${area('text', 'Texto do aviso', '', 900)}${picture('photo', '', 'Foto do aviso · opcional')}<button type="submit">Salvar rascunho e prévia</button><small>Salvar não envia. Você confirma o envio na prévia do rascunho.</small></form></section><section class="mc-panel"><h2>Histórico de avisos</h2>${notices.map((n) => `<article class="mc-order"><div class="mc-panel-head"><b>${{ draft: 'Rascunho', queued: 'Na fila', sending: 'Enviando', completed: 'Concluído', cancelled: 'Cancelado' }[n.status]}</b><small>${new Date(n.created_at).toLocaleString('pt-BR')}</small></div><p class="mc-notice-text">${esc(n.text)}</p>${n.photo ? `<div class="mc-product-image" data-asset="${esc(n.photo)}">Foto</div>` : ''}<small>Enviados: ${n.sent} · Falhas: ${n.failed} · Incertos: ${n.uncertain} · Ignorados: ${n.skipped}</small>${n.status === 'draft' ? `<button data-send-notice="${n.id}">Revisar e confirmar envio</button>` : ['sending', 'queued'].includes(n.status) ? `<button class="quiet" data-cancel-notice="${n.id}">Cancelar próximos envios</button>` : ''}</article>`).join('') || '<p>Nenhum aviso criado.</p>'}</section>`;
     host.innerHTML = `<div class="mc-layout"><button class="mc-backdrop" data-action="close-navigation" tabindex="-1" aria-label="Fechar menu da loja"></button><aside id="mc-sidebar" class="mc-sidebar" aria-label="Menu da loja"><div class="mc-store"><span class="mc-store-mark" aria-hidden="true">${esc(data.title.trim().slice(0, 1).toUpperCase() || 'B')}</span><div class="mc-store-info"><h1>${esc(data.title)}</h1><span>@${esc(data.botUsername)}</span></div><button class="mc-icon-button mc-mobile-close" data-action="close-navigation" aria-label="Fechar menu da loja">${icon('close')}</button></div><nav aria-label="Gestão da loja">${navigation
       .map(([id, title], index) => {
-        const active = section === id || (section === 'product-edit' && id === 'products');
+        const active =
+          section === id ||
+          (['product-edit', 'global-catalog'].includes(section) && id === 'products');
         return `${index === 0 ? '<span class="mc-nav-group">Operação</span>' : id === 'wallet' ? '<span class="mc-nav-group">Financeiro</span>' : id === 'appearance' ? '<span class="mc-nav-group">Personalização</span>' : ''}<button class="mc-nav-item ${active ? 'active' : ''}" data-section="${id}" aria-label="${title}" title="${title}" ${active ? 'aria-current="page"' : ''}>${icon(id)}<span class="mc-nav-label">${title}</span></button>`;
       })
       .join(
         '',
-      )}</nav><div class="mc-sidebar-footer"><a href="https://t.me/${esc(data.botUsername)}" target="_blank" rel="noopener noreferrer" aria-label="Abrir meu bot no Telegram" title="Abrir meu bot no Telegram">${icon('external')}<span class="mc-nav-label">Abrir meu bot</span></a><a href="#/configuracao?review=1" class="mc-back" aria-label="Ativação e conexão" title="Ativação e conexão">${icon('back')}<span class="mc-nav-label">Ativação e conexão</span></a></div></aside><div class="mc-main"><div class="mc-title"><div class="mc-page-heading"><button class="mc-icon-button mc-menu-toggle" data-action="toggle-navigation" aria-controls="mc-sidebar">${icon('menu')}</button><h2 tabindex="-1">${navigation.find(([id]) => id === section)?.[1] ?? (section === 'product-edit' && !selected ? 'Novo produto' : 'Editar produto')}</h2></div><button class="quiet" data-action="refresh">Atualizar</button></div><p id="mc-feedback" class="feedback" role="status" hidden></p>${body}</div></div>`;
+      )}</nav><div class="mc-sidebar-footer"><a href="https://t.me/${esc(data.botUsername)}" target="_blank" rel="noopener noreferrer" aria-label="Abrir meu bot no Telegram" title="Abrir meu bot no Telegram">${icon('external')}<span class="mc-nav-label">Abrir meu bot</span></a><a href="#/configuracao?review=1" class="mc-back" aria-label="Ativação e conexão" title="Ativação e conexão">${icon('back')}<span class="mc-nav-label">Ativação e conexão</span></a></div></aside><div class="mc-main"><div class="mc-title"><div class="mc-page-heading"><button class="mc-icon-button mc-menu-toggle" data-action="toggle-navigation" aria-controls="mc-sidebar">${icon('menu')}</button><h2 tabindex="-1">${navigation.find(([id]) => id === section)?.[1] ?? (section === 'global-catalog' ? 'Estoque global' : section === 'product-edit' && !selected ? 'Novo produto' : 'Editar produto')}</h2></div><button class="quiet" data-action="refresh">Atualizar</button></div><p id="mc-feedback" class="feedback" role="status" hidden></p>${body}</div></div>`;
     if (listLoading || listError) {
       const main = host.querySelector('.mc-main')!;
       if (listLoading && !listLoaded.has(section))
@@ -929,7 +969,21 @@ export async function mountMerchantConsole(
       render();
       return;
     }
+    if (button.dataset.globalProduct) {
+      resaleSource = button.dataset.globalProduct;
+      selected = data.products.find((p) => p.resale_source?.productId === resaleSource);
+      section = 'product-edit';
+      render();
+      host.querySelector<HTMLInputElement>('[name="price"]')?.focus();
+      return;
+    }
     const action = button.dataset.action;
+    if (action === 'global-catalog') {
+      selected = undefined;
+      section = 'global-catalog';
+      render();
+      return;
+    }
     if (action === 'new-product') {
       resaleSource = '';
       selected = undefined;
@@ -1006,9 +1060,26 @@ export async function mountMerchantConsole(
       );
     }
   });
-  host.addEventListener('input', () => updateLivePreview());
+  host.addEventListener('input', (event) => {
+    const field = event.target as HTMLInputElement;
+    if (field.matches('[data-global-search]')) {
+      globalSearch = field.value;
+      const position = field.selectionStart;
+      render();
+      const search = host.querySelector<HTMLInputElement>('[data-global-search]');
+      search?.focus();
+      search?.setSelectionRange(position, position);
+      return;
+    }
+    updateLivePreview();
+  });
   host.addEventListener('change', (event) => {
     const field = event.target as HTMLInputElement;
+    if (field.matches('[data-global-category]')) {
+      globalCategory = field.value;
+      render();
+      return;
+    }
     if (field.matches('[data-resale-source]')) {
       resaleSource = field.value;
       render();
@@ -1078,7 +1149,8 @@ export async function mountMerchantConsole(
             revision: Number(value('revision')),
           });
         section = 'products';
-        category = value('category');
+        category =
+          resaleOffers.find((o) => o.productId === resaleSource)?.category ?? value('category');
         resaleSource = '';
       } else if (kind === 'stock') {
         const units = value('units')

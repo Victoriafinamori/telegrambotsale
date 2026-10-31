@@ -5,7 +5,7 @@ import {
   consumeShared,
 } from './resale-stock.js';
 import { resaleRecipient } from './resale-finance.js';
-import { sharedOffer, publishSharedProduct } from './resale-product.js';
+import { sharedOffer, publishSharedProduct, sharedCatalog } from './resale-product.js';
 import { productGrant } from './resale-grant.js';
 import {
   modeInput,
@@ -1127,7 +1127,7 @@ export class BotStore {
           ) {
             customer.session = null;
             say(
-              'Qual estoque deseja usar?',
+              '➕ ADICIONAR PRODUTO\n\nEstoque global Blackout: escolha um produto pronto, defina seu preço e venda usando o estoque do fornecedor.\n\nProduto próprio: você cadastra e abastece seu próprio estoque.',
               buttons([
                 [['Estoque global Blackout', 'admin:globalproducts:0']],
                 [['Produto próprio', 'admin:newown']],
@@ -1135,24 +1135,17 @@ export class BotStore {
               ]),
             );
           } else if (action.startsWith('globalproducts:')) {
-            const global = await tx.get('resale_platform/settings'),
-              supplier = global ? await tx.get('bot_shops/' + global.supplier_id) : null;
-            const offers: Product[] = [];
-            if (
-              global &&
-              (await tx.get('resale_profiles/' + id))?.products === 'approved' &&
-              global?.supplier_id !== id
-            ) {
-              for (const p of (supplier?.products ?? []) as Product[]) {
-                if (!p.enabled || p.resale_source) continue;
-                const grant = await productGrant(tx, global.supplier_id, id, p.id, p);
-                if (grant?.enabled) offers.push(p);
-              }
-            }
-            const page = Math.max(0, Number(action.slice(15)) || 0),
+            customer.session = null;
+            const offers = (await sharedCatalog(tx, id)).map((o) => o.product);
+            const page = Math.min(
+                Math.max(0, Math.floor(Number(action.slice(15)) || 0)),
+                Math.max(0, Math.ceil(offers.length / 8) - 1),
+              ),
               shown = offers.slice(page * 8, page * 8 + 8);
             say(
-              'Estoque global · escolha o produto. O preço de fornecedor será mostrado antes de publicar.',
+              offers.length
+                ? `🛍 ESTOQUE GLOBAL BLACKOUT\nEtapa 1 de 2 · Escolha um produto\n\nVocê não precisa enviar códigos nem repor estoque. A entrega sai do fornecedor.\n\nToque no produto abaixo para ver o custo e definir seu preço.\nPágina ${page + 1} de ${Math.ceil(offers.length / 8)}.`
+                : '📦 CATÁLOGO INDISPONÍVEL\n\nNenhum produto foi liberado para sua loja neste momento. Se você já foi aprovado, toque em Atualizar catálogo. Se continuar vazio, peça à Blackout para conferir sua autorização. Você não precisa cadastrar estoque próprio para revender.',
               buttons([
                 ...shown.map((p) => [[p.title, 'admin:globalpick:' + p.id]] as [string, string][]),
                 ...(page > 0
@@ -1161,7 +1154,8 @@ export class BotStore {
                 ...(offers.length > (page + 1) * 8
                   ? ([[['Próxima', 'admin:globalproducts:' + (page + 1)]]] as [string, string][][])
                   : []),
-                [['Voltar', 'admin:new']],
+                [['↻ Atualizar catálogo', 'admin:globalproducts:' + page]],
+                [['‹ Voltar', 'admin:new']],
               ]),
             );
           } else if (action.startsWith('globalpick:')) {
@@ -1169,7 +1163,11 @@ export class BotStore {
               const offer = await sharedOffer(tx, id, action.slice(11));
               customer.session = { step: 'resale_price', product: offer.product.id };
               say(
-                `${offer.product.title}\n\nFornecedor: ${money(offer.baseCents, 'BRL')}.\nEstoque: ${offer.product.stock_mode === 'infinite' ? 'infinito' : offer.product.stock}.\n\nEnvie seu preço de venda, maior que o custo do fornecedor. Ex.: 16,00. Envie /cancelar para sair.`,
+                `🏷 DEFINA SEU PREÇO\nEtapa 2 de 2 · ${offer.product.title}\n\nCusto do fornecedor: ${money(offer.baseCents, 'BRL')}\nEstoque disponível: ${offer.product.stock_mode === 'infinite' ? 'sem limite' : offer.product.stock}\n\nDigite o valor que o comprador vai pagar, maior que ${money(offer.baseCents, 'BRL')}. Exemplo: ${((offer.baseCents + 500) / 100).toFixed(2).replace('.', ',')}.\n\nO custo fica com o fornecedor. A diferença, descontada a tarifa Purin, vai para sua carteira. Sem os 12% adicionais.\n\nAo enviar o preço, o produto será publicado. Depois você poderá trocar a descrição e o banner.`,
+                buttons([
+                  [['‹ Escolher outro produto', 'admin:globalproducts:0']],
+                  [['Cancelar', 'admin']],
+                ]),
               );
             } catch (e) {
               if (!(e instanceof HttpError)) throw e;
@@ -1640,10 +1638,11 @@ export class BotStore {
                 customer.session = null;
                 this.audit(tx, id, 'resale.product_published_telegram', userId);
                 say(
-                  'Produto publicado com estoque global. Você pode personalizar a descrição e o banner.',
+                  `✅ Produto publicado\n${linked.title}\n\nSeu preço: ${money(price, 'BRL')}\nFornecedor: ${money(offer.baseCents, 'BRL')}\nSua margem antes da tarifa Purin: ${money(price - offer.baseCents, 'BRL')}\n\nA entrega usa o estoque global. Personalize abaixo ou adicione outro produto.`,
                   buttons([
                     [['Editar descrição', 'admin:field:description:' + linked.id]],
                     [['Banner do produto', 'admin:productbanner:' + linked.id]],
+                    [['＋ Adicionar outro produto', 'admin:globalproducts:0']],
                     [['Voltar', 'admin']],
                   ]),
                 );

@@ -52,6 +52,55 @@ async function fixture() {
   );
   return { store, service, reads, catalog: new ResaleCatalog(store) };
 }
+test('A full global catalog loads independent grants concurrently in one snapshot without exposing inventory', async () => {
+  const { store, service } = await fixture();
+  await store.transaction(async (tx) => {
+    tx.set('resale_platform/settings', { supplier_id: supplier });
+    tx.set('resale_profiles/' + partner, { products: 'approved' });
+    tx.set('bot_shops/' + supplier, {
+      products: Array.from({ length: 23 }, (_, i) => ({
+        id: i.toString(16).padStart(12, '0'),
+        title: 'Produto ' + i,
+        description: 'Descrição',
+        category: 'Global',
+        enabled: true,
+        price: 899,
+        stock: 2,
+      })),
+    });
+  });
+  let active = 0,
+    peak = 0,
+    snapshots = 0;
+  const transaction = store.transaction.bind(store);
+  store.transaction = (work) => {
+    snapshots++;
+    return transaction((tx) =>
+      work({
+        ...tx,
+        get: async (path) => {
+          if (!path.includes('/grants/')) return tx.get(path);
+          peak = Math.max(peak, ++active);
+          await new Promise((resolve) => setTimeout(resolve, 3));
+          try {
+            return await tx.get(path);
+          } finally {
+            active--;
+          }
+        },
+      }),
+    );
+  };
+  const result = await service.offers(partner, 'partner');
+  assert.equal(result.products.length, 23);
+  assert.equal(snapshots, 1);
+  assert(peak > 1, 'grant reads must not run one by one');
+  assert(!JSON.stringify(result).includes('PRIVATE-CODE'));
+  await assert.rejects(() => service.offers(partner, 'other-admin'), {
+    code: 'RESELLER_OWNER_REQUIRED',
+  });
+});
+
 test('Primary owner binds her existing inventory once; merchant and another administrator cannot take it over', async () => {
   const { service, store, reads } = await fixture();
   await assert.rejects(() => service.initialize('partner', partner), {

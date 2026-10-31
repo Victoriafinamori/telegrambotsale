@@ -3462,6 +3462,28 @@ test('Approved reseller publishes customized global product and cannot lower its
   );
   const buyer = await f.click(222222222, 'admin:globalproducts:0');
   assert(!JSON.stringify(buyer).includes('admin:globalpick:'));
+  await f.store.transaction(async (tx) => {
+    const source = (await tx.get('bot_shops/' + supplier))!;
+    source.products = Array.from({ length: 17 }, (_, i) => ({
+      ...source.products[0],
+      id: i.toString(16).padStart(12, '0'),
+    }));
+    tx.set('bot_shops/' + supplier, source);
+  });
+  const update = f.callback(111111111, 'admin:globalproducts:999');
+  update.callback_query!.message = { message_id: 501, chat: { id: 111111111, type: 'private' } };
+  const page = await f.effects((await f.bots.process(f.auth, update)).effectIds);
+  const screen = page.find((e) => e.method === 'editMessageText')!;
+  assert.equal(screen.payload.message_id, 501);
+  assert(String(screen.payload.text).includes('Página 3 de 3'));
+  assert(JSON.stringify(screen.payload.reply_markup).includes('globalpick:'));
+  await f.store.transaction(async (tx) => {
+    tx.set('resale_profiles/' + f.a.id, { products: 'revoked' });
+  });
+  const empty = await f.click(111111111, 'admin:globalproducts:0');
+  assert(JSON.stringify(empty).includes('CATÁLOGO INDISPONÍVEL'));
+  assert(JSON.stringify(empty).includes('Atualizar catálogo'));
+  assert(!JSON.stringify(empty).includes('admin:globalpick:'));
 });
 
 for (const globalDefault of [false, true])
