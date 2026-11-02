@@ -137,6 +137,22 @@ export class BotStore {
     };
   }
 
+  // Prepare catalog and wallet before the invited merchant connects a bot.
+  // This creates no runtime and grants no access to an unaccepted invitation.
+  async prepare(accountId: string, actor: string) {
+    await buffered(this.store, async (tx) => {
+      const [account, shop] = await Promise.all([
+        tx.get('merchant_accounts/' + accountId),
+        tx.get(root(accountId)),
+      ]);
+      if (!account?.purchase_confirmed_at || account.access_status === 'suspended')
+        throw unavailable();
+      if (!shop) {
+        tx.set(root(accountId), this.initial(account.store_name));
+        this.audit(tx, accountId, 'store.prepared', actor);
+      }
+    });
+  }
   async provision(accountId: string, applicationId: string) {
     const secret = randomBytes(32).toString('base64url'),
       generation = randomUUID();

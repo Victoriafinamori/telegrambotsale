@@ -183,6 +183,7 @@ export class ResaleProgram {
         capability,
         status: status.extract(['approved', 'revoked']),
         revision: z.number().int().nonnegative(),
+        preapprove: z.boolean().optional(),
       })
       .strict()
       .parse(raw);
@@ -191,11 +192,21 @@ export class ResaleProgram {
       const target = profilePath(accountId),
         p = await tx.get(target),
         account = await tx.get('merchant_accounts/' + id.parse(accountId));
-      if (!account || account.access_status !== 'approved')
+      const pendingPreapproval =
+        input.preapprove === true &&
+        input.status === 'approved' &&
+        account?.access_status === 'pending' &&
+        !account.firebase_uid &&
+        !!account.purchase_confirmed_at;
+      if (!account || (account.access_status !== 'approved' && !pendingPreapproval))
         throw new HttpError(409, 'RESELLER_DISABLED', 'A loja precisa ter acesso aprovado.');
       if ((p?.revision ?? 0) !== input.revision)
         throw new HttpError(409, 'RESALE_CHANGED', 'Atualize a lista de revendedores.');
-      if (input.status === 'approved' && p?.[input.capability] !== 'requested')
+      if (
+        input.status === 'approved' &&
+        p?.[input.capability] !== 'requested' &&
+        !pendingPreapproval
+      )
         throw new HttpError(
           409,
           'OPT_IN_REQUIRED',

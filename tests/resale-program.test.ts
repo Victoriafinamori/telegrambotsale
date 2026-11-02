@@ -229,3 +229,41 @@ test('Supplier grants expose only approved products, with immediate revocation a
     code: 'RESELLER_DISABLED',
   });
 });
+
+test('Only the platform owner can preapprove a confirmed unaccepted invitation; pending access is preserved', async () => {
+  const { store, service } = await fixture();
+  await service.initialize('owner', supplier);
+  await store.transaction(async (tx) => {
+    const a = (await tx.get('merchant_accounts/' + partner))!;
+    tx.set('merchant_accounts/' + partner, {
+      ...a,
+      access_status: 'pending',
+      firebase_uid: null,
+      purchase_confirmed_at: new Date(),
+    });
+  });
+  await assert.rejects(
+    () =>
+      service.decide('partner', partner, {
+        capability: 'products',
+        status: 'approved',
+        revision: 0,
+        preapprove: true,
+      }),
+    { code: 'PLATFORM_OWNER_REQUIRED' },
+  );
+  await assert.rejects(
+    () =>
+      service.decide('owner', partner, { capability: 'products', status: 'approved', revision: 0 }),
+    { code: 'RESELLER_DISABLED' },
+  );
+  await service.decide('owner', partner, {
+    capability: 'products',
+    status: 'approved',
+    revision: 0,
+    preapprove: true,
+  });
+  assert.equal((await store.get('resale_profiles/' + partner))!.products, 'approved');
+  assert.equal((await store.get('merchant_accounts/' + partner))!.access_status, 'pending');
+  await assert.rejects(() => service.own(partner, 'partner'), { code: 'RESELLER_OWNER_REQUIRED' });
+});

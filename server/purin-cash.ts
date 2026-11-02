@@ -59,6 +59,9 @@ export const BLACKOUT_PURIN_FEES = Object.freeze({
   payoutFeePercent: 0,
   payoutFeeFixedCents: 100,
 });
+const saleFeePercentInput = z.union([z.literal(0), z.literal(2), z.literal(12)]);
+const saleFee = (value: unknown) =>
+  saleFeePercentInput.safeParse(value).success ? (value as 0 | 2 | 12) : 12;
 
 export class PurinCashPayments {
   private vault: SecretVault;
@@ -253,15 +256,12 @@ export class PurinCashPayments {
       connected: Boolean(shop?.purin_connection && shop?.purin_subaccount),
       requested: shop?.purin_requested === true,
       merchantId: id,
-      saleFeePercent:
-        (account?.purin_sale_fee_percent ?? shop?.purin_sale_fee_percent) === 0 ? 0 : 12,
+      externalId: account?.purin_external_id ?? id,
+      saleFeePercent: saleFee(account?.purin_sale_fee_percent ?? shop?.purin_sale_fee_percent),
     };
   }
   async setFeePolicy(id: string, actor: string, raw: unknown) {
-    const input = z
-      .object({ saleFeePercent: z.union([z.literal(0), z.literal(12)]) })
-      .strict()
-      .parse(raw);
+    const input = z.object({ saleFeePercent: saleFeePercentInput }).strict().parse(raw);
     const shop = await this.store.get(botRoot(id));
     if (shop?.purin_subaccount)
       return this.bind(id, actor, { subaccountId: shop.purin_subaccount, ...input });
@@ -285,7 +285,7 @@ export class PurinCashPayments {
   }
   async bind(id: string, actor: string, raw: unknown) {
     const input = z
-        .object({ subaccountId, saleFeePercent: z.union([z.literal(0), z.literal(12)]).optional() })
+        .object({ subaccountId, saleFeePercent: saleFeePercentInput.optional() })
         .strict()
         .parse(raw),
       pointer = await this.store.get(root),
@@ -293,9 +293,7 @@ export class PurinCashPayments {
       existingAccount = await this.store.get('merchant_accounts/' + id),
       saleFeePercent =
         input.saleFeePercent ??
-        ((existingAccount?.purin_sale_fee_percent ?? existingShop?.purin_sale_fee_percent) === 0
-          ? 0
-          : 12);
+        saleFee(existingAccount?.purin_sale_fee_percent ?? existingShop?.purin_sale_fee_percent);
     if (!pointer?.generation)
       throw new HttpError(409, 'PURIN_NOT_CONNECTED', 'Conecte a conta principal primeiro.');
     const credentials = await this.credentials(pointer.generation),
@@ -303,12 +301,12 @@ export class PurinCashPayments {
     if (
       sub.subaccountId !== input.subaccountId ||
       sub.active !== true ||
-      (sub.externalId && sub.externalId !== id)
+      (sub.externalId && sub.externalId !== (existingAccount?.purin_external_id ?? id))
     )
       throw new HttpError(
         409,
         'PURIN_SUBACCOUNT_MISMATCH',
-        'Subconta inativa ou vinculada a outro identificador. Use o ID deste lojista como identificador externo.',
+        'Subconta inativa ou vinculada a outro identificador. Confira o identificador externo aprovado para este lojista.',
       );
     // Reserve ownership before changing provider settings. Concurrent binds cannot
     // configure another merchant's subaccount, even without an externalId.
@@ -381,8 +379,7 @@ export class PurinCashPayments {
     if (claim?.account_id !== id) throw missing();
     const credentials = await this.credentials(shop.purin_connection);
     const account = await this.store.get('merchant_accounts/' + id);
-    const saleFeePercent =
-      (account?.purin_sale_fee_percent ?? shop.purin_sale_fee_percent) === 0 ? 0 : 12;
+    const saleFeePercent = saleFee(account?.purin_sale_fee_percent ?? shop.purin_sale_fee_percent);
     await this.applySubaccountFees(sid, credentials.token, saleFeePercent);
     await botTransaction(this.store, async (tx) => {
       this.audit(
@@ -391,7 +388,9 @@ export class PurinCashPayments {
         actor,
         saleFeePercent === 0
           ? 'store.purin_fees_exempt_and_100_cents'
-          : 'store.purin_fees_12_percent_and_100_cents',
+          : saleFeePercent === 2
+            ? 'store.purin_fees_2_percent_and_100_cents'
+            : 'store.purin_fees_12_percent_and_100_cents',
       );
     });
     return { ...BLACKOUT_PURIN_FEES, feePercent: saleFeePercent };

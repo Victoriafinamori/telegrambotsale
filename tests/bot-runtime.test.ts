@@ -721,6 +721,7 @@ async function purinFixture(failCreate = false) {
   let rejectNext = false,
     failPreflight = false;
   let subFees: Record<string, number> = {};
+  let subExternalId = f.a.id;
   const charges = new Map<string, any>(),
     secret = 'WEBHOOK_SYNTHETIC_' + 'a'.repeat(32),
     token = 'ps_live_' + 'b'.repeat(40);
@@ -745,7 +746,7 @@ async function purinFixture(failCreate = false) {
       if (init?.method === 'PUT') {
         subFees = JSON.parse(String(init.body));
         assert.deepEqual(subFees, {
-          feePercent: subFees.feePercent === 0 ? 0 : 12,
+          feePercent: [0, 2, 12].includes(subFees.feePercent) ? subFees.feePercent : 12,
           feeFixedCents: 0,
           payoutFeePercent: 0,
           payoutFeeFixedCents: 100,
@@ -758,7 +759,7 @@ async function purinFixture(failCreate = false) {
       return Response.json({
         subaccountId: address.pathname.split('/').at(-1),
         active: true,
-        externalId: f.a.id,
+        externalId: subExternalId,
         ...subFees,
       });
     }
@@ -857,6 +858,9 @@ async function purinFixture(failCreate = false) {
     token,
     notify,
     posts: () => posts,
+    setExternalId: (value: string) => {
+      subExternalId = value;
+    },
     rejectNext: () => {
       rejectNext = true;
     },
@@ -3492,6 +3496,7 @@ for (const globalDefault of [false, true])
       f = p.f,
       supplier = randomUUID(),
       sourcePid = 'abcdef123456';
+    if (globalDefault) await p.service.setFeePolicy(f.a.id, 'admin', { saleFeePercent: 2 });
     await botTransaction(f.store, async (tx) => {
       const local = await tx.get('bot_shops/' + f.a.id);
       tx.set('merchant_accounts/' + supplier, {
@@ -3581,3 +3586,62 @@ for (const globalDefault of [false, true])
       1,
     );
   });
+
+test('Purin preserves the dedicated 2% own-product policy on binding and refresh without creating a charge', async () => {
+  const p = await purinFixture();
+  await p.service.setFeePolicy(p.f.a.id, 'admin', { saleFeePercent: 2 });
+  assert.equal((await p.service.binding(p.f.a.id)).saleFeePercent, 2);
+  await p.service.bind(p.f.a.id, 'admin', { subaccountId: 'sacc_pilot' });
+  assert.equal((await p.service.binding(p.f.a.id)).saleFeePercent, 2);
+  assert.deepEqual(await p.service.applyFees(p.f.a.id, 'admin'), {
+    feePercent: 2,
+    feeFixedCents: 0,
+    payoutFeePercent: 0,
+    payoutFeeFixedCents: 100,
+  });
+  await assert.rejects(() => p.service.setFeePolicy(p.f.a.id, 'admin', { saleFeePercent: 99 }));
+  assert.equal(p.posts(), 0);
+});
+
+test('Preparing an invited merchant wallet creates no runtime, preserves pending access and cannot replace a prepared shop', async () => {
+  const p = await purinFixture(),
+    id = p.f.a.id;
+  await p.f.store.transaction(async (tx) => {
+    const a = (await tx.get('merchant_accounts/' + id))!;
+    tx.set('merchant_accounts/' + id, { ...a, access_status: 'pending', firebase_uid: null });
+    tx.delete('bot_shops/' + id);
+    tx.delete('bot_runtimes/' + id);
+  });
+  await p.f.bots.prepare(id, 'admin');
+  await p.service.bind(id, 'admin', { subaccountId: 'sacc_pilot', saleFeePercent: 2 });
+  await p.f.bots.prepare(id, 'admin');
+  const shop = (await p.f.store.get('bot_shops/' + id))!;
+  assert.equal(shop.purin_subaccount, 'sacc_pilot');
+  assert.equal(shop.purin_sale_fee_percent, 2);
+  assert.equal(shop.owner_id, null);
+  assert.equal((await p.f.store.get('merchant_accounts/' + id))!.access_status, 'pending');
+  assert.equal(await p.f.store.get('bot_runtimes/' + id), null);
+  assert.equal(p.posts(), 0);
+});
+
+test('Existing immutable provider identifiers require an owner-stored mapping and cannot override another merchant claim', async () => {
+  const p = await purinFixture();
+  p.setExternalId('DG STORE');
+  await assert.rejects(
+    () => p.service.bind(p.f.a.id, 'admin', { subaccountId: 'sacc_pilot', saleFeePercent: 2 }),
+    { code: 'PURIN_SUBACCOUNT_MISMATCH' },
+  );
+  await p.f.store.transaction(async (tx) => {
+    const a = (await tx.get('merchant_accounts/' + p.f.a.id))!;
+    tx.set('merchant_accounts/' + p.f.a.id, { ...a, purin_external_id: 'DG STORE' });
+  });
+  await p.service.bind(p.f.a.id, 'admin', { subaccountId: 'sacc_pilot', saleFeePercent: 2 });
+  assert.equal((await p.service.binding(p.f.a.id)).externalId, 'DG STORE');
+  await p.f.store.transaction(async (tx) => {
+    tx.set('purin_subaccount_claims/sacc_pilot', { account_id: 'another-merchant' });
+  });
+  await assert.rejects(() => p.service.bind(p.f.a.id, 'admin', { subaccountId: 'sacc_pilot' }), {
+    code: 'PURIN_SUBACCOUNT_USED',
+  });
+  assert.equal(p.posts(), 0);
+});
