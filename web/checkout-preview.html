@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Checkout · demonstração Blackout</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="local-banner">
+      Demonstração fictícia. Nenhuma cobrança será criada.<br /><a href="?state=anonymous"
+        >Sem login</a
+      >
+      · <a href="?state=details">Dados da loja</a> · <a href="?state=uncertain">Em conferência</a> ·
+      <a href="?state=qr">Pix pronto</a>
+    </div>
+    <main class="purchase-checkout"></main>
+    <script type="module">
+      import { mountPurchaseCheckout } from './purchase-checkout.ts';
+      const mode = new URLSearchParams(location.search).get('state') || 'anonymous';
+      const plans = [
+        { id: 'monthly', label: 'Mensal', months: 1, priceCents: 999, enabled: true },
+        { id: 'quarterly', label: 'Trimestral', months: 3, priceCents: 2450, enabled: true },
+        { id: 'annual', label: 'Anual', months: 12, priceCents: 8490, enabled: true },
+      ];
+      let invoice = ['uncertain', 'qr'].includes(mode)
+        ? {
+            id: 'DEMONSTRACAO',
+            label: 'Mensal',
+            months: 1,
+            total: 999,
+            status: mode === 'qr' ? 'awaiting_payment' : 'uncertain',
+            expiresAt: new Date(Date.now() + 3600000).toISOString(),
+            qrCode: mode === 'qr' ? 'DEMONSTRACAO_SEM_VALOR_PARA_PAGAMENTO' : '',
+          }
+        : null;
+      const api = async (path, body) => {
+        if (path.startsWith('/checkout/plans')) return { plans };
+        if (path.startsWith('/checkout/purchase/check')) return invoice;
+        if (path.startsWith('/checkout/purchase/create')) {
+          const p = plans.find((p) => p.id === body.plan);
+          invoice = {
+            id: 'DEMONSTRACAO',
+            label: p.label,
+            months: p.months,
+            total: p.priceCents,
+            status: 'awaiting_payment',
+            expiresAt: new Date(Date.now() + 3600000).toISOString(),
+            qrCode: 'DEMONSTRACAO_SEM_VALOR_PARA_PAGAMENTO',
+          };
+          return invoice;
+        }
+        return { plans, hasStore: false, invoice };
+      };
+      await mountPurchaseCheckout(
+        document.querySelector('main'),
+        api,
+        mode === 'anonymous' ? null : 'demonstracao@example.test',
+        'https://t.me/blackoutshopbrbot?start=duvidas',
+      );
+    </script>
+  </body>
+</html>

@@ -272,7 +272,6 @@ body:has(.purchase-checkout) {
   }
   .pc-summary {
     position: static;
-    grid-row: 1;
     padding: 24px;
   }
   .pc-summary .brand {
@@ -289,6 +288,7 @@ body:has(.purchase-checkout) {
   }
   .purchase-checkout {
     margin-top: 24px;
+    margin-bottom: calc(150px + env(safe-area-inset-bottom));
   }
   .pc-back {
     margin-bottom: 12px;
@@ -302,6 +302,83 @@ body:has(.purchase-checkout) {
   }
   .pc-plan > strong {
     font-size: 21px;
+  }
+}
+.pc-mobile-action {
+  display: none;
+}
+@media (max-width: 800px) {
+  .pc-mobile-action {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.45fr);
+    align-items: center;
+    gap: 12px;
+    position: fixed;
+    z-index: 50;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 14px max(16px, env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom))
+      max(16px, env(safe-area-inset-left));
+    background: var(--surface);
+    border-top: 1px solid var(--line);
+    box-shadow: 0 -8px 32px rgb(0 0 0 / 8%);
+  }
+  .pc-mobile-total small {
+    display: block;
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  .pc-mobile-total strong {
+    display: block;
+    font-size: 25px;
+    letter-spacing: -0.035em;
+    line-height: 1.4;
+  }
+  .pc-mobile-controls {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+  }
+  .pc-mobile-controls > button,
+  .pc-mobile-controls > .button-link {
+    width: 100%;
+    min-height: 48px;
+    margin: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    padding: 10px 12px;
+    font-size: 14px;
+    line-height: 1.3;
+    white-space: normal;
+  }
+  .pc-mobile-help {
+    min-height: 30px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 12px;
+    color: var(--muted);
+    text-underline-offset: 3px;
+  }
+  .pc-content .pc-box,
+  #purchase-payment {
+    scroll-margin-top: 16px;
+  }
+  .pc-summary .pc-buy,
+  .pc-summary .pc-buy + small {
+    display: none;
+  }
+  .pc-buttons > button {
+    flex: 1 1 160px;
+    min-height: 48px;
+  }
+  .pc-box input,
+  .pc-box textarea {
+    font-size: 16px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -324,4 +401,14 @@ body:has(.purchase-checkout) {
 .pc-summary .pc-buy + small {
   display: block;
   margin-top: 12px;
+}
+@media (max-width: 800px) {
+  .pc-summary .pc-buy,
+  .pc-summary .pc-buy + small {
+    display: none;
+  }
+  .pc-box input,
+  .pc-box textarea {
+    scroll-margin-block: 140px;
+  }
 }
