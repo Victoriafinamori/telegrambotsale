@@ -19,7 +19,9 @@ async function fixture() {
     vault = new SecretVault(key);
   let now = new Date('2026-10-26T12:00:00Z'),
     posts = 0,
-    failAfterCreate = false;
+    failAfterCreate = false,
+    failRead = false,
+    readOverride: Record<string, unknown> = {};
   const charges = new Map<string, any>();
   let ledgerRows: any[] = [];
   await store.transaction(async (tx) => {
@@ -63,7 +65,14 @@ async function fixture() {
       };
       charges.set(p.paymentId, p);
       if (failAfterCreate) throw Error('Unknown response after creation');
-      return Response.json(p);
+      return Response.json({
+        paymentId: p.paymentId,
+        status: p.status,
+        amountCents: p.amountCents,
+        currency: p.currency,
+        environment: p.environment,
+        pix: p.pix,
+      });
     }
     if (u.pathname.includes('/transactions'))
       return Response.json({ subaccountId: 'sacc_affiliate', transactions: ledgerRows });
@@ -71,7 +80,13 @@ async function fixture() {
       return Response.json({ subaccountId: 'sacc_affiliate', active: true });
     if (u.pathname === '/v1/charges') return Response.json({ charges: [...charges.values()] });
     const found = charges.get(u.pathname.split('/').at(-1)!);
-    return found ? Response.json(found) : Response.json({ error: 'not found' }, { status: 404 });
+    if (failRead) {
+      failRead = false;
+      throw Error('Read response interrupted');
+    }
+    if (!found) return Response.json({ error: 'not found' }, { status: 404 });
+    const { environment, pix, ...detail } = found;
+    return Response.json({ ...detail, ...readOverride });
   };
   const purin = new PurinCashPayments(
       store,
@@ -119,6 +134,8 @@ async function fixture() {
     posts: () => posts,
     advance: (ms: number) => (now = new Date(now.getTime() + ms)),
     fail: () => (failAfterCreate = true),
+    failReadOnce: () => (failRead = true),
+    overrideRead: (value: Record<string, unknown>) => (readOverride = value),
   };
 }
 test('Subscription plans snapshot their price; one concurrent charge, no cross-merchant access, authoritative and idempotent renewal', async () => {
@@ -529,7 +546,8 @@ test('Guest lost response and reload recover the same payment with the capabilit
   assert.equal(f.posts(), 1);
   const checked = await f.service.guestRead({ key }, true);
   assert.equal(checked.status, 'awaiting_payment');
-  assert(checked.qrCode);
+  // GET /charges does not reproduce a QR that was lost with the POST response.
+  assert.equal(checked.qrCode, '');
   const payment = [...f.charges.values()][0];
   payment.status = 'paid';
   payment.paidAt = '2026-10-26T14:00:00Z';
@@ -639,3 +657,58 @@ test('Guest HTTP checkout is public but rate limited; reading needs the secret a
     await new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
   }
 });
+
+test('Documented Purin creation omits metadata, detail omits environment and Pix, and the original QR survives an interrupted detail request', async () => {
+  const f = await fixture(),
+    key = randomBytes(32).toString('hex'),
+    input = { key, plan: 'monthly', requestId: randomUUID(), expectedPriceCents: 999 };
+  f.failReadOnce();
+  await assert.rejects(() => f.service.guestCreate(input));
+  const saved = await f.service.guestRead({ key });
+  assert.equal(saved.status, 'creating');
+  assert.equal(saved.qrCode, '');
+  const data = (await f.store.get('platform_subscription_invoices/' + saved.id))!;
+  assert(data.payment_id);
+  assert(data.qr_ciphertext);
+  assert(!JSON.stringify(data).includes('000201_TEST_SUBSCRIPTION_ONLY'));
+  const recovered = await f.service.guestRead({ key }, true);
+  assert.equal(recovered.status, 'awaiting_payment');
+  assert.equal(recovered.qrCode, '000201_TEST_SUBSCRIPTION_ONLY');
+  const again = await f.service.guestCreate({ ...input, requestId: randomUUID() });
+  assert.equal(again.id, saved.id);
+  assert.equal(f.posts(), 1);
+});
+
+for (const wrong of [
+  { amountCents: 1 },
+  { currency: 'USD' },
+  { environment: 'sandbox' },
+  { sandbox: true },
+  { metadata: '{}' },
+  { customer: { externalId: 'another-purchase' } },
+  { subaccountId: 'sacc_other' },
+])
+  test(
+    'Subscription detail continues rejecting mismatched financial or ownership fields: ' +
+      Object.keys(wrong).join(','),
+    async () => {
+      const f = await fixture(),
+        key = randomBytes(32).toString('hex');
+      f.overrideRead(wrong);
+      await assert.rejects(
+        () =>
+          f.service.guestCreate({
+            key,
+            plan: 'monthly',
+            requestId: randomUUID(),
+            expectedPriceCents: 999,
+          }),
+        { code: 'SUBSCRIPTION_MISMATCH' },
+      );
+      const invoice = await f.service.guestRead({ key });
+      assert.equal(invoice.status, 'creating');
+      assert.equal(invoice.qrCode, '');
+      assert.equal((await f.store.list('merchant_accounts', { limit: 100 })).length, 1);
+      assert.equal(f.posts(), 1);
+    },
+  );

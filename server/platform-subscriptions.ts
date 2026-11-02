@@ -429,24 +429,7 @@ export class PlatformSubscriptions {
       });
       throw e;
     }
-    this.validate(invoice, payment);
-    const code = z.string().min(1).max(4000).parse(payment.pix?.brCode);
-    await botTransaction(this.store, async (tx) => {
-      const current = await tx.get(invoicePath(invoice.id));
-      if (!current) throw Error('Missing invoice');
-      tx.set(invoicePath(invoice.id), {
-        ...current,
-        payment_id: payment.paymentId,
-        ...(['paid', 'review_required'].includes(current.status)
-          ? {}
-          : {
-              status: 'awaiting_payment',
-              qr_ciphertext: this.vault.seal(code, 'subscription-qr:' + invoice.id),
-            }),
-      });
-    });
-    if (payment.status === 'paid') await this.settle(invoice.id, gateway.generation, payment);
-    return this.safe((await this.store.get(invoicePath(invoice.id)))!);
+    return this.createdCharge(invoice, payment, gateway);
   }
   async purchaseCheck(identity: Identity, raw: unknown) {
     const buyer = this.buyer(identity),
@@ -589,23 +572,43 @@ export class PlatformSubscriptions {
       });
       throw e;
     }
-    this.validate(invoice, payment);
+    return this.createdCharge(invoice, payment, gateway);
+  }
+  private async createdCharge(
+    invoice: Doc,
+    payment: Doc,
+    gateway: Awaited<ReturnType<PurinCashPayments['subscriptionGateway']>>,
+  ) {
+    // POST /charges returns the Pix, but omits customer and metadata. GET returns
+    // those ownership fields, but may omit environment and the original Pix.
+    if (
+      !/^psc_[A-Za-z0-9_-]+$/.test(payment.paymentId ?? '') ||
+      payment.environment !== 'live' ||
+      payment.sandbox === true ||
+      payment.currency !== 'BRL' ||
+      payment.amountCents !== invoice.total ||
+      (payment.subaccountId !== undefined &&
+        payment.subaccountId !== (invoice.resale?.subaccount ?? null)) ||
+      (invoice.resale &&
+        payment.subaccountFeeCents !== undefined &&
+        payment.subaccountFeeCents !== invoice.resale.baseCents)
+    )
+      throw new HttpError(409, 'SUBSCRIPTION_MISMATCH', 'Cobrança não corresponde à assinatura.');
     const code = z.string().min(1).max(4000).parse(payment.pix?.brCode);
     await botTransaction(this.store, async (tx) => {
       const current = await tx.get(invoicePath(invoice.id));
       if (!current) throw Error('Missing invoice');
+      if (current.payment_id && current.payment_id !== payment.paymentId)
+        throw new HttpError(409, 'SUBSCRIPTION_MISMATCH', 'Cobrança não corresponde à assinatura.');
       tx.set(invoicePath(invoice.id), {
         ...current,
         payment_id: payment.paymentId,
-        ...(['paid', 'review_required'].includes(current.status)
-          ? {}
-          : {
-              status: 'awaiting_payment',
-              qr_ciphertext: this.vault.seal(code, 'subscription-qr:' + invoice.id),
-            }),
+        qr_ciphertext: this.vault.seal(code, 'subscription-qr:' + invoice.id),
       });
     });
-    if (payment.status === 'paid') await this.settle(invoice.id, gateway.generation, payment);
+    const details = await gateway.read(payment.paymentId);
+    this.validate({ ...invoice, payment_id: payment.paymentId }, details);
+    await this.settle(invoice.id, gateway.generation, details);
     return this.safe((await this.store.get(invoicePath(invoice.id)))!);
   }
   private validate(invoice: Doc, payment: Doc) {
@@ -617,7 +620,8 @@ export class PlatformSubscriptions {
     }
     if (
       !/^psc_[A-Za-z0-9_-]+$/.test(payment.paymentId ?? '') ||
-      payment.environment !== 'live' ||
+      (payment.environment !== undefined && payment.environment !== 'live') ||
+      payment.sandbox === true ||
       payment.currency !== 'BRL' ||
       payment.amountCents !== invoice.total ||
       (invoice.resale
@@ -629,6 +633,7 @@ export class PlatformSubscriptions {
       meta?.kind !== 'blackout_subscription' ||
       meta?.invoiceId !== invoice.id ||
       meta?.accountId !== invoice.account_id ||
+      payment.customer?.externalId !== 'blackout-subscription:' + invoice.id ||
       (invoice.payment_id && invoice.payment_id !== payment.paymentId)
     )
       throw new HttpError(409, 'SUBSCRIPTION_MISMATCH', 'Cobrança não corresponde à assinatura.');
