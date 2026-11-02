@@ -6,7 +6,9 @@ import { SecretVault } from './secret-vault.js';
 import { HttpError } from './types.js';
 import { reserveUnits, consumeStock, restoreStock, syncStock } from './stock-modes.js';
 import { productGrant } from './resale-grant.js';
+import { syncBundles, StockPlanner, reserveBundle, changeBundle } from './bundle-stock.js';
 export async function refreshSharedCatalog(tx: DocumentTransaction, id: string, shop: Shop) {
+  syncBundles(shop);
   if (!shop.products.some((p) => p.resale_source)) return;
   const profile = await tx.get('resale_profiles/' + id);
   for (const p of shop.products.filter((p) => p.resale_source)) {
@@ -16,6 +18,7 @@ export async function refreshSharedCatalog(tx: DocumentTransaction, id: string, 
       tx.get(botRoot(source.supplierId)),
       tx.get('merchant_accounts/' + source.supplierId),
     ]);
+    if (supplier) syncBundles(supplier as Shop);
     const product = supplier?.products.find((v: Product) => v.id === source.productId && v.enabled);
     const resolved =
       grant ?? (await productGrant(tx, source.supplierId, id, source.productId, product));
@@ -36,6 +39,7 @@ export async function reserveShared(
   p: Product,
   quantity: number,
   vault: SecretVault,
+  planner = new StockPlanner(tx),
 ) {
   const source = p.resale_source!;
   const [grant, supplier, account, profile] = await Promise.all([
@@ -58,7 +62,25 @@ export async function reserveShared(
     p.price <= resolved.baseCents
   )
     throw new HttpError(409, 'SUPPLIER_UNAVAILABLE', 'Produto do fornecedor indisponível.');
-  const selected = reserveUnits(stock, quantity);
+  if (original.bundle?.length) {
+    const item = await reserveBundle(
+      tx,
+      source.supplierId,
+      id,
+      original,
+      quantity,
+      vault,
+      planner,
+      p.id,
+    );
+    return {
+      ...item,
+      product_id: p.id,
+      title: p.title,
+      resale_source: { ...source, baseCents: resolved.baseCents, originalUnits: [] },
+    };
+  }
+  const selected = (await planner.take(source.supplierId, source.productId, quantity)).units;
   if (!selected) throw new HttpError(409, 'SHARED_STOCK_EMPTY', 'O estoque do fornecedor esgotou.');
   const units = selected.map((u: Doc) => {
     const key = randomBytes(8).toString('hex');
@@ -82,6 +104,10 @@ export async function reserveShared(
   return item;
 }
 export async function restoreShared(tx: DocumentTransaction, item: Order['items'][number]) {
+  if (item.bundle_sources) {
+    await changeBundle(tx, item, 'restore');
+    return;
+  }
   const source = item.resale_source!;
   const target = botPath(source.supplierId, 'products', source.productId),
     stock = await tx.get(target),
@@ -91,11 +117,16 @@ export async function restoreShared(tx: DocumentTransaction, item: Order['items'
   restoreStock(stock, { ...item, units: source.originalUnits });
   const product = shop.products.find((p: Product) => p.id === source.productId);
   if (product) syncStock(product, stock);
+  syncBundles(shop as Shop);
   tx.set(target, stock);
   tx.set(botRoot(source.supplierId), shop);
 }
 
 export async function consumeShared(tx: DocumentTransaction, item: Order['items'][number]) {
+  if (item.bundle_sources) {
+    await changeBundle(tx, item, 'consume');
+    return;
+  }
   const source = item.resale_source!,
     target = botPath(source.supplierId, 'products', source.productId),
     stock = await tx.get(target),
@@ -105,11 +136,16 @@ export async function consumeShared(tx: DocumentTransaction, item: Order['items'
   consumeStock(stock, item);
   const product = shop.products.find((p: Product) => p.id === source.productId);
   if (product) syncStock(product, stock);
+  syncBundles(shop as Shop);
   tx.set(target, stock);
   tx.set(botRoot(source.supplierId), shop);
 }
 
 export async function finishShared(tx: DocumentTransaction, item: Order['items'][number]) {
+  if (item.bundle_sources) {
+    await changeBundle(tx, item, 'finish');
+    return;
+  }
   const source = item.resale_source!;
   const target = botPath(source.supplierId, 'products', source.productId),
     stock = await tx.get(target);

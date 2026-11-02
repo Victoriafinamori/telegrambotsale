@@ -20,7 +20,7 @@ export function mountStockBatch(
   ) => Promise<void>,
 ) {
   const selected = new Set<string>();
-  const eligible = (p: StockProduct) => !p.resale_source;
+  const eligible = (p: StockProduct) => !p.resale_source && !p.bundle?.length;
   host
     .querySelector('[data-stock-results]')!
     .insertAdjacentHTML(
@@ -151,7 +151,7 @@ export function mountStockBatch(
       row.classList.add('stock-item-selectable');
       row.insertAdjacentHTML(
         'afterbegin',
-        `<label class="stock-select" title="${eligible(p) ? 'Selecionar para reposição em lote' : 'O estoque é administrado pelo fornecedor'}"><input type="checkbox" data-stock-select value="${esc(p.id)}" aria-label="Selecionar ${esc(p.title)}" ${eligible(p) ? '' : 'disabled'}></label>`,
+        `<label class="stock-select" title="${eligible(p) ? 'Selecionar para reposição em lote' : 'Estoque automático: reponha na origem ou nos componentes'}"><input type="checkbox" data-stock-select value="${esc(p.id)}" aria-label="Selecionar ${esc(p.title)}" ${eligible(p) ? '' : 'disabled'}></label>`,
       );
     });
     sync();

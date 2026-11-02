@@ -6,6 +6,7 @@ export type StockProduct = {
   stock_mode?: string;
   enabled?: boolean;
   resale_source?: unknown;
+  bundle?: { productId: string; quantity: number }[];
 };
 export type StockFilters = { query: string; category: string; availability: string };
 export const lowStockLimit = 5;

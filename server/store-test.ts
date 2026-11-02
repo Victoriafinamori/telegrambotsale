@@ -169,6 +169,7 @@ export class StoreTest {
         price: p.price,
         stock: Math.min(10, Math.max(0, p.stock)),
         stock_mode: p.stock_mode ?? 'individual',
+        ...(p.bundle?.length ? { bundle: structuredClone(p.bundle) } : {}),
         banner: p.banner ?? '',
       }));
       const shop: Shop = {

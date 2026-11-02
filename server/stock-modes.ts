@@ -49,12 +49,22 @@ export async function configureStock(
     throw new HttpError(409, 'STOCK_RESERVED', 'Há pedidos de revenda reservados deste produto.');
   const product = shop.products.find((p) => p.id === input.productId);
   if (!product) throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'Produto não encontrado.');
+  if (product.bundle?.length)
+    throw new HttpError(
+      409,
+      'BUNDLE_STOCK_MANAGED',
+      'Reponha os produtos individuais que compõem este combo.',
+    );
   for (const oid of shop.open_orders) {
     const order = await tx.get(botPath(id, 'orders', oid));
     if (
       order &&
       ['awaiting_payment', 'awaiting_review', 'precheckout'].includes(order.status) &&
-      order.items.some((i: Doc) => i.product_id === product.id)
+      order.items.some(
+        (i: Doc) =>
+          i.product_id === product.id ||
+          i.bundle_sources?.some((s: Doc) => s.accountId === id && s.productId === product.id),
+      )
     )
       throw new HttpError(
         409,

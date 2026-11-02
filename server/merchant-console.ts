@@ -1,4 +1,5 @@
 import { refreshSharedCatalog } from './resale-stock.js';
+import { bundleInput, validateBundle, syncBundles } from './bundle-stock.js';
 import { productGrant } from './resale-grant.js';
 import { modeInput, configureStock, syncStock } from './stock-modes.js';
 import { stockItems, stockVersion, changeStock } from './stock-management.js';
@@ -34,6 +35,7 @@ export const productInput = z
     banner: asset,
     pix_qr: asset.optional(),
     revision: z.number().int().nonnegative(),
+    bundle: bundleInput.optional(),
   })
   .strict();
 export const settingsInput = z
@@ -175,6 +177,12 @@ export class MerchantConsole {
       if (!current && shop.products.length >= 40)
         throw new HttpError(409, 'PRODUCT_LIMIT', 'Limite de 40 produtos atingido.');
       if (current?.resale_source) {
+        if (value.bundle?.length)
+          throw new HttpError(
+            409,
+            'BUNDLE_COMPONENT_INVALID',
+            'A composição do produto do fornecedor é gerenciada na origem.',
+          );
         const source = current.resale_source,
           supplier = await tx.get(botRoot(source.supplierId));
         const original = supplier?.products.find((p: Product) => p.id === source.productId);
@@ -194,14 +202,47 @@ export class MerchantConsole {
           stock: current?.stock ?? 0,
           ...(current?.resale_source ? { resale_source: current.resale_source } : {}),
           stock_mode: current?.stock_mode ?? 'individual',
+          ...(value.bundle !== undefined
+            ? { bundle: value.bundle }
+            : current?.bundle
+              ? { bundle: current.bundle }
+              : {}),
           pix_qr: qr,
           pix_qr_price: qr && qr !== current?.pix_qr ? value.price : (current?.pix_qr_price ?? 0),
         };
+      validateBundle(shop, pid, product.bundle);
+      if (current?.bundle?.length && !product.bundle?.length) {
+        const stock = await tx.get(botPath(id, 'products', pid));
+        if (stock) syncStock(product, stock);
+      }
+      if (product.bundle?.length && !current?.bundle?.length) {
+        for (const oid of shop.open_orders) {
+          const order = await tx.get(botPath(id, 'orders', oid));
+          if (
+            order &&
+            ['awaiting_payment', 'awaiting_review', 'precheckout'].includes(order.status) &&
+            order.items.some((i: Doc) => i.product_id === pid)
+          )
+            throw new HttpError(
+              409,
+              'STOCK_RESERVED',
+              'Aguarde os pedidos deste produto terminarem antes de transformá-lo em combo.',
+            );
+        }
+        const inventory = await tx.get(botPath(id, 'products', pid));
+        if (inventory && (inventory.units?.length || inventory.shared_reserved))
+          throw new HttpError(
+            409,
+            'BUNDLE_HAS_OWN_STOCK',
+            'Este produto ainda tem estoque próprio. Use um produto sem estoque para montar o combo.',
+          );
+      }
       if (current) shop.products = shop.products.map((p) => (p.id === pid ? product : p));
       else {
         shop.products.push(product);
         tx.set(botPath(id, 'products', pid), { id: pid, units: [] });
       }
+      syncBundles(shop);
       tx.set(botRoot(id), { ...shop, portal_revision: revision + 1 });
       this.audit(tx, id, uid, 'store.product_saved_web');
       return { id: pid };
@@ -369,6 +410,7 @@ export class MerchantConsole {
       const stock = await tx.get(botPath(id, 'products', value.productId));
       if (!stock) throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'Produto não encontrado.');
       await configureStock(tx, id, shop, stock, value, this.vault);
+      syncBundles(shop);
       tx.set(botRoot(id), { ...shop, portal_revision: (shop.portal_revision ?? 0) + 1 });
       this.audit(tx, id, uid, 'store.stock_mode_changed');
     });
@@ -393,8 +435,15 @@ export class MerchantConsole {
       const product = shop.products.find((p) => p.id === value.productId);
       if (!stock || !product)
         throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'Produto não encontrado.');
+      if (product.bundle?.length)
+        throw new HttpError(
+          409,
+          'BUNDLE_STOCK_MANAGED',
+          'Reponha os produtos individuais deste combo.',
+        );
       changeStock(stock, value.action, value.version, value.unitId);
       syncStock(product, stock);
+      syncBundles(shop);
       tx.set(target, stock);
       tx.set(botRoot(id), { ...shop, portal_revision: (shop.portal_revision ?? 0) + 1 });
       this.audit(tx, id, uid, 'store.stock_' + value.action);
@@ -477,6 +526,12 @@ export class MerchantConsole {
               'SUPPLIER_STOCK',
               'Produtos de outro fornecedor devem ser abastecidos na loja de origem.',
             );
+          if (p.bundle?.length)
+            throw new HttpError(
+              409,
+              'BUNDLE_STOCK_MANAGED',
+              'Reponha os produtos individuais que compõem este combo.',
+            );
           if (value.mode === 'individual' && stock.units.length + value.units.length > 100)
             throw new HttpError(
               409,
@@ -516,6 +571,7 @@ export class MerchantConsole {
           });
         }
         syncStock(p, stock);
+        syncBundles(shop);
         tx.set(target, stock);
       }
       tx.set(botRoot(id), { ...shop, portal_revision: (shop.portal_revision ?? 0) + 1 });
@@ -611,6 +667,7 @@ export class MerchantConsole {
         };
       tx.set(botPath(id, 'announcements', nid), notice);
       shop.notice_recent = [nid, ...(shop.notice_recent ?? [])].slice(0, 10);
+      syncBundles(shop);
       tx.set(botRoot(id), shop);
       tx.set(dedup, { notice_id: nid });
       this.audit(tx, id, uid, 'bot_notice.draft_created_web');

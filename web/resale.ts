@@ -1,3 +1,4 @@
+import { bundleInventory } from './bundle-editor.js';
 import { mountStockBrowser } from './stock-browser.js';
 import './resale.css';
 type Api = <T = any>(path: string, body?: unknown) => Promise<T>;
@@ -134,6 +135,16 @@ export async function mountResale(host: HTMLElement, api: Api, admin = false) {
     }</div></section>`;
   };
   const stockDialog = async (productId: string) => {
+    const combo = data.global.catalog.products.find((p: any) => p.id === productId);
+    if (combo?.bundle?.length) {
+      const dialog = document.createElement('dialog');
+      dialog.className = 'rs-stock-dialog';
+      host.append(dialog);
+      bundleInventory(dialog, combo, data.global.catalog.products, (id) => {
+        void run(() => stockDialog(id));
+      });
+      return;
+    }
     let inventory = await api('/admin/resale/stock?productId=' + productId);
     const product = data.global.catalog.products.find((p: any) => p.id === productId);
     const dialog = document.createElement('dialog');

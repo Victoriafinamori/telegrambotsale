@@ -1,4 +1,5 @@
 import { restoreStock, syncStock } from './stock-modes.js';
+import { changeBundle, syncBundles } from './bundle-stock.js';
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { DocumentStore, DocumentTransaction, Doc } from './document-store.js';
@@ -541,6 +542,10 @@ export class MercadoPagoPayments {
       const releaseReservation = async () => {
         if (order.status !== 'awaiting_payment') return;
         for (const item of order.items) {
+          if (item.bundle_sources) {
+            await changeBundle(tx, item, 'restore', id, shop);
+            continue;
+          }
           const stock = await tx.get(botPath(id, 'products', item.product_id));
           if (!stock) continue;
           restoreStock(stock, item);
@@ -608,8 +613,15 @@ export class MercadoPagoPayments {
                   {
                     chat_id: order.buyer_id,
                     ...(content.kind === 'document'
-                      ? { document: content.fileId, caption: item.title }
-                      : { text: `${item.title}\n\n${content.text}` }),
+                      ? {
+                          document: content.fileId,
+                          caption:
+                            item.title +
+                            (content.componentTitle ? ' · ' + content.componentTitle : ''),
+                        }
+                      : {
+                          text: `${item.title}${content.componentTitle ? ' · ' + content.componentTitle : ''}\n\n${content.text}`,
+                        }),
                   },
                   true,
                 ),
@@ -620,6 +632,7 @@ export class MercadoPagoPayments {
         }
       }
       tx.set(botPath(id, 'orders', oid), order);
+      syncBundles(shop);
       tx.set(botRoot(id), shop);
       return effects;
     });

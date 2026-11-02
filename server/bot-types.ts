@@ -101,6 +101,7 @@ export interface Product {
   price: number;
   enabled: boolean;
   stock: number;
+  bundle?: { productId: string; quantity: number }[];
   resale_source?: { supplierId: string; productId: string };
   stock_mode?: 'individual' | 'ghost' | 'infinite';
   banner?: string;
@@ -193,6 +194,14 @@ export interface Order {
       originalUnits: StockUnit[];
     };
     units: StockUnit[];
+    bundle_sources?: {
+      accountId: string;
+      productId: string;
+      title: string;
+      quantity: number;
+      stock_mode?: Product['stock_mode'];
+      units: StockUnit[];
+    }[];
   }[];
   total: number;
   coupon: string;

@@ -3645,3 +3645,253 @@ test('Existing immutable provider identifiers require an owner-stored mapping an
   });
   assert.equal(p.posts(), 0);
 });
+
+async function addAutomaticCombo(
+  f: Awaited<ReturnType<typeof fixture>>,
+  components: { productId: string; quantity: number }[],
+) {
+  const portal = new MerchantConsole(f.store, f.key, f.bots),
+    catalog = await portal.read(f.a.id, 'merchant');
+  const result = await portal.saveProduct(f.a.id, 'merchant', {
+    title: 'Combo automático',
+    description: 'Dois produtos na mesma compra',
+    category: 'Combos',
+    price: 1500,
+    enabled: true,
+    banner: '',
+    revision: catalog.revision,
+    bundle: components,
+  });
+  return { portal, pid: result.id };
+}
+
+test('Web-created combo shares stock with standalone purchases, rejects incomplete carts, restores cancellation and delivers named components through Stars', async () => {
+  const f = await fixture(),
+    a = await f.product(['NETFLIX-1', 'NETFLIX-2']),
+    b = await f.product(['DISNEY-1', 'DISNEY-2']);
+  const { portal, pid } = await addAutomaticCombo(f, [
+    { productId: a, quantity: 1 },
+    { productId: b, quantity: 1 },
+  ]);
+  let catalog = await portal.read(f.a.id, 'merchant');
+  assert.equal(catalog.products.find((p) => p.id === pid)!.stock, 2);
+  await f.click(222222222, 'add:' + pid);
+  await f.click(222222222, 'add:' + a);
+  await f.click(222222222, 'checkout');
+  let shop = (await f.store.get('bot_shops/' + f.a.id))!,
+    oid = shop.recent_orders[0];
+  assert.equal((await f.store.get(`bot_shops/${f.a.id}/products/${a}`))!.units.length, 0);
+  assert.equal((await f.store.get(`bot_shops/${f.a.id}/products/${b}`))!.units.length, 1);
+  await f.click(222222222, 'cancel:' + oid);
+  await f.click(222222222, 'cancel:' + oid);
+  for (const id of [a, b])
+    assert.equal((await f.store.get(`bot_shops/${f.a.id}/products/${id}`))!.units.length, 2);
+  await f.click(333333333, 'add:' + pid);
+  await f.click(333333333, 'checkout');
+  shop = (await f.store.get('bot_shops/' + f.a.id))!;
+  oid = shop.recent_orders[0];
+  const out = await f.effects(
+    (await f.bots.process(f.auth, f.payment(333333333, oid, 'combo-charge', 1500))).effectIds,
+  );
+  const deliveries = out.filter((e) => e.delivery);
+  assert.equal(deliveries.length, 2);
+  assert(JSON.stringify(deliveries).includes('NETFLIX-1'));
+  // The untouched Disney unit stays ahead of the unit returned by cancellation.
+  assert(JSON.stringify(deliveries).includes('DISNEY-2'));
+  assert(
+    !(
+      await f.effects(
+        (await f.bots.process(f.auth, f.payment(333333333, oid, 'combo-charge', 1500))).effectIds,
+      )
+    ).some((e) => e.delivery),
+  );
+  catalog = await portal.read(f.a.id, 'merchant');
+  assert.equal(catalog.products.find((p) => p.id === pid)!.stock, 1);
+  const inventory = await portal.inventory(f.a.id, 'merchant', pid);
+  await assert.rejects(
+    () =>
+      portal.addStock(f.a.id, 'merchant', {
+        productId: pid,
+        units: ['WRONG'],
+        requestId: randomUUID(),
+      }),
+    { code: 'BUNDLE_STOCK_MANAGED' },
+  );
+  await assert.rejects(
+    () =>
+      portal.stockMode(f.a.id, 'merchant', {
+        productId: pid,
+        version: inventory.version,
+        mode: 'infinite',
+        text: 'WRONG',
+      }),
+    { code: 'BUNDLE_STOCK_MANAGED' },
+  );
+});
+
+test('Telegram owner builds a combo by selecting components and quantities, and stock view routes replenishment to components', async () => {
+  const f = await fixture(),
+    a = await f.product(['A1', 'A2']),
+    b = await f.product(['B1', 'B2']);
+  await f.click(111111111, 'admin:combo-new');
+  await f.send(111111111, 'Meu combo');
+  await f.send(111111111, 'Descrição');
+  await f.send(111111111, '15');
+  const chooser = await f.send(111111111, 'Combos');
+  assert(JSON.stringify(chooser).includes('COMBO AUTOMÁTICO'));
+  let shop = (await f.store.get('bot_shops/' + f.a.id))!,
+    pid = shop.products.at(-1).id;
+  for (const id of [a, b]) {
+    await f.click(111111111, `admin:bundlepick:${pid}:${id}`);
+    await f.send(111111111, '1');
+  }
+  const saved = await f.click(111111111, 'admin:bundlesave:' + pid);
+  assert(JSON.stringify(saved).includes('Combo salvo'));
+  shop = (await f.store.get('bot_shops/' + f.a.id))!;
+  assert.equal(shop.products.at(-1).stock, 2);
+  assert.equal(shop.products.at(-1).bundle.length, 2);
+  const stock = await f.click(111111111, 'admin:stockfor:' + pid);
+  assert(JSON.stringify(stock).includes('admin:stockfor:' + a));
+  assert(!JSON.stringify(stock).includes('admin:stockadd:' + pid));
+  const outsider = await f.click(222222222, 'admin:bundle:' + pid);
+  assert(!JSON.stringify(outsider).includes('admin:bundlepick:'));
+});
+
+test('Global combo checkout allocates only its supplier price, reserves source components, delivers each once and restores only unsold units on cancellation', async () => {
+  const p = await purinFixture(),
+    f = p.f,
+    supplier = randomUUID(),
+    a = 'aaaaaaaaaaaa',
+    b = 'bbbbbbbbbbbb',
+    combo = 'cccccccccccc',
+    vault = new SecretVault(f.key);
+  await f.store.transaction(async (tx) => {
+    const source = structuredClone((await tx.get('bot_shops/' + f.a.id))!);
+    source.products = [
+      {
+        id: a,
+        title: 'Netflix',
+        description: 'Netflix',
+        category: 'Streaming',
+        price: 899,
+        stock: 2,
+        enabled: true,
+      },
+      {
+        id: b,
+        title: 'Disney',
+        description: 'Disney',
+        category: 'Streaming',
+        price: 539,
+        stock: 2,
+        enabled: true,
+      },
+      {
+        id: combo,
+        title: 'Netflix + Disney',
+        description: 'Combo',
+        category: 'Combos',
+        price: 999,
+        stock: 2,
+        enabled: true,
+        bundle: [
+          { productId: a, quantity: 1 },
+          { productId: b, quantity: 1 },
+        ],
+      },
+    ];
+    source.open_orders = [];
+    source.recent_orders = [];
+    source.review_orders = [];
+    tx.set('bot_shops/' + supplier, source);
+    tx.set('merchant_accounts/' + supplier, {
+      id: supplier,
+      firebase_uid: 'supplier',
+      access_status: 'approved',
+    });
+    tx.set('resale_platform/settings', { supplier_id: supplier, owner_uid: 'supplier' });
+    tx.set('resale_profiles/' + f.a.id, { products: 'approved' });
+    for (const [id, label] of [
+      [a, 'NETFLIX'],
+      [b, 'DISNEY'],
+      [combo, 'COMBO'],
+    ])
+      tx.set(`bot_shops/${supplier}/products/${id}`, {
+        id,
+        units:
+          id === combo
+            ? []
+            : [0, 1].map((i) => ({
+                id: 'unit' + i,
+                ciphertext: vault.seal(
+                  JSON.stringify({ kind: 'text', text: label + '-' + i }),
+                  `${supplier}:stock:${id}:unit${i}`,
+                ),
+              })),
+      });
+  });
+  await p.service.setFeePolicy(f.a.id, 'admin', { saleFeePercent: 2 });
+  const { ResaleProgram } = await import('../server/resale-program.js'),
+    portal = new MerchantConsole(f.store, f.key, f.bots);
+  const published = await new ResaleProgram(f.store, async () => false, portal).publishProduct(
+    f.a.id,
+    'merchant',
+    { productId: combo, priceCents: 1600 },
+  );
+  await f.click(333333333, 'buy:' + published.id);
+  let shop = (await f.store.get('bot_shops/' + f.a.id))!,
+    oid = shop.recent_orders[0];
+  const { key } = await f.bots.checkoutForBot(f.auth, '333333333', oid);
+  await p.service.create({ accountId: f.a.id, orderId: oid, key });
+  const charge = [...p.charges.values()][0];
+  assert.equal(charge.subaccountFeeCents, 999);
+  assert.equal(charge.amountCents, 1600);
+  charge.status = 'paid';
+  charge.paidAt = '2026-10-25T12:00:00Z';
+  await p.notify(charge);
+  await p.notify(charge);
+  const stored = (await f.store.get(`bot_shops/${f.a.id}/orders/${oid}`))!;
+  const deliveries = await f.effects(stored.delivery_effects);
+  assert.equal(deliveries.length, 2);
+  assert(JSON.stringify(deliveries).includes('NETFLIX-0'));
+  assert(JSON.stringify(deliveries).includes('DISNEY-0'));
+  assert(JSON.stringify(deliveries).includes('Netflix'));
+  for (const id of [a, b]) {
+    const s = (await f.store.get(`bot_shops/${supplier}/products/${id}`))!;
+    assert.equal(s.units.length, 1);
+    assert.equal(s.shared_reserved, 0);
+  }
+  await f.click(444444444, 'buy:' + published.id);
+  shop = (await f.store.get('bot_shops/' + f.a.id))!;
+  oid = shop.recent_orders[0];
+  await f.click(444444444, 'cancel:' + oid);
+  await f.click(444444444, 'cancel:' + oid);
+  for (const id of [a, b]) {
+    const s = (await f.store.get(`bot_shops/${supplier}/products/${id}`))!;
+    assert.equal(s.units.length, 1);
+    assert.equal(s.units[0].id, 'unit1');
+    assert.equal(s.shared_reserved, 0);
+  }
+  const commissions = await f.store.list('resale_commissions', { limit: 100 });
+  assert.equal(commissions.length, 1);
+  assert.equal(commissions[0].baseCents, 999);
+  assert.equal(commissions[0].partnerCents, 531);
+  assert.equal(commissions[0].blackoutFeeCents, 0);
+});
+
+test('An incomplete mixed combo cart creates no order and leaves both component inventories intact', async () => {
+  const f = await fixture(),
+    a = await f.product(['A']),
+    b = await f.product(['B']);
+  const { pid } = await addAutomaticCombo(f, [
+    { productId: a, quantity: 1 },
+    { productId: b, quantity: 1 },
+  ]);
+  await f.click(222222222, 'add:' + pid);
+  await f.click(222222222, 'add:' + a);
+  const reply = await f.click(222222222, 'checkout');
+  assert(JSON.stringify(reply).includes('Estoque ou cupom indisponível'));
+  assert.equal((await f.store.get('bot_shops/' + f.a.id))!.recent_orders.length, 0);
+  for (const id of [a, b])
+    assert.equal((await f.store.get(`bot_shops/${f.a.id}/products/${id}`))!.units.length, 1);
+});

@@ -116,6 +116,36 @@
             webhookUrl: 'https://exemplo.invalid/webhook',
           };
         if (path === '/store/manage') return structuredClone(data);
+        if (path === '/store/manage/products') {
+          const existing = products.find((p) => p.id === body.id),
+            id = body.id ?? crypto.randomUUID().replaceAll('-', '').slice(0, 12);
+          const product = {
+            ...existing,
+            ...body,
+            id,
+            stock: existing?.stock ?? 0,
+            stock_mode: existing?.stock_mode ?? 'individual',
+          };
+          if (existing) Object.assign(existing, product);
+          else {
+            products.push(product);
+            inventory.set(id, {
+              version: 'demo',
+              mode: 'individual',
+              quantity: 0,
+              text: '',
+              units: [],
+            });
+          }
+          for (const p of products.filter((p) => p.bundle?.length))
+            p.stock = Math.min(
+              ...p.bundle.map((r) =>
+                Math.floor((products.find((v) => v.id === r.productId)?.stock ?? 0) / r.quantity),
+              ),
+            );
+          data.revision++;
+          return { id };
+        }
         if (path === '/store/resale') return structuredClone(own);
         if (path === '/store/resale/products')
           return {

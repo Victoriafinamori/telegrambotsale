@@ -1,3 +1,4 @@
+import { bundleEditor, updateBundleEditor, bundleInventory } from './bundle-editor.js';
 import { mountResale } from './resale.js';
 import { mountStockBrowser } from './stock-browser.js';
 import { mountStoreTest } from './store-test.js';
@@ -170,6 +171,7 @@ export async function mountMerchantConsole(
     stockMode: string;
   }[] = [];
   let resaleSource = '';
+  let createBundle = false;
   let globalCategory = '';
   let globalSearch = '';
   let navigationRequest = 0;
@@ -365,7 +367,7 @@ export async function mountMerchantConsole(
       const products = data.products.filter((p) => p.category === category);
       body =
         category === null
-          ? `<section class="mc-panel"><div class="mc-panel-head"><div><h2>Categorias</h2><p>Organize o catálogo. Escolha uma categoria para cadastrar ou editar seus produtos.</p></div><button data-action="new-product">Adicionar produto</button></div><form data-form="category" class="mc-category-form">${revision()}${input('name', 'Nova categoria', '', 'required maxlength="40" placeholder="Ex.: Cursos, arquivos, licenças"')}${input('emoji', 'Emoji (opcional)', '', 'maxlength="32" placeholder="Cole o emoji que preferir"')}<button type="submit">Criar categoria</button></form><div class="mc-category-list">${
+          ? `<section class="mc-panel"><div class="mc-panel-head"><div><h2>Categorias</h2><p>Organize o catálogo. Escolha uma categoria para cadastrar ou editar seus produtos.</p></div><div class="mc-shortcuts"><button class="quiet" data-action="new-combo">Criar combo</button><button data-action="new-product">Adicionar produto</button></div></div><form data-form="category" class="mc-category-form">${revision()}${input('name', 'Nova categoria', '', 'required maxlength="40" placeholder="Ex.: Cursos, arquivos, licenças"')}${input('emoji', 'Emoji (opcional)', '', 'maxlength="32" placeholder="Cole o emoji que preferir"')}<button type="submit">Criar categoria</button></form><div class="mc-category-list">${
               names
                 .map((name) => {
                   const count = data.products.filter((p) => p.category === name).length;
@@ -377,7 +379,7 @@ export async function mountMerchantConsole(
                 'Depois, adicione os produtos que fazem parte dela.',
               )
             }</div></section>`
-          : `<section class="mc-panel"><div class="mc-panel-head"><div><button class="text-button" data-action="all-categories">Voltar às categorias</button><h2 tabindex="-1">${esc(category)}</h2><p>${products.length} ${products.length === 1 ? 'produto nesta categoria' : 'produtos nesta categoria'}</p></div><button data-action="new-product">Adicionar produto</button></div><div class="mc-category-tools"><button class="quiet" data-action="rename-category">${icon('appearance')}Editar categoria</button><button class="quiet" data-action="delete-category">${icon('trash')}Excluir categoria</button></div><p class="mc-order-help">Use as setas para definir a ordem dos produtos no Telegram.</p><div class="mc-product-list">${products.map((p, index) => `<div class="mc-product-row" data-product-id="${p.id}"><button class="mc-product" data-edit="${p.id}"><span class="mc-product-image" ${p.banner ? `data-asset="${esc(p.banner)}"` : ''}>Sem foto</span><span><strong>${esc(p.title)}</strong><small>${p.enabled ? 'Disponível' : 'Oculto'}</small></span><span><b>${money(p.price, data.payment_mode === 'manual' ? 'BRL' : 'XTR')}</b><small>${p.stock_mode === 'infinite' ? '∞' : p.stock} un. · Editar</small></span></button><div class="mc-product-order" role="group" aria-label="Ordem de ${esc(p.title)}"><button class="mc-icon-button" data-move="${p.id}" data-direction="up" aria-label="Mover ${esc(p.title)} para cima" title="Mover para cima" ${index === 0 ? 'disabled' : ''}>${icon('up')}</button><button class="mc-icon-button" data-move="${p.id}" data-direction="down" aria-label="Mover ${esc(p.title)} para baixo" title="Mover para baixo" ${index === products.length - 1 ? 'disabled' : ''}>${icon('down')}</button></div></div>`).join('') || empty('Esta categoria ainda está vazia', 'Use Adicionar produto para começar.')}</div></section>`;
+          : `<section class="mc-panel"><div class="mc-panel-head"><div><button class="text-button" data-action="all-categories">Voltar às categorias</button><h2 tabindex="-1">${esc(category)}</h2><p>${products.length} ${products.length === 1 ? 'produto nesta categoria' : 'produtos nesta categoria'}</p></div><div class="mc-shortcuts"><button class="quiet" data-action="new-combo">Criar combo</button><button data-action="new-product">Adicionar produto</button></div></div><div class="mc-category-tools"><button class="quiet" data-action="rename-category">${icon('appearance')}Editar categoria</button><button class="quiet" data-action="delete-category">${icon('trash')}Excluir categoria</button></div><p class="mc-order-help">Use as setas para definir a ordem dos produtos no Telegram.</p><div class="mc-product-list">${products.map((p, index) => `<div class="mc-product-row" data-product-id="${p.id}"><button class="mc-product" data-edit="${p.id}"><span class="mc-product-image" ${p.banner ? `data-asset="${esc(p.banner)}"` : ''}>Sem foto</span><span><strong>${esc(p.title)}</strong><small>${p.enabled ? 'Disponível' : 'Oculto'}</small></span><span><b>${money(p.price, data.payment_mode === 'manual' ? 'BRL' : 'XTR')}</b><small>${p.stock_mode === 'infinite' ? '∞' : p.stock} un. · Editar</small></span></button><div class="mc-product-order" role="group" aria-label="Ordem de ${esc(p.title)}"><button class="mc-icon-button" data-move="${p.id}" data-direction="up" aria-label="Mover ${esc(p.title)} para cima" title="Mover para cima" ${index === 0 ? 'disabled' : ''}>${icon('up')}</button><button class="mc-icon-button" data-move="${p.id}" data-direction="down" aria-label="Mover ${esc(p.title)} para baixo" title="Mover para baixo" ${index === products.length - 1 ? 'disabled' : ''}>${icon('down')}</button></div></div>`).join('') || empty('Esta categoria ainda está vazia', 'Use Adicionar produto para começar.')}</div></section>`;
     }
     if (section === 'products' && resaleOffers.length)
       body =
@@ -423,7 +425,7 @@ export async function mountMerchantConsole(
               enabled: true,
             } as Product)
           : undefined);
-      body = `<section class="mc-panel">${offer ? '<div class="mc-global-steps"><span>✓ Produto escolhido</span><b>2 · Defina o preço</b><span>3 · Publique na loja</span></div>' : ''}<div class="mc-panel-head"><h2>${offer ? esc(offer.title) : selected ? 'Editar produto' : 'Novo produto'}</h2><button class="quiet" data-section="products">Voltar ao catálogo</button></div><form data-form="product">${!selected && resaleOffers.length ? `<label>Origem do produto<select data-resale-source><option value="">Produto próprio · estoque da minha loja</option><optgroup label="Estoque global Blackout">${resaleOffers.map((o) => `<option value="${o.productId}" ${resaleSource === o.productId ? 'selected' : ''}>${esc(o.title)} · fornecedor ${money(o.baseCents)}</option>`).join('')}</optgroup></select></label>` : ''}${offer ? `<p class="mc-note">Estoque global · fornecedor: <b>${money(offer.baseCents)}</b>. Seu preço deve ser maior. Personalize a descrição e a foto; a entrega usa o estoque da Blackout. Não é preciso cadastrar códigos ou arquivos.</p>` : ''}${revision()}${selected ? `<input type="hidden" name="id" value="${selected.id}">` : ''}${input('title', 'Nome do produto', p?.title ?? '', 'required maxlength="70"' + (offer && !selected ? ' readonly' : ''))}${area('description', 'Descrição', p?.description ?? '', 400)}<div class="mc-form-row"><label>Categoria<select name="category" required ${offer && !selected ? 'disabled' : ''}><option value="">Escolha uma categoria</option>${[
+      body = `<section class="mc-panel">${offer ? '<div class="mc-global-steps"><span>✓ Produto escolhido</span><b>2 · Defina o preço</b><span>3 · Publique na loja</span></div>' : ''}<div class="mc-panel-head"><h2>${offer ? esc(offer.title) : selected ? 'Editar produto' : 'Novo produto'}</h2><button class="quiet" data-section="products">Voltar ao catálogo</button></div><form data-form="product">${!selected && resaleOffers.length ? `<label>Origem do produto<select data-resale-source><option value="">Produto próprio · estoque da minha loja</option><optgroup label="Estoque global Blackout">${resaleOffers.map((o) => `<option value="${o.productId}" ${resaleSource === o.productId ? 'selected' : ''}>${esc(o.title)} · fornecedor ${money(o.baseCents)}</option>`).join('')}</optgroup></select></label>` : ''}${offer ? `<p class="mc-note">Estoque global · fornecedor: <b>${money(offer.baseCents)}</b>. Seu preço deve ser maior. Personalize a descrição e a foto; a entrega usa o estoque da Blackout. Não é preciso cadastrar códigos ou arquivos.</p>` : ''}${revision()}${selected ? `<input type="hidden" name="id" value="${selected.id}">` : ''}${input('title', 'Nome do produto', p?.title ?? '', 'required maxlength="70"' + (offer && !selected ? ' readonly' : ''))}${area('description', 'Descrição', p?.description ?? '', 400)}${!offer ? bundleEditor(data.products, p, createBundle) : ''}<div class="mc-form-row"><label>Categoria<select name="category" required ${offer && !selected ? 'disabled' : ''}><option value="">Escolha uma categoria</option>${[
         ...new Set([
           ...(data.categories ?? []),
           ...data.products.map((v) => v.category),
@@ -508,6 +510,7 @@ export async function mountMerchantConsole(
     }
     syncNavigation();
     mountLivePreview();
+    updateBundleEditor(host, data.products);
     if (section === 'test') {
       const testHost = document.createElement('div');
       host.querySelector('.mc-main')!.append(testHost);
@@ -755,6 +758,12 @@ export async function mountMerchantConsole(
     dialog.setAttribute('aria-label', 'Estoque do produto');
     host.append(dialog);
     dialog.addEventListener('close', () => dialog.remove());
+    if (product?.bundle?.length) {
+      bundleInventory(dialog, product, data.products, (id) => {
+        void run(() => inventoryDialog(id));
+      });
+      return;
+    }
     const load = async () => {
       const result = await api<{
         version: string;
@@ -963,6 +972,7 @@ export async function mountMerchantConsole(
       return;
     }
     if (button.dataset.edit) {
+      createBundle = false;
       resaleSource = '';
       selected = data.products.find((p) => p.id === button.dataset.edit);
       section = 'product-edit';
@@ -984,7 +994,8 @@ export async function mountMerchantConsole(
       render();
       return;
     }
-    if (action === 'new-product') {
+    if (action === 'new-product' || action === 'new-combo') {
+      createBundle = action === 'new-combo';
       resaleSource = '';
       selected = undefined;
       section = 'product-edit';
@@ -1061,6 +1072,7 @@ export async function mountMerchantConsole(
     }
   });
   host.addEventListener('input', (event) => {
+    updateBundleEditor(host, data.products);
     const field = event.target as HTMLInputElement;
     if (field.matches('[data-global-search]')) {
       globalSearch = field.value;
@@ -1074,6 +1086,7 @@ export async function mountMerchantConsole(
     updateLivePreview();
   });
   host.addEventListener('change', (event) => {
+    updateBundleEditor(host, data.products);
     const field = event.target as HTMLInputElement;
     if (field.matches('[data-global-category]')) {
       globalCategory = field.value;
@@ -1137,6 +1150,17 @@ export async function mountMerchantConsole(
         else
           await api('/store/manage/products', {
             ...(value('id') ? { id: value('id') } : {}),
+            ...(!selected?.resale_source
+              ? {
+                  bundle:
+                    value('productKind') === 'bundle'
+                      ? fields.getAll('bundleProduct').map((id) => ({
+                          productId: String(id),
+                          quantity: Number(value('bundleQty_' + id)),
+                        }))
+                      : [],
+                }
+              : {}),
             title: value('title'),
             description: value('description'),
             category: value('category'),

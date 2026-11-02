@@ -4,6 +4,8 @@ import type { Doc, DocumentStore, DocumentTransaction } from './document-store.j
 import { botTransaction } from './bot-data.js';
 import { HttpError } from './types.js';
 import { productGrant } from './resale-grant.js';
+import { syncBundles } from './bundle-stock.js';
+import type { Shop } from './bot-types.js';
 
 const cents = z.number().int().min(1).max(10000000);
 const identifier = z.uuid();
@@ -215,6 +217,7 @@ export class ResaleCatalog {
       await this.owner(tx, partnerId, uid);
       const supplier = await tx.get(accountPath(supplierId)),
         shop = await tx.get('bot_shops/' + supplierId);
+      if (shop) syncBundles(shop as Shop);
       const product = shop?.products.find((p: Doc) => p.id === productId && p.enabled);
       const grant = await productGrant(tx, supplierId, partnerId, productId, product);
       const profile = await tx.get('resale_profiles/' + partnerId);

@@ -8,6 +8,13 @@ import { resaleRecipient } from './resale-finance.js';
 import { sharedOffer, publishSharedProduct, sharedCatalog } from './resale-product.js';
 import { productGrant } from './resale-grant.js';
 import {
+  StockPlanner,
+  reserveBundle,
+  changeBundle,
+  syncBundles,
+  validateBundle,
+} from './bundle-stock.js';
+import {
   modeInput,
   configureStock,
   syncStock,
@@ -483,11 +490,56 @@ export class BotStore {
             ['🏪 Abrir loja', 'catalog'],
           ],
           [['Categorias e emojis', 'admin:categories']],
+          [['🧩 Novo combo automático', 'admin:combo-new']],
           [['Carteira', 'admin:wallet']],
           [['Minha assinatura', 'admin:subscription']],
         ]);
+      const bundleBuilder = (pid: string) => {
+        const p = shop.products.find((p) => p.id === pid),
+          session = customer.session;
+        if (!p || p.resale_source) {
+          say('Este produto é gerenciado pelo fornecedor.', adminMenu());
+          return;
+        }
+        const parts = session?.parts ?? p.bundle ?? [],
+          candidates = shop.products.filter(
+            (p) => p.id !== pid && !p.bundle?.length && !p.resale_source,
+          ),
+          page = Math.min(
+            Math.max(0, session?.page ?? 0),
+            Math.max(0, Math.ceil(candidates.length / 8) - 1),
+          );
+        say(
+          `🧩 COMBO AUTOMÁTICO · ${p.title}\n\nEscolha pelo menos 2 produtos individuais. Toque em cada produto e informe quantas unidades entram em uma venda do combo.\n\n${parts.length ? parts.map((r: { productId: string; quantity: number }) => r.quantity + ' × ' + shop.products.find((p) => p.id === r.productId)?.title).join('\n') : 'Nenhum componente escolhido.'}\n\nO estoque e a entrega serão calculados automaticamente. Não é preciso abastecer o combo.`,
+          buttons([
+            ...candidates
+              .slice(page * 8, page * 8 + 8)
+              .map(
+                (p) =>
+                  [
+                    [
+                      `${parts.some((r: { productId: string }) => r.productId === p.id) ? '✓ ' : ''}${p.title}`,
+                      `admin:bundlepick:${pid}:${p.id}`,
+                    ],
+                  ] as [string, string][],
+              ),
+            ...(page > 0
+              ? ([[['‹ Anterior', `admin:bundlepage:${pid}:${page - 1}`]]] as [string, string][][])
+              : []),
+            ...(candidates.length > (page + 1) * 8
+              ? ([[['Próximos ›', `admin:bundlepage:${pid}:${page + 1}`]]] as [string, string][][])
+              : []),
+            [['Salvar composição', `admin:bundlesave:${pid}`]],
+            [['Cancelar', `admin:editfor:${pid}`]],
+          ]),
+        );
+      };
       const release = async (order: Order, status: 'expired' | 'cancelled' | 'rejected') => {
         for (const item of order.items) {
+          if (item.bundle_sources && !item.resale_source) {
+            await changeBundle(tx, item, 'restore', id, shop);
+            continue;
+          }
           if (item.resale_source) {
             await restoreShared(tx, item);
             continue;
@@ -533,13 +585,21 @@ export class BotStore {
               content.kind === 'document'
                 ? effect(
                     'sendDocument',
-                    { chat_id: order.buyer_id, document: content.fileId, caption: item.title },
+                    {
+                      chat_id: order.buyer_id,
+                      document: content.fileId,
+                      caption:
+                        item.title + (content.componentTitle ? ' · ' + content.componentTitle : ''),
+                    },
                     order,
                     true,
                   )
                 : effect(
                     'sendMessage',
-                    { chat_id: order.buyer_id, text: `${item.title}\n\n${content.text}` },
+                    {
+                      chat_id: order.buyer_id,
+                      text: `${item.title}${content.componentTitle ? ' · ' + content.componentTitle : ''}\n\n${content.text}`,
+                    },
                     order,
                     true,
                   ),
@@ -1189,6 +1249,94 @@ export class BotStore {
               if (!(e instanceof HttpError)) throw e;
               say(e.message, adminMenu());
             }
+          } else if (action === 'combo-new') {
+            customer.session = { step: 'product_title', bundle_new: true };
+            say(
+              '🧩 NOVO COMBO\n\nQual será o nome do combo? Depois do nome, descrição, preço e categoria, você escolherá os produtos que serão entregues. Envie /cancelar para sair.',
+            );
+          } else if (action.startsWith('bundle:')) {
+            const pid = action.slice(7),
+              p = shop.products.find((p) => p.id === pid);
+            customer.session = {
+              step: 'bundle_build',
+              product: pid,
+              parts: p?.bundle ?? [],
+              page: 0,
+            };
+            bundleBuilder(pid);
+          } else if (action.startsWith('bundlepage:')) {
+            const [, pid, page] = action.split(':');
+            if (customer.session?.product === pid) {
+              customer.session.page = Number(page) || 0;
+              bundleBuilder(pid);
+            }
+          } else if (action.startsWith('bundlepick:')) {
+            const [, pid, component] = action.split(':');
+            if (customer.session?.product === pid) {
+              customer.session = { ...customer.session, step: 'bundle_quantity', component };
+              say(
+                'Quantas unidades de ' +
+                  shop.products.find((p) => p.id === component)?.title +
+                  ' entram em cada combo?\nEnvie um número de 1 a 10, ou 0 para remover.',
+                buttons([[['Voltar à composição', `admin:bundleback:${pid}`]]]),
+              );
+            }
+          } else if (action.startsWith('bundleback:')) {
+            const pid = action.slice(11);
+            if (customer.session?.product === pid) {
+              customer.session.step = 'bundle_build';
+              bundleBuilder(pid);
+            }
+          } else if (action.startsWith('bundlesave:')) {
+            const pid = action.slice(11),
+              p = shop.products.find((p) => p.id === pid),
+              draft = customer.session;
+            if (p && !p.resale_source && draft?.product === pid && draft.step === 'bundle_build') {
+              try {
+                validateBundle(shop, pid, draft.parts);
+                if (draft.parts.length < 2)
+                  throw new HttpError(
+                    400,
+                    'BUNDLE_COMPONENT_INVALID',
+                    'Escolha pelo menos dois produtos.',
+                  );
+                const inventory = await tx.get(productDoc(pid));
+                if (!p.bundle?.length)
+                  for (const oid of shop.open_orders) {
+                    const order = await tx.get(orderDoc(oid));
+                    if (
+                      order &&
+                      isOpen(order as Order) &&
+                      order.items.some((i: Doc) => i.product_id === pid)
+                    )
+                      throw new HttpError(
+                        409,
+                        'STOCK_RESERVED',
+                        'Aguarde os pedidos deste produto terminarem antes de transformá-lo em combo.',
+                      );
+                  }
+                if (inventory?.units?.length || inventory?.shared_reserved)
+                  throw new HttpError(
+                    409,
+                    'BUNDLE_HAS_OWN_STOCK',
+                    'Use um produto sem estoque próprio para criar o combo.',
+                  );
+                p.bundle = draft.parts;
+                syncBundles(shop);
+                customer.session = null;
+                this.audit(tx, id, 'store.bundle_saved', userId);
+                say(
+                  `✅ Combo salvo · ${p.title}\nDisponíveis agora: ${p.stock}\nReponha somente os produtos individuais.`,
+                  buttons([
+                    [['Ver componentes', `admin:stockfor:${pid}`]],
+                    [['Administrar', 'admin']],
+                  ]),
+                );
+              } catch (e) {
+                if (!(e instanceof HttpError) && !(e instanceof Error)) throw e;
+                say(e.message, buttons([[['Voltar à composição', `admin:bundleback:${pid}`]]]));
+              }
+            }
           } else if (action === 'new' || action === 'newown') {
             customer.session = { step: 'product_title' };
             say('Qual é o nome do produto? Envie /cancelar para sair.');
@@ -1292,7 +1440,20 @@ export class BotStore {
             const stock = product ? await tx.get(productDoc(pid)) : null;
             customer.session = null;
             if (!stock || !product) say('Produto não encontrado.', adminMenu());
-            else {
+            else if (product.bundle?.length) {
+              syncBundles(shop);
+              say(
+                `🧩 ${product.title}\n\nDisponíveis: ${product.stock}\n\nO estoque vem dos componentes. Toque abaixo para repor um deles.`,
+                buttons(
+                  product.bundle.map((r) => [
+                    [
+                      `${r.quantity} × ${shop.products.find((p) => p.id === r.productId)?.title}`,
+                      `admin:stockfor:${r.productId}`,
+                    ],
+                  ]),
+                ),
+              );
+            } else {
               if (operation === 'stockdo') {
                 try {
                   changeStock(stock, parts[2], parts[3], parts[4]);
@@ -1456,6 +1617,7 @@ export class BotStore {
               );
           } else if (action.startsWith('editfor:')) {
             const pid = action.slice(8);
+            customer.session = null;
             say(
               'Escolha o que alterar:',
               buttons([
@@ -1468,6 +1630,9 @@ export class BotStore {
                   ['Categoria', `admin:field:category:${pid}`],
                 ],
                 [['🖼 Foto do produto', `admin:productbanner:${pid}`]],
+                ...(!shop.products.find((p) => p.id === pid)?.resale_source
+                  ? [[['🧩 Composição do combo', `admin:bundle:${pid}`]] as [string, string][]]
+                  : []),
                 [['Ativar/desativar', `admin:toggle:${pid}`]],
               ]),
             );
@@ -1667,10 +1832,22 @@ export class BotStore {
               if (!(e instanceof HttpError)) throw e;
               say(e.message, adminMenu());
             }
+          } else if (session.step === 'bundle_quantity') {
+            if (!/^\d{1,2}$/.test(text) || Number(text) > 10)
+              say('Envie de 1 a 10, ou 0 para remover.');
+            else {
+              const parts = (session.parts ?? []).filter(
+                (r: { productId: string }) => r.productId !== session.component,
+              );
+              if (Number(text) > 0)
+                parts.push({ productId: session.component, quantity: Number(text) });
+              customer.session = { ...session, step: 'bundle_build', parts };
+              bundleBuilder(session.product);
+            }
           } else if (session.step === 'product_title') {
             if (text.length < 1 || text.length > 70) say('Use de 1 a 70 caracteres.');
             else {
-              customer.session = { step: 'product_description', title: text };
+              customer.session = { ...session, step: 'product_description', title: text };
               say('Envie a descrição (até 400 caracteres).');
             }
           } else if (session.step === 'product_description') {
@@ -1727,8 +1904,13 @@ export class BotStore {
                 enabled: true,
               });
               tx.set(productDoc(pid), { id: pid, units: [] });
-              customer.session = null;
-              say('Produto criado. Use Estoque para adicionar as unidades.', adminMenu());
+              if (session.bundle_new) {
+                customer.session = { step: 'bundle_build', product: pid, parts: [], page: 0 };
+                bundleBuilder(pid);
+              } else {
+                customer.session = null;
+                say('Produto criado. Use Estoque para adicionar as unidades.', adminMenu());
+              }
             }
           } else if (session.step === 'stock_mode_quantity') {
             if (!/^\d{1,7}$/.test(text) || Number(text) > 1000000)
@@ -1794,6 +1976,12 @@ export class BotStore {
             if (!p || !stock) {
               customer.session = null;
               say('Produto não encontrado.');
+            } else if (p.bundle?.length || p.resale_source) {
+              customer.session = null;
+              say(
+                'Este estoque é automático. Reponha os produtos individuais na loja de origem.',
+                adminMenu(),
+              );
             } else if (
               !units.length ||
               units.length > 20 ||
@@ -2078,6 +2266,7 @@ export class BotStore {
           else {
             const coupon = checkoutCoupon ? shop.coupons[checkoutCoupon] : null;
             const reservation: Order['items'] = [];
+            const planner = new StockPlanner(tx);
             let total = 0,
               valid = !checkoutCoupon || Boolean(coupon && coupon.used < coupon.limit);
             const shared = checkoutItems.some(
@@ -2102,7 +2291,22 @@ export class BotStore {
                 stock = await tx.get(productDoc(item.id));
               if (p?.resale_source) {
                 try {
-                  reservation.push(await reserveShared(tx, id, p, item.quantity, this.vault));
+                  reservation.push(
+                    await reserveShared(tx, id, p, item.quantity, this.vault, planner),
+                  );
+                  total += p.price * item.quantity;
+                  continue;
+                } catch (error) {
+                  if (!(error instanceof HttpError)) throw error;
+                  valid = false;
+                  break;
+                }
+              }
+              if (p?.bundle?.length) {
+                try {
+                  reservation.push(
+                    await reserveBundle(tx, id, id, p, item.quantity, this.vault, planner),
+                  );
                   total += p.price * item.quantity;
                   continue;
                 } catch (error) {
@@ -2115,11 +2319,19 @@ export class BotStore {
                 valid = false;
                 break;
               }
+              let planned;
+              try {
+                planned = await planner.take(id, p.id, item.quantity);
+              } catch (error) {
+                if (!(error instanceof HttpError)) throw error;
+                valid = false;
+                break;
+              }
               reservation.push({
                 product_id: p.id,
                 title: p.title,
                 quantity: item.quantity,
-                units: reserveUnits(stock, item.quantity)!,
+                units: planned.units,
                 stock_mode: stock.mode ?? 'individual',
               });
               total += p.price * item.quantity;
@@ -2189,6 +2401,10 @@ export class BotStore {
               for (const item of reservation) {
                 if (item.resale_source) {
                   await consumeShared(tx, item);
+                  continue;
+                }
+                if (item.bundle_sources) {
+                  await changeBundle(tx, item, 'consume', id, shop);
                   continue;
                 }
                 const stock = (await tx.get(productDoc(item.product_id)))!;
@@ -2343,6 +2559,7 @@ export class BotStore {
         }
       }
       if (!web) reuseNavigationMessage(update, effects);
+      syncBundles(shop);
       saveShop();
       const effectIds = effects.map((v) => v.id);
       const leased =
@@ -2386,6 +2603,7 @@ export class BotStore {
       const { runtime, account, setup, shop } = await this.access(tx, auth);
       if (botName && botName !== shop.title) {
         shop.title = botName;
+        syncBundles(shop);
         tx.set(root(auth.accountId), shop);
       }
       if (

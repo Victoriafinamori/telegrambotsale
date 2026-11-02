@@ -1,4 +1,5 @@
 import { restoreShared, finishShared } from './resale-stock.js';
+import { changeBundle, syncBundles } from './bundle-stock.js';
 import { creditProof, recordCommission } from './resale-finance.js';
 import { restoreStock, syncStock } from './stock-modes.js';
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -759,6 +760,10 @@ export class PurinCashPayments {
       const release = async () => {
         if (order.status !== 'awaiting_payment') return;
         for (const item of order.items) {
+          if (item.bundle_sources && !item.resale_source) {
+            await changeBundle(tx, item, 'restore', id, shop);
+            continue;
+          }
           if (item.resale_source) {
             await restoreShared(tx, item);
             continue;
@@ -852,8 +857,13 @@ export class PurinCashPayments {
                   {
                     chat_id: order.buyer_id,
                     ...(content.kind === 'document'
-                      ? { document: content.fileId, caption: `🎁 ${item.title}\nPedido #${oid}` }
-                      : { text: `🎁 ${item.title}\n\n${content.text}\n\nPedido #${oid}` }),
+                      ? {
+                          document: content.fileId,
+                          caption: `🎁 ${item.title}${content.componentTitle ? ' · ' + content.componentTitle : ''}\nPedido #${oid}`,
+                        }
+                      : {
+                          text: `🎁 ${item.title}${content.componentTitle ? ' · ' + content.componentTitle : ''}\n\n${content.text}\n\nPedido #${oid}`,
+                        }),
                   },
                   true,
                 ),
@@ -863,6 +873,7 @@ export class PurinCashPayments {
         this.audit(tx, id, 'purincash', 'bot_order.automatic_pix_' + order.status);
       }
       tx.set(botPath(id, 'orders', oid), order);
+      syncBundles(shop);
       tx.set(botRoot(id), shop);
     });
     // Durable effects are claimed by the authenticated bot worker with its usual leases/acks.

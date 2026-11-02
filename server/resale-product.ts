@@ -4,6 +4,7 @@ import { productGrant } from './resale-grant.js';
 import { resaleRecipient } from './resale-finance.js';
 import { tokenHash } from './accounts.js';
 import { HttpError } from './types.js';
+import { syncBundles } from './bundle-stock.js';
 export async function sharedOffer(tx: DocumentTransaction, accountId: string, productId: string) {
   const global = await tx.get('resale_platform/settings');
   if (!global || global.supplier_id === accountId)
@@ -13,6 +14,7 @@ export async function sharedOffer(tx: DocumentTransaction, accountId: string, pr
     tx.get('merchant_accounts/' + global.supplier_id),
     tx.get('resale_profiles/' + accountId),
   ]);
+  if (supplier) syncBundles(supplier as Shop);
   const product = supplier?.products.find(
     (p: Doc) => p.id === productId && p.enabled && !p.resale_source,
   );
