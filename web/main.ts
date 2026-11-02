@@ -114,7 +114,13 @@ const inviteToken = () => pendingInvitation.read(location.hash);
 let invitationAuthStarted = false;
 const verificationReturnUrl = () => {
   const token = inviteToken();
-  return location.origin + (token ? '/#/convite?token=' + encodeURIComponent(token) : '');
+  const checkout =
+    location.hash.startsWith('#/comprar') ||
+    new URLSearchParams(location.hash.split('?')[1] ?? '').get('checkout') === '1';
+  return (
+    location.origin +
+    (token ? '/#/convite?token=' + encodeURIComponent(token) : checkout ? '/#/comprar' : '')
+  );
 };
 async function api<T = Record<string, unknown>>(
   path: string,
@@ -410,6 +416,8 @@ async function load() {
     me = await api<Me>('/me');
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) me = null;
+    else if (e instanceof ApiError && e.code === 'EMAIL_UNVERIFIED' && route === '#/comprar')
+      me = null;
     else if (
       e instanceof ApiError &&
       e.code === 'EMAIL_UNVERIFIED' &&
@@ -463,6 +471,9 @@ async function load() {
     return;
   }
   if (!me) {
+    const checkoutParams = new URLSearchParams(location.hash.split('?')[1] ?? '');
+    if (route === '#/entrar' && checkoutParams.get('checkout') === '1' && authMode !== 'verify')
+      authMode = checkoutParams.get('signup') === '1' ? 'signup' : 'login';
     renderAuth();
     return;
   }

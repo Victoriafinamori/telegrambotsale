@@ -128,6 +128,7 @@ export class PlatformSubscriptions {
       paidThrough: clock(invoice.paid_through),
       qrCode,
       purpose: invoice.purpose ?? 'renewal',
+      claimed: Boolean(invoice.guest_claimed_uid),
     };
   }
   private buyer(identity: Identity) {
@@ -172,18 +173,133 @@ export class PlatformSubscriptions {
     };
   }
   async purchaseCreate(identity: Identity, raw: unknown) {
-    const buyer = this.buyer(identity),
-      input = z
-        .object({
-          plan: planId,
-          requestId: z.uuid(),
-          expectedPriceCents: z.number().int().positive(),
-          name: z.string().trim().min(2).max(80),
-          storeName: z.string().trim().min(2).max(80),
-          partnerId: z.uuid().optional(),
-        })
-        .strict()
-        .parse(raw);
+    return this.createPurchase(this.buyer(identity), raw);
+  }
+  async guestCreate(raw: unknown) {
+    const input = z
+      .object({
+        key: z.string().regex(/^[a-f0-9]{64}$/),
+        plan: planId,
+        requestId: z.uuid(),
+        expectedPriceCents: z.number().int().positive(),
+        partnerId: z.uuid().optional(),
+      })
+      .strict()
+      .parse(raw);
+    const { key, ...order } = input;
+    return this.createPurchase(
+      { uid: 'guest:' + tokenHash(key), email: '' },
+      { ...order, name: '', storeName: '' },
+      tokenHash(key),
+    );
+  }
+  private async guestInvoice(raw: unknown) {
+    const input = z
+      .object({ invoiceId: z.uuid().optional(), key: z.string().regex(/^[a-f0-9]{64}$/) })
+      .strict()
+      .parse(raw);
+    const pointer = input.invoiceId
+      ? null
+      : await this.store.get(
+          'platform_subscription_signups/' + tokenHash('guest:' + tokenHash(input.key)),
+        );
+    const id = input.invoiceId ?? pointer?.invoice_id;
+    const invoice = id ? await this.store.get(invoicePath(id)) : null;
+    if (!invoice?.guest_key_hash || invoice.guest_key_hash !== tokenHash(input.key))
+      throw new HttpError(
+        404,
+        'INVOICE_NOT_FOUND',
+        'Cobrança não encontrada. Use o mesmo navegador da compra.',
+      );
+    return invoice;
+  }
+  async guestRead(raw: unknown, check = false) {
+    const invoice = await this.guestInvoice(raw);
+    return check ? this.checkInvoice(invoice) : this.safe(invoice);
+  }
+  async guestClaim(identity: Identity, raw: unknown) {
+    const buyer = this.buyer(identity);
+    const input = z
+      .object({
+        invoiceId: z.uuid(),
+        key: z.string().regex(/^[a-f0-9]{64}$/),
+        name: z.string().trim().min(2).max(80),
+        storeName: z.string().trim().min(2).max(80),
+      })
+      .strict()
+      .parse(raw);
+    await this.guestInvoice({ invoiceId: input.invoiceId, key: input.key });
+    return botTransaction(this.store, async (tx) => {
+      const invoice = await tx.get(invoicePath(input.invoiceId));
+      if (!invoice || invoice.guest_key_hash !== tokenHash(input.key))
+        throw new HttpError(404, 'INVOICE_NOT_FOUND', 'Cobrança não encontrada.');
+      if (invoice.guest_claimed_uid) {
+        if (invoice.guest_claimed_uid !== buyer.uid)
+          throw new HttpError(
+            409,
+            'PAYMENT_ALREADY_USED',
+            'Esta compra já está vinculada a outra conta.',
+          );
+        return { ok: true, accountId: invoice.account_id };
+      }
+      if (invoice.status !== 'paid')
+        throw new HttpError(
+          409,
+          'PAYMENT_NOT_CONFIRMED',
+          'Aguarde a confirmação do pagamento antes de configurar a loja.',
+        );
+      const [uidLink, emailLink, receipt, existing, partner] = await Promise.all([
+        tx.get('platform_uids/' + tokenHash(buyer.uid)),
+        tx.get('platform_emails/' + tokenHash(buyer.email)),
+        tx.get('platform_subscription_payments/' + invoice.payment_id),
+        tx.get(accountPath(invoice.account_id)),
+        invoice.resale ? tx.get(accountPath(invoice.resale.partnerId)) : Promise.resolve(null),
+      ]);
+      if (uidLink || emailLink || existing || partner?.firebase_uid === buyer.uid)
+        throw new HttpError(
+          409,
+          'EXISTING_CONTRACT',
+          'Esta conta já possui uma loja ou é a responsável pela revenda. Fale com a Blackout para vincular este pagamento.',
+        );
+      if (receipt?.invoice_id !== invoice.id)
+        throw new HttpError(409, 'PAYMENT_NOT_CONFIRMED', 'Pagamento em conferência.');
+      const claimed = {
+        ...invoice,
+        uid: buyer.uid,
+        email: buyer.email,
+        name: input.name,
+        store_name: input.storeName,
+        guest_claimed_uid: buyer.uid,
+      };
+      this.activatePurchase(tx, claimed, invoice.payment_id);
+      tx.set('platform_subscription_signups/' + tokenHash(buyer.uid), { invoice_id: invoice.id });
+      return { ok: true, accountId: invoice.account_id };
+    });
+  }
+  private async createPurchase(
+    buyer: { uid: string; email: string },
+    raw: unknown,
+    guestHash?: string,
+  ) {
+    const input = z
+      .object({
+        plan: planId,
+        requestId: z.uuid(),
+        expectedPriceCents: z.number().int().positive(),
+        name: z
+          .string()
+          .trim()
+          .min(guestHash ? 0 : 2)
+          .max(80),
+        storeName: z
+          .string()
+          .trim()
+          .min(guestHash ? 0 : 2)
+          .max(80),
+        partnerId: z.uuid().optional(),
+      })
+      .strict()
+      .parse(raw);
     const plan = (await this.publicPlans(input.partnerId, buyer.uid)).plans.find(
       (p) => p.id === input.plan,
     )!;
@@ -201,8 +317,8 @@ export class PlatformSubscriptions {
     const claim = await botTransaction(this.store, async (tx) => {
       const [link, emailLink, reservation, pointer] = await Promise.all([
         tx.get('platform_uids/' + tokenHash(buyer.uid)),
-        tx.get('platform_emails/' + tokenHash(buyer.email)),
-        tx.get(emailReservation),
+        guestHash ? Promise.resolve(null) : tx.get('platform_emails/' + tokenHash(buyer.email)),
+        guestHash ? Promise.resolve(null) : tx.get(emailReservation),
         tx.get(signupPath),
       ]);
       if (link || emailLink)
@@ -245,6 +361,7 @@ export class PlatformSubscriptions {
         ? await resaleRecipient(tx, quote.partnerId, 'plan', gateway.generation, quote.baseCents)
         : null;
       const invoice = {
+        ...(guestHash ? { guest_key_hash: guestHash } : {}),
         ...(resale ? { resale, base_total: quote!.baseCents } : {}),
         id: invoiceId,
         account_id: accountId,
@@ -273,7 +390,7 @@ export class PlatformSubscriptions {
           created_at: this.now(),
         });
       tx.set(signupPath, { invoice_id: invoiceId });
-      tx.set(emailReservation, { uid: buyer.uid, invoice_id: invoiceId });
+      if (!guestHash) tx.set(emailReservation, { uid: buyer.uid, invoice_id: invoiceId });
       tx.set(requestPath, { invoice_id: invoiceId });
       return { invoice, created: true };
     });
@@ -736,6 +853,39 @@ export class PlatformSubscriptions {
     });
   }
   private async settlePurchase(tx: DocumentTransaction, invoice: Doc, payment: Doc) {
+    if (invoice.guest_key_hash && !invoice.guest_claimed_uid && payment.status === 'paid') {
+      const receipt = await tx.get('platform_subscription_payments/' + payment.paymentId);
+      if (receipt && receipt.invoice_id !== invoice.id)
+        throw new HttpError(409, 'PAYMENT_ALREADY_USED', 'Pagamento já vinculado.');
+      const paidAt = payment.paidAt ? new Date(payment.paidAt) : this.now();
+      if (
+        !Number.isFinite(paidAt.getTime()) ||
+        paidAt > invoice.expires_at ||
+        paidAt > this.now()
+      ) {
+        tx.set(invoicePath(invoice.id), {
+          ...invoice,
+          status: 'review_required',
+          payment_id: payment.paymentId,
+        });
+        return;
+      }
+      tx.set(invoicePath(invoice.id), {
+        ...invoice,
+        status: 'paid',
+        payment_id: payment.paymentId,
+        paid_at: this.now(),
+      });
+      tx.set('platform_subscription_payments/' + payment.paymentId, {
+        invoice_id: invoice.id,
+        account_id: invoice.account_id,
+        purpose: 'guest_initial',
+        months: invoice.months,
+        total: invoice.total,
+        created_at: this.now(),
+      });
+      return;
+    }
     const uidPath = 'platform_uids/' + tokenHash(invoice.uid),
       emailPath = 'platform_emails/' + tokenHash(invoice.email);
     const [uidLink, emailLink, receipt, existing] = await Promise.all([
@@ -776,6 +926,11 @@ export class PlatformSubscriptions {
       });
       return;
     }
+    this.activatePurchase(tx, invoice, payment.paymentId);
+  }
+  private activatePurchase(tx: DocumentTransaction, invoice: Doc, paymentId: string) {
+    const uidPath = 'platform_uids/' + tokenHash(invoice.uid),
+      emailPath = 'platform_emails/' + tokenHash(invoice.email);
     const now = this.now(),
       account = {
         id: invoice.account_id,
@@ -788,7 +943,7 @@ export class PlatformSubscriptions {
         price_cents: invoice.base_total ?? invoice.total,
         billing_months: invoice.months,
         firebase_uid: invoice.uid,
-        purchase_confirmed_at: now,
+        purchase_confirmed_at: invoice.paid_at ?? now,
         access_status: 'approved',
         created_at: now,
         approved_at: now,
@@ -803,17 +958,17 @@ export class PlatformSubscriptions {
     tx.set(emailPath, { account_id: invoice.account_id });
     tx.set(invoicePath(invoice.id), {
       ...invoice,
-      payment_id: payment.paymentId,
+      payment_id: paymentId,
       status: 'paid',
-      paid_at: now,
+      paid_at: invoice.paid_at ?? now,
     });
-    tx.set('platform_subscription_payments/' + payment.paymentId, {
+    tx.set('platform_subscription_payments/' + paymentId, {
       invoice_id: invoice.id,
       account_id: invoice.account_id,
       purpose: 'initial',
       months: invoice.months,
       total: invoice.total,
-      created_at: now,
+      created_at: invoice.paid_at ?? now,
     });
     tx.set('platform_audit/' + invoice.id, {
       id: invoice.id,

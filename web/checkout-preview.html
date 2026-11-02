@@ -12,12 +12,18 @@
         >Sem login</a
       >
       · <a href="?state=details">Dados da loja</a> · <a href="?state=uncertain">Em conferência</a> ·
-      <a href="?state=qr">Pix pronto</a>
+      <a href="?state=qr">Pix pronto</a> ·
+      <button id="simulate-paid">Simular confirmação (sem dinheiro)</button>
     </div>
     <main class="purchase-checkout"></main>
     <script type="module">
       import { mountPurchaseCheckout } from './purchase-checkout.ts';
       const mode = new URLSearchParams(location.search).get('state') || 'anonymous';
+      const memory = new Map();
+      const storage = {
+        getItem: (key) => memory.get(key) ?? null,
+        setItem: (key, value) => memory.set(key, value),
+      };
       const plans = [
         { id: 'monthly', label: 'Mensal', months: 1, priceCents: 999, enabled: true },
         { id: 'quarterly', label: 'Trimestral', months: 3, priceCents: 2450, enabled: true },
@@ -36,8 +42,15 @@
         : null;
       const api = async (path, body) => {
         if (path.startsWith('/checkout/plans')) return { plans };
-        if (path.startsWith('/checkout/purchase/check')) return invoice;
-        if (path.startsWith('/checkout/purchase/create')) {
+        if (path.startsWith('/checkout/guest/read') || path.startsWith('/checkout/guest/check')) {
+          if (!invoice) throw Error('Nenhuma cobrança de demonstração.');
+          return invoice;
+        }
+        if (path.startsWith('/checkout/guest/claim')) {
+          invoice.claimed = true;
+          return { ok: true };
+        }
+        if (path.startsWith('/checkout/guest/create')) {
           const p = plans.find((p) => p.id === body.plan);
           invoice = {
             id: 'DEMONSTRACAO',
@@ -52,11 +65,24 @@
         }
         return { plans, hasStore: false, invoice };
       };
+      if (invoice)
+        storage.setItem(
+          'blackout.checkout.purchase',
+          JSON.stringify({ key: 'a'.repeat(64), requestId: 'DEMO', invoiceId: invoice.id }),
+        );
+      document.querySelector('#simulate-paid').addEventListener('click', () => {
+        if (invoice) {
+          invoice = { ...invoice, status: 'paid', qrCode: '' };
+          document.querySelector('#simulate-paid').textContent =
+            'Pagamento fictício confirmado. Toque em Já paguei · verificar.';
+        }
+      });
       await mountPurchaseCheckout(
         document.querySelector('main'),
         api,
         mode === 'anonymous' ? null : 'demonstracao@example.test',
         'https://t.me/blackoutshopbrbot?start=duvidas',
+        storage,
       );
     </script>
   </body>

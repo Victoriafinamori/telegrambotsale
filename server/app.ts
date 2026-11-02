@@ -477,6 +477,37 @@ export function createApp(
       ),
     );
   });
+  app.post(
+    '/api/checkout/guest/create',
+    rate('guest-purchase-create', 5, 600000),
+    async (req, res) => {
+      if (!subscriptions)
+        throw new HttpError(503, 'SUBSCRIPTION_UNAVAILABLE', 'Checkout indisponível.');
+      res.json(await subscriptions.guestCreate(req.body));
+    },
+  );
+  for (const operation of ['read', 'check'] as const)
+    app.post(
+      '/api/checkout/guest/' + operation,
+      rate('guest-purchase-' + operation, 30, 60000),
+      async (req, res) => {
+        if (!subscriptions)
+          throw new HttpError(503, 'SUBSCRIPTION_UNAVAILABLE', 'Checkout indisponível.');
+        res.json(await subscriptions.guestRead(req.body, operation === 'check'));
+      },
+    );
+  app.post(
+    '/api/checkout/guest/claim',
+    identity,
+    rate('guest-purchase-claim', 10, 600000),
+    async (req, res) => {
+      if (!subscriptions)
+        throw new HttpError(503, 'SUBSCRIPTION_UNAVAILABLE', 'Checkout indisponível.');
+      res.json(
+        await subscriptions.guestClaim((req as unknown as AuthedRequest).identity, req.body),
+      );
+    },
+  );
   app.get('/api/checkout/purchase', identity, async (req, res) => {
     if (!subscriptions)
       throw new HttpError(503, 'SUBSCRIPTION_UNAVAILABLE', 'Checkout indisponível.');

@@ -7,6 +7,9 @@ import { SecretVault } from '../server/secret-vault.js';
 import { PurinCashPayments } from '../server/purin-cash.js';
 import { PlatformSubscriptions } from '../server/platform-subscriptions.js';
 import { nextBillingMonth } from '../server/billing-period.js';
+import { createApp } from '../server/app.js';
+import { FirestorePlatform } from '../server/firestore-platform.js';
+import { testConfig } from './helpers.js';
 async function fixture() {
   const store = new MemoryDocuments(),
     key = randomBytes(32).toString('base64url'),
@@ -106,6 +109,8 @@ async function fixture() {
   return {
     store,
     service,
+    key,
+    purin,
     accountId,
     generation,
     setLedger: (rows: any[]) => (ledgerRows = rows),
@@ -455,4 +460,182 @@ test('Affiliate revocation blocks new charges but cannot divert a previously cre
   await f.notify(charge);
   assert.equal((await f.service.purchaseCheck(buyer, { invoiceId: invoice.id })).status, 'paid');
   assert.equal(f.posts(), 1);
+});
+
+test('Guest checkout takes payment before registration, stores no plaintext capability and binds once to a verified owner', async () => {
+  const f = await fixture(),
+    key = randomBytes(32).toString('hex');
+  const input = { key, plan: 'monthly', requestId: randomUUID(), expectedPriceCents: 999 };
+  const [a, b] = await Promise.all([
+    f.service.guestCreate(input),
+    f.service.guestCreate({ ...input, requestId: randomUUID() }),
+  ]);
+  assert.equal(a.id, b.id);
+  assert.equal(f.posts(), 1);
+  assert.equal((await f.store.list('merchant_accounts', { limit: 100 })).length, 1);
+  const stored = (await f.store.get('platform_subscription_invoices/' + a.id))!;
+  assert.equal(stored.email, '');
+  assert.equal(stored.name, '');
+  assert.equal(stored.store_name, '');
+  assert(!JSON.stringify(stored).includes(key));
+  assert(!JSON.stringify(a).includes('guest_key_hash'));
+  await assert.rejects(() => f.service.guestRead({ invoiceId: a.id, key: '0'.repeat(64) }), {
+    status: 404,
+  });
+  const buyer = { uid: 'guest-buyer', email: 'new@example.test', emailVerified: true, authTime: 1 };
+  const claim = { invoiceId: a.id, key, name: 'Novo lojista', storeName: 'Nova loja' };
+  await assert.rejects(() => f.service.guestClaim(buyer, claim), { code: 'PAYMENT_NOT_CONFIRMED' });
+  const payment = [...f.charges.values()][0];
+  payment.status = 'paid';
+  payment.paidAt = '2026-10-26T12:00:00Z';
+  await Promise.all([f.notify(payment), f.notify(payment)]);
+  assert.equal((await f.service.guestRead({ key })).status, 'paid');
+  assert.equal((await f.store.list('merchant_accounts', { limit: 100 })).length, 1);
+  await assert.rejects(() => f.service.guestClaim({ ...buyer, emailVerified: false }, claim), {
+    code: 'EMAIL_UNVERIFIED',
+  });
+  await assert.rejects(() => f.service.guestClaim(buyer, { ...claim, key: '1'.repeat(64) }), {
+    status: 404,
+  });
+  const results = await Promise.all([
+    f.service.guestClaim(buyer, claim),
+    f.service.guestClaim(buyer, claim),
+  ]);
+  assert.equal(results[0].accountId, results[1].accountId);
+  const account = (await f.store.get('merchant_accounts/' + results[0].accountId))!;
+  assert.equal(account.email, buyer.email);
+  assert.equal(account.name, 'Novo lojista');
+  assert.equal(account.store_name, 'Nova loja');
+  assert.equal(account.billing_started_at, null);
+  assert.equal(account.paid_through, null);
+  assert.equal((await f.service.guestRead({ key })).claimed, true);
+  await assert.rejects(
+    () => f.service.guestClaim({ ...buyer, uid: 'thief', email: 'thief@example.test' }, claim),
+    { code: 'PAYMENT_ALREADY_USED' },
+  );
+  await f.notify(payment);
+  assert.equal((await f.store.list('merchant_accounts', { limit: 100 })).length, 2);
+});
+
+test('Guest lost response and reload recover the same payment with the capability alone and never charge twice', async () => {
+  const f = await fixture(),
+    key = randomBytes(32).toString('hex'),
+    input = { key, plan: 'annual', requestId: randomUUID(), expectedPriceCents: 8490 };
+  f.fail();
+  await assert.rejects(() => f.service.guestCreate(input));
+  const invoice = await f.service.guestRead({ key });
+  assert.equal(invoice.status, 'uncertain');
+  await f.service.guestCreate({ ...input, requestId: randomUUID() });
+  assert.equal(f.posts(), 1);
+  const checked = await f.service.guestRead({ key }, true);
+  assert.equal(checked.status, 'awaiting_payment');
+  assert(checked.qrCode);
+  const payment = [...f.charges.values()][0];
+  payment.status = 'paid';
+  payment.paidAt = '2026-10-26T14:00:00Z';
+  f.advance(7200000);
+  await f.notify(payment);
+  assert.equal((await f.service.guestRead({ key })).status, 'review_required');
+  await assert.rejects(
+    () =>
+      f.service.guestClaim(
+        { uid: 'buyer', email: 'buyer@example.test', emailVerified: true, authTime: 1 },
+        { invoiceId: invoice.id, key, name: 'Buyer', storeName: 'Store' },
+      ),
+    { code: 'PAYMENT_NOT_CONFIRMED' },
+  );
+});
+
+test('Guest affiliate checkout preserves base and margin; registration cannot turn the payment into a self-referral', async () => {
+  const f = await fixture(),
+    partner = await enableAffiliate(f),
+    key = randomBytes(32).toString('hex');
+  const invoice = await f.service.guestCreate({
+    key,
+    plan: 'monthly',
+    requestId: randomUUID(),
+    expectedPriceCents: 1999,
+    partnerId: partner,
+  });
+  const charge = [...f.charges.values()][0];
+  assert.equal(charge.subaccountFeeCents, 999);
+  charge.status = 'paid';
+  charge.paidAt = '2026-10-26T12:00:00Z';
+  await f.notify(charge);
+  assert.equal((await f.service.guestRead({ key })).status, 'awaiting_credit');
+  f.setLedger([
+    { id: 'guest-ledger', refId: charge.paymentId, type: 'sale', amountCents: 930, feeCents: 999 },
+  ]);
+  await f.notify(charge);
+  assert.equal((await f.service.guestRead({ key })).status, 'paid');
+  const claim = { invoiceId: invoice.id, key, name: 'Buyer', storeName: 'Store' };
+  await assert.rejects(
+    () =>
+      f.service.guestClaim(
+        { uid: 'affiliate', email: 'affiliate@example.test', emailVerified: true, authTime: 1 },
+        claim,
+      ),
+    { code: 'EXISTING_CONTRACT' },
+  );
+  const result = await f.service.guestClaim(
+    { uid: 'new-buyer', email: 'buyer@example.test', emailVerified: true, authTime: 1 },
+    claim,
+  );
+  const account = (await f.store.get('merchant_accounts/' + result.accountId))!;
+  assert.equal(account.resale_partner_id, partner);
+  assert.equal(account.price_cents, 999);
+  const commissions = await f.store.list('resale_commissions', { limit: 10 });
+  assert.equal(commissions.length, 1);
+  assert.equal(commissions[0].partnerCents, 930);
+  assert.equal(commissions[0].blackoutFeeCents, 0);
+});
+
+test('Guest HTTP checkout is public but rate limited; reading needs the secret and claiming still needs verified authentication', async () => {
+  const f = await fixture(),
+    platform = new FirestorePlatform(f.store, f.key),
+    config = { ...testConfig(), API_AUTH_MODE: 'bearer' as const, BOT_TOKEN_ENCRYPTION_KEY: f.key };
+  const app = createApp(
+    config,
+    platform,
+    {
+      verifyIdToken: async () => {
+        throw Error('not authenticated');
+      },
+      verifySession: async () => {
+        throw Error('not authenticated');
+      },
+      createSession: async () => '',
+    },
+    undefined,
+    { onboarding: platform.onboarding, bots: new BotStore(f.store, f.key), purin: f.purin },
+  );
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address() as { port: number };
+  const post = (path: string, body: unknown) =>
+    fetch('http://127.0.0.1:' + address.port + '/api/checkout/guest/' + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: config.APP_ORIGIN },
+      body: JSON.stringify(body),
+    });
+  try {
+    const key = randomBytes(32).toString('hex'),
+      body = { key, plan: 'monthly', requestId: randomUUID(), expectedPriceCents: 999 };
+    const response = await post('create', body);
+    assert.equal(response.status, 200);
+    const invoice = await response.json();
+    assert(invoice.qrCode);
+    assert.equal((await post('read', { invoiceId: invoice.id, key: '0'.repeat(64) })).status, 404);
+    assert.equal((await post('read', { key })).status, 200);
+    assert.equal(
+      (await post('claim', { key, invoiceId: invoice.id, name: 'Buyer', storeName: 'Store' }))
+        .status,
+      401,
+    );
+    for (let i = 0; i < 4; i++) assert.equal((await post('create', body)).status, 200);
+    assert.equal((await post('create', body)).status, 429);
+    assert.equal(f.posts(), 1);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
+  }
 });

@@ -15,6 +15,32 @@ body:has(.purchase-checkout) {
 .pc-content {
   min-width: 0;
 }
+.pc-journey {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 24px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.pc-journey [aria-current='step'] {
+  color: var(--accent);
+  font-weight: 700;
+}
+.pc-desktop-action {
+  margin-top: 24px;
+}
+.pc-desktop-action > button,
+.pc-desktop-action > a {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
 .pc-back {
   display: inline-flex;
   align-items: center;
@@ -266,6 +292,9 @@ body:has(.purchase-checkout) {
   line-height: 1.8;
 }
 @media (max-width: 800px) {
+  .pc-desktop-action {
+    display: none;
+  }
   .pc-layout {
     grid-template-columns: 1fr;
     gap: 24px;
