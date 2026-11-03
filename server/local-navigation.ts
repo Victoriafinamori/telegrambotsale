@@ -7,6 +7,10 @@ export interface NavigationSnapshot {
   accountId: string;
   expiresAt: number;
   ownerId: string | null;
+  ownerVerified?: boolean;
+  revision?: string;
+  generation?: string;
+  ownerHasCentralSession?: boolean;
   shop: Pick<
     Shop,
     | 'title'
@@ -26,22 +30,34 @@ export function localNavigation(
   snapshot: NavigationSnapshot,
   update: TelegramUpdate,
   now = Date.now(),
+  localConfiguration = false,
 ): BotEffect[] | null {
   const cb = update.callback_query,
-    message = cb?.message;
+    start =
+      update.message?.text === '/start' &&
+      !update.message.successful_payment &&
+      !update.message.refunded_payment &&
+      !update.pre_checkout_query,
+    message = cb?.message ?? (start ? update.message : undefined),
+    from = cb?.from ?? (start ? update.message?.from : undefined),
+    owner = String(from?.id) === snapshot.ownerId && snapshot.ownerVerified === true;
   if (
-    !cb ||
+    (!cb && !start) ||
+    !from ||
     !message ||
     message.chat.type !== 'private' ||
-    message.chat.id !== cb.from.id ||
-    cb.from.is_bot ||
-    String(cb.from.id) === snapshot.ownerId ||
+    message.chat.id !== from.id ||
+    from.is_bot ||
+    (owner && snapshot.ownerHasCentralSession) ||
+    (String(from.id) === snapshot.ownerId && !owner) ||
     snapshot.expiresAt <= now ||
-    !/^(home|catalog|support|cat:[a-f0-9]{16}|p:[a-f0-9]{12,36})$/.test(cb.data ?? '')
+    !/^(home|catalog|support|cat:[a-f0-9]{16}|p:[a-f0-9]{12,36})$/.test(
+      start ? 'home' : (cb?.data ?? ''),
+    )
   )
     return null;
   const shop = snapshot.shop,
-    cmd = cb.data!;
+    cmd = start ? 'home' : cb!.data!;
   const rows = (buttons: [string, string][][]) => ({
     inline_keyboard: buttons.map((row) =>
       row.map(([text, callback_data]) => ({ text, callback_data })),
@@ -57,6 +73,17 @@ export function localNavigation(
         ['🧾 Meus pedidos', 'orders'],
         ['💬 Suporte', 'support'],
       ],
+      ...(owner
+        ? [
+            [
+              ['⚙️ Gerenciar loja', 'admin'],
+              ['Carteira', 'admin:wallet'],
+            ] as [string, string][],
+          ]
+        : []),
+      ...(owner && localConfiguration
+        ? [[['Personalizar loja', 'lc:menu']] as [string, string][]]
+        : []),
     ]);
   let text = '',
     photo = '',
@@ -133,12 +160,16 @@ export function localNavigation(
     }
   }
   const effects: BotEffect[] = [
-    {
-      id: 'local_ack_' + update.update_id,
-      method: 'answerCallbackQuery',
-      status: 'pending',
-      payload: { callback_query_id: cb.id },
-    },
+    ...(cb
+      ? [
+          {
+            id: 'local_ack_' + update.update_id,
+            method: 'answerCallbackQuery',
+            status: 'pending',
+            payload: { callback_query_id: cb.id },
+          } as BotEffect,
+        ]
+      : []),
     {
       id: 'local_screen_' + update.update_id,
       method: photo ? 'sendPhoto' : 'sendMessage',

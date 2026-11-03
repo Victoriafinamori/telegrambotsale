@@ -39,6 +39,9 @@ export function botRuntimeRouter(
   router.get('/navigation', async (req, res) =>
     res.json(await bots.navigationSnapshot(accesses.get(req)!)),
   );
+  router.post('/configuration', async (req, res) =>
+    res.json(await bots.commitLocalConfiguration(accesses.get(req)!, req.body)),
+  );
   router.post('/updates', async (req, res) => {
     const access = accesses.get(req)!;
     const callback = req.body?.callback_query;

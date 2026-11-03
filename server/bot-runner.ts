@@ -6,6 +6,8 @@ import type { BotEffect, TelegramUpdate } from './bot-types.js';
 import { fastNavigation } from './bot-navigation.js';
 import { localNavigation, type NavigationSnapshot } from './local-navigation.js';
 import { LocalShopStore } from './local-shop-store.js';
+import { LocalShopEditor } from './local-shop-editor.js';
+import { LocalUpdateCursor } from './local-update-cursor.js';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -245,10 +247,13 @@ export async function runBot() {
     botId: string;
     botToken: string;
     offset: number;
+    generation: string;
   }>('/config');
   let navigation: NavigationSnapshot | null = null;
   let local: LocalShopStore | undefined;
   const localEnabled = process.env.BOT_LOCAL_NAVIGATION === 'pilot';
+  const editorEnabled = process.env.BOT_LOCAL_CONFIGURATION === 'pilot';
+  if (editorEnabled && !localEnabled) throw Error('Local configuration requires local navigation');
   if (localEnabled) {
     const directory = process.env.BOT_LOCAL_DATA_DIR,
       key = process.env.BOT_LOCAL_DATA_KEY;
@@ -257,11 +262,29 @@ export async function runBot() {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     local = new LocalShopStore(join(directory, 'shop.sqlite'), cfg.accountId, key);
   }
+  let localCommandCentralCalls = 0;
+  let centralOwnerOperation = false;
+  let navigationRequest = 0;
+  const editor =
+    editorEnabled && local
+      ? new LocalShopEditor(local, cfg.accountId, async (command) => {
+          localCommandCentralCalls++;
+          const result = await api.call<{ snapshot: NavigationSnapshot | null }>(
+            '/configuration',
+            command,
+          );
+          navigation = result.snapshot;
+          return result;
+        })
+      : undefined;
   const refreshNavigation = async () => {
     if (!local) return;
+    const request = ++navigationRequest;
     const snapshot = await api.call<NavigationSnapshot | null>('/navigation');
     if (snapshot && snapshot.accountId !== cfg.accountId) throw Error('Navigation shop mismatch');
+    if (request !== navigationRequest) return;
     navigation = snapshot;
+    if (!centralOwnerOperation) editor?.install(snapshot);
     await local.transaction(async (tx) =>
       tx.set('bot_shops/' + cfg.accountId + '/local/navigation', { snapshot }),
     );
@@ -273,8 +296,11 @@ export async function runBot() {
     throw Error('Bot identity does not match the registered shop');
   const webhook = await telegram.call<{ url: string }>('getWebhookInfo');
   if (webhook.url) throw Error('Bot already has a webhook; coordinate migration before starting');
+  const cursor = local
+    ? new LocalUpdateCursor(local, cfg.accountId, cfg.botId, cfg.generation)
+    : undefined;
   let running = true,
-    offset = cfg.offset,
+    offset = cursor ? await cursor.resume(cfg.offset) : cfg.offset,
     lastHealthy = Date.now(),
     lastMaintenance = Date.now(),
     lastIdentityCheck = Date.now(),
@@ -354,9 +380,15 @@ export async function runBot() {
         });
         for (const update of updates) {
           if (!running) break;
-          const localEffects = navigation ? localNavigation(navigation, update) : null;
+          localCommandCentralCalls = 0;
+          const started = performance.now();
+          const activeNavigation = navigation as NavigationSnapshot | null;
+          const localEffects =
+            (await editor?.handle(update)) ??
+            (activeNavigation
+              ? localNavigation(activeNavigation, update, Date.now(), !!editor)
+              : null);
           if (localEffects) {
-            const started = performance.now();
             let rejected = 0;
             for (const effect of localEffects) {
               try {
@@ -370,13 +402,35 @@ export async function runBot() {
             console.log(
               JSON.stringify({
                 event: 'bot_runtime.local_navigation_timing',
-                centralRequests: 0,
+                centralRequests: localCommandCentralCalls,
                 totalMs: Math.round(performance.now() - started),
                 rejected,
               }),
             );
-          } else await processTelegramUpdate(api, telegram, update);
+          } else {
+            const from = update.callback_query?.from ?? update.message?.from;
+            const ownerOperation = !!editor && String(from?.id) === activeNavigation?.ownerId;
+            if (ownerOperation) {
+              centralOwnerOperation = true;
+              navigationRequest++;
+              editor?.invalidate();
+            }
+            try {
+              await processTelegramUpdate(api, telegram, update);
+            } finally {
+              if (ownerOperation) {
+                centralOwnerOperation = false;
+                // Never reuse a pre-command session snapshot for an owner's next input.
+                try {
+                  await refreshNavigation();
+                } catch {
+                  editor?.invalidate();
+                }
+              }
+            }
+          }
           offset = update.update_id + 1;
+          await cursor?.advance(offset);
         }
         lastHealthy = Date.now();
       } catch (e) {

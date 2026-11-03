@@ -1,7 +1,7 @@
 # Telegram-first pilot migration
 
-Status: encrypted persistence and optional buyer navigation integrated in the worker;
-disabled by default. No production worker has been enabled yet.
+Status: encrypted persistence, optional navigation and a draft-based appearance editor
+integrated in the worker; disabled by default. No production worker has been enabled yet.
 
 ## Pilot navigation gate
 
@@ -10,20 +10,44 @@ disabled by default. No production worker has been enabled yet.
   storage, and a new private per-shop `BOT_LOCAL_DATA_KEY` (32 random bytes, base64url).
 - Snapshot refresh follows the existing 45-second maintenance loop and expires after
   at most 60 seconds (or subscription expiry, whichever comes first). No stale disk
-  snapshot is trusted after restart. Only public catalog/support fields and the owner
-  identifier needed to exclude owner sessions are included, never inventory units,
+  snapshot is trusted after restart. Only public catalog/support fields and scoped
+  owner/session/version metadata are included, never inventory units,
   payment keys, order/customer histories or the central encryption key.
-- Only buyer callbacks home/catalog/category/product/support render locally. Owner
-  configuration, /start (including identity confirmation), carts, orders, purchases,
+- Plain `/start` and home/catalog/category/product/support render locally. Owner
+  buttons require a verified owner in the fresh snapshot. Identity confirmation
+  deep links, carts, orders, purchases,
   restock subscriptions and all finance continue through the existing central handler.
 - Local display does not reserve or deliver anything. A product may change stock or
   price during the snapshot window; the central purchase validates current values.
 - Telegram definitive 400/403 navigation failures do not block the incoming queue;
   transient failures retain the existing update-loop retry. These are disposable
   screens only, never deliveries or financial effects.
-- This reduces central round trips for navigation only. Owner configuration is the
-  next migration stage and is not yet local. Do not hide web editing until ownership
-  transfer and rollback are implemented and verified.
+- The worker saves its update cursor locally, scoped to the bot and runtime generation,
+  to avoid replaying already handled local navigation after a restart. Expired cursors
+  are ignored; central operations keep their existing deduplication.
+
+## Optional local configuration draft editor
+
+- Additionally set `BOT_LOCAL_CONFIGURATION=pilot` on the same allowlisted worker.
+  It requires local navigation and does not enable itself in existing applications.
+- The verified owner can use `/configurar` or `Personalizar loja` from the local home
+  screen. Menus, incoming content and previews use SQLite only. Callback screens
+  replace the current message rather than accumulating a new message per button.
+- Supports welcome, store banner, support fields and existing enabled products'
+  description, banner and price. It does not yet create products or manage local stock.
+- Explicit Save calls `/internal/bot/configuration`. Central validation checks runtime,
+  owner, subscription, configuration revision, an existing central wizard and (for a
+  global item) the current supplier cost and resale permission. It cannot change stock,
+  payment settings, source bindings or fee rules. The central configuration remains
+  authoritative at this intermediate stage; this is not a full local data migration.
+- Persisted mutation IDs make lost-response retries idempotent. Local drafts are not
+  reported as saved before acknowledgement. Central workflows invalidate the editor
+  until a fresh session snapshot is obtained, avoiding interception of stock input.
+- A save still accesses the central database. Periodic authorization/outbox work also
+  remains central. Do not describe the API as payment-only or promise a measured
+  performance gain until the full data split is deployed and measured.
+- Keep web editing available until the equivalent Telegram workflows and ownership
+  transfer are implemented and verified.
 
 ## Authority boundaries
 

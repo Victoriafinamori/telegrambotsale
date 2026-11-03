@@ -1,5 +1,10 @@
 import { globalCatalogScreen } from './global-catalog-screen.js';
 import {
+  configurationCommit,
+  applyShopConfiguration,
+  shopConfigurationVersion,
+} from './shop-configuration.js';
+import {
   refreshSharedCatalog,
   reserveShared,
   restoreShared,
@@ -104,8 +109,18 @@ export class BotStore {
         account.paid_through <= this.now()
       )
         return null;
+      const ownerCustomer = shop.owner_id
+        ? await tx.get(path(auth.accountId, 'customers', shop.owner_id))
+        : null;
       return {
         accountId: auth.accountId,
+        revision: shopConfigurationVersion(shop),
+        generation: auth.generation,
+        ownerVerified:
+          !!shop.owner_id &&
+          shop.owner_id === setup.telegram_user_id &&
+          shop.owner_bot_id === setup.bot_id,
+        ownerHasCentralSession: !!ownerCustomer?.session,
         expiresAt: Math.min(this.now().getTime() + 60000, account.paid_through.getTime()),
         ownerId: shop.owner_id,
         shop: {
@@ -134,6 +149,75 @@ export class BotStore {
         },
       };
     });
+  }
+  async commitLocalConfiguration(auth: RuntimeAccess, input: unknown) {
+    if (auth.accountId !== this.localNavigationPilotAccountId) throw unavailable();
+    const command = configurationCommit.parse(input);
+    const hash = tokenHash(JSON.stringify(command));
+    const revision = await buffered(this.store, async (tx) => {
+      const { account, setup, shop } = await this.access(tx, auth);
+      if (
+        account.access_status !== 'approved' ||
+        setup.activation_status !== 'active' ||
+        !(account.paid_through instanceof Date) ||
+        account.paid_through <= this.now() ||
+        shop.owner_id !== command.ownerId ||
+        shop.owner_id !== setup.telegram_user_id ||
+        shop.owner_bot_id !== setup.bot_id ||
+        command.generation !== auth.generation
+      )
+        throw unavailable();
+      const receiptPath = path(auth.accountId, 'local_configuration_commits', command.mutationId);
+      const receipt = await tx.get(receiptPath);
+      if (receipt) {
+        if (receipt.hash !== hash)
+          throw new HttpError(
+            409,
+            'COMMAND_REUSED',
+            'Atualize a configuração antes de tentar novamente.',
+          );
+        return receipt.revision as string;
+      }
+      if ((await tx.get(path(auth.accountId, 'customers', command.ownerId)))?.session)
+        throw new HttpError(
+          409,
+          'OWNER_WORKFLOW_BUSY',
+          'Conclua a etapa em andamento ou envie /cancelar antes de salvar.',
+        );
+      if (shopConfigurationVersion(shop) !== command.revision)
+        throw new HttpError(
+          409,
+          'CONFIGURATION_CHANGED',
+          'A loja foi alterada em outro lugar. Atualize e confira antes de salvar.',
+        );
+      if (command.change.kind === 'product_price') {
+        const change = command.change;
+        const product = shop.products.find((p) => p.id === change.productId);
+        if (!product) throw new HttpError(409, 'PRODUCT_CHANGED', 'Produto removido.');
+        if (shop.payment_mode !== 'manual' && command.change.value > 1000000)
+          throw new HttpError(400, 'INVALID_PRICE', 'Preço inválido.');
+        if (product.resale_source) {
+          const offer = await sharedOffer(tx, auth.accountId, product.resale_source.productId);
+          if (
+            offer.supplierId !== product.resale_source.supplierId ||
+            command.change.value <= offer.baseCents
+          )
+            throw new HttpError(
+              409,
+              'INVALID_RESALE_PRICE',
+              'O preço deve ser maior que o custo atual do fornecedor.',
+            );
+        }
+      }
+      const changed = applyShopConfiguration(shop, command.change);
+      changed.portal_revision = (shop.portal_revision ?? 0) + 1;
+      tx.set(root(auth.accountId), changed);
+      const version = shopConfigurationVersion(changed);
+      tx.set(receiptPath, { hash, revision: version, created_at: this.now() });
+      this.audit(tx, auth.accountId, 'store.configuration_telegram_local', command.ownerId);
+      return version;
+    });
+    return { revision, snapshot: await this.navigationSnapshot(auth) };
   }
   wallet?: PurinWallet;
   checkoutOrigin?: string;
@@ -289,6 +373,7 @@ export class BotStore {
       return {
         accountId: auth.accountId,
         applicationId: runtime.application_id,
+        generation: auth.generation,
         botId: setup.bot_id,
         botToken: this.vault.open(secret.ciphertext, auth.accountId + ':' + setup.bot_id),
         username: setup.bot_username,
