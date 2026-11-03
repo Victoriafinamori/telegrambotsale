@@ -4,6 +4,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { TelegramClient, TelegramError } from './telegram-client.js';
 import type { BotEffect, TelegramUpdate } from './bot-types.js';
 import { fastNavigation } from './bot-navigation.js';
+import { localNavigation, type NavigationSnapshot } from './local-navigation.js';
+import { LocalShopStore } from './local-shop-store.js';
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 
 export class RuntimeApiError extends Error {
   constructor(readonly status: number) {
@@ -236,7 +240,32 @@ export async function runBot() {
     process.env.BOT_API_ORIGIN ?? '',
     process.env.BOT_RUNTIME_KEY ?? '',
   );
-  const cfg = await api.call<{ botId: string; botToken: string; offset: number }>('/config');
+  const cfg = await api.call<{
+    accountId: string;
+    botId: string;
+    botToken: string;
+    offset: number;
+  }>('/config');
+  let navigation: NavigationSnapshot | null = null;
+  let local: LocalShopStore | undefined;
+  const localEnabled = process.env.BOT_LOCAL_NAVIGATION === 'pilot';
+  if (localEnabled) {
+    const directory = process.env.BOT_LOCAL_DATA_DIR,
+      key = process.env.BOT_LOCAL_DATA_KEY;
+    if (!directory || !key)
+      throw Error('Pilot requires a persistent directory and a private per-shop key');
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    local = new LocalShopStore(join(directory, 'shop.sqlite'), cfg.accountId, key);
+  }
+  const refreshNavigation = async () => {
+    if (!local) return;
+    const snapshot = await api.call<NavigationSnapshot | null>('/navigation');
+    if (snapshot && snapshot.accountId !== cfg.accountId) throw Error('Navigation shop mismatch');
+    navigation = snapshot;
+    await local.transaction(async (tx) =>
+      tx.set('bot_shops/' + cfg.accountId + '/local/navigation', { snapshot }),
+    );
+  };
   const telegram = new TelegramClient(cfg.botToken);
   cfg.botToken = '';
   const me = await telegram.call<{ id: number; is_bot: boolean; first_name?: string }>('getMe');
@@ -290,6 +319,7 @@ export async function runBot() {
           lastIdentityCheck = Date.now();
         }
         await api.call('/heartbeat', botName ? { botName } : {});
+        await refreshNavigation();
         const pending = await api.call<{ ids: string[] }>('/effects');
         await dispatchEffects(api, telegram, pending.ids);
         lastMaintenance = Date.now();
@@ -324,7 +354,28 @@ export async function runBot() {
         });
         for (const update of updates) {
           if (!running) break;
-          await processTelegramUpdate(api, telegram, update);
+          const localEffects = navigation ? localNavigation(navigation, update) : null;
+          if (localEffects) {
+            const started = performance.now();
+            let rejected = 0;
+            for (const effect of localEffects) {
+              try {
+                await telegram.call(effect.method, effect.payload);
+              } catch (error) {
+                if (!(error instanceof TelegramError && [400, 403].includes(error.code)))
+                  throw error;
+                rejected++;
+              }
+            }
+            console.log(
+              JSON.stringify({
+                event: 'bot_runtime.local_navigation_timing',
+                centralRequests: 0,
+                totalMs: Math.round(performance.now() - started),
+                rejected,
+              }),
+            );
+          } else await processTelegramUpdate(api, telegram, update);
           offset = update.update_id + 1;
         }
         lastHealthy = Date.now();
@@ -344,6 +395,7 @@ export async function runBot() {
     running = false;
     workerAbort.abort();
     await maintenance;
+    await local?.close();
     health.close();
   }
   if (maintenanceFailed) throw Error('Runtime authorization or identity changed');

@@ -159,6 +159,23 @@ export function createApp(
         next(e);
       }
     };
+  app.use((req, res, next) => {
+    if (
+      !config.PLATFORM_MAINTENANCE ||
+      (!req.path.startsWith('/api/') &&
+        !req.path.startsWith('/internal/') &&
+        !req.path.startsWith('/payments/')) ||
+      (req.method === 'GET' && ['/api/health', '/api/config'].includes(req.path))
+    )
+      return next();
+    res.set('Retry-After', '600');
+    res.set('Cache-Control', 'no-store');
+    res.status(503).json({
+      code: 'PLATFORM_MAINTENANCE',
+      message:
+        'Estamos em manutenção para preservar os dados da sua loja. Aguarde para tentar novamente. Se já pagou, não pague outra vez.',
+    });
+  });
   const payments =
     services?.payments ??
     (services?.bots && config.BOT_TOKEN_ENCRYPTION_KEY
@@ -220,7 +237,13 @@ export function createApp(
   if (subscriptions) app.locals.subscriptions = subscriptions;
   if (purin) app.locals.purin = purin;
   if (services?.bots) app.use('/internal/bot', botRuntimeRouter(services.bots, accounts, gateway));
-  app.use('/api', rate('api', 300, 60000));
+  const apiRate = rate('api', 300, 60000);
+  app.use('/api', (req, res, next) => {
+    // Host health probes and public static config must never write to Firestore.
+    if (['GET', 'HEAD'].includes(req.method) && ['/health', '/config'].includes(req.path))
+      return next();
+    return apiRate(req, res, next);
+  });
   app.use('/api', (req, _res, next) => {
     if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       next();
@@ -1081,6 +1104,17 @@ export function createApp(
     }),
   );
   app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+    const databaseCode = (err as { code?: unknown })?.code;
+    if (databaseCode === 8 || databaseCode === 'RESOURCE_EXHAUSTED') {
+      res.set('Retry-After', '60');
+      res.status(503).json({
+        code: 'DATABASE_CAPACITY',
+        message:
+          'O serviço está temporariamente indisponível. Aguarde antes de tentar novamente. Se já gerou um pagamento, não pague novamente.',
+        requestId: (req as unknown as AuthedRequest).requestId,
+      });
+      return;
+    }
     if (err instanceof z.ZodError) {
       res.status(400).json({
         code: 'INVALID_INPUT',

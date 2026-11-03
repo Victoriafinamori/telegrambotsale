@@ -4,6 +4,8 @@ import { randomBytes, createHmac } from 'node:crypto';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { MemoryDocuments } from './document-memory.js';
+import { SqliteDocumentStore } from '../server/sqlite-document-store.js';
+import type { DocumentStore } from '../server/document-store.js';
 import { FirestorePlatform } from '../server/firestore-platform.js';
 import { BotStore } from '../server/bot-store.js';
 import { MerchantConsole } from '../server/merchant-console.js';
@@ -1849,14 +1851,22 @@ test('Manual Pix QR is scoped to a single full-price unit; multiple quantities, 
 
 async function fixture(
   activate = true,
-  existing?: MemoryDocuments,
+  existing?: DocumentStore,
   name = 'merchant',
   botId = '123456789',
   paymentMode: 'manual' | 'stars' = 'stars',
 ) {
   let now = new Date('2026-10-25T12:00:00Z'),
     seq = 1;
-  const store = existing ?? new MemoryDocuments(),
+  const store: DocumentStore =
+      existing ??
+      (process.env.BLACKOUT_TEST_DOCUMENTS === 'sqlite'
+        ? new SqliteDocumentStore(
+            ':memory:',
+            'platform-test',
+            randomBytes(32).toString('base64url'),
+          )
+        : new MemoryDocuments()),
     key = randomBytes(32).toString('base64url');
   const p = new FirestorePlatform(store, key, async () => ({
     id: botId,
@@ -3488,6 +3498,15 @@ test('Approved reseller publishes customized global product and cannot lower its
   assert(JSON.stringify(empty).includes('CATÁLOGO INDISPONÍVEL'));
   assert(JSON.stringify(empty).includes('Atualizar catálogo'));
   assert(!JSON.stringify(empty).includes('admin:globalpick:'));
+  await f.store.transaction(async (tx) => {
+    const shop = (await tx.get('bot_shops/' + f.a.id))!;
+    tx.set('resale_profiles/' + f.a.id, { products: 'approved' });
+    tx.set('bot_shops/' + f.a.id, { ...shop, pix_mode: 'manual' });
+  });
+  const blocked = await f.click(111111111, 'admin:globalpick:' + '0'.repeat(12));
+  assert(JSON.stringify(blocked).includes('Pix integrado ainda não está ativo'));
+  const afterBlocked = await f.send(111111111, '18,00');
+  assert(!JSON.stringify(afterBlocked).includes('Produto publicado'));
 });
 
 for (const globalDefault of [false, true])

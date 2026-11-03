@@ -40,18 +40,25 @@ export async function sharedCatalog(tx: DocumentTransaction, accountId: string) 
   ]);
   if (!settings || settings.supplier_id === accountId || profile?.products !== 'approved')
     return [];
-  const supplier = await tx.get('bot_shops/' + settings.supplier_id);
+  const [supplier, account] = await Promise.all([
+    tx.get('bot_shops/' + settings.supplier_id),
+    tx.get('merchant_accounts/' + settings.supplier_id),
+  ]);
+  if (!supplier || account?.access_status !== 'approved') return [];
+  syncBundles(supplier as Shop);
   const products = ((supplier?.products ?? []) as Product[]).filter(
     (p) => p.enabled && !p.resale_source,
   );
   const offers = await Promise.all(
     products.map(async (p) => {
-      try {
-        return await sharedOffer(tx, accountId, p.id);
-      } catch (e) {
-        if (e instanceof HttpError) return null;
-        throw e;
-      }
+      const grant = await productGrant(tx, settings.supplier_id, accountId, p.id, p);
+      return grant?.enabled
+        ? {
+            supplierId: settings.supplier_id as string,
+            product: p,
+            baseCents: grant.baseCents as number,
+          }
+        : null;
     }),
   );
   return offers.filter((p) => p !== null);

@@ -24,6 +24,7 @@ const messages: Record<string, string> = {
 };
 export class AutomaticActivation {
   private vault: SecretVault;
+  private scanCursor = '';
   constructor(
     private bots: BotStore,
     private onboarding: OnboardingService,
@@ -179,6 +180,18 @@ export class AutomaticActivation {
     return { account, setup };
   }
   async tick() {
+    // Completed jobs must not acquire/write a distributed lease every 15 seconds.
+    // A local cursor also lets pages of completed stores yield to new stores.
+    const jobs = await this.store.list('bot_activation_jobs', {
+      limit: 25,
+      afterId: this.scanCursor,
+    });
+    const candidate = jobs.find(
+      (job) =>
+        job.provider === 'hyze' && !['active', 'action_required', 'uncertain'].includes(job.stage),
+    );
+    this.scanCursor = candidate?.id ?? (jobs.length === 25 ? jobs.at(-1)!.id : '');
+    if (!candidate) return;
     const lease = randomUUID();
     const settings = await botTransaction(this.store, async (tx) => {
       const config = await tx.get(settingsPath),
@@ -193,21 +206,13 @@ export class AutomaticActivation {
     });
     if (!settings) return;
     try {
-      // Bound each scan and retain a cursor so completed stores cannot starve new ones.
-      const cursor = (await this.store.get('platform_hosting/activation_cursor'))?.after ?? '';
-      const jobs = await this.store.list('bot_activation_jobs', { limit: 25, afterId: cursor });
-      let after = '';
-      for (const job of jobs) {
-        after = job.id;
-        if (job.provider !== 'hyze') continue;
-        if (!['active', 'action_required', 'uncertain'].includes(job.stage)) {
-          await this.process(job, settings);
-          break;
-        }
-      }
-      await botTransaction(this.store, async (tx) => {
-        tx.set('platform_hosting/activation_cursor', { after });
-      });
+      // Re-read after taking the lease: another API instance may have finished it.
+      const current = await this.store.get(jobPath(candidate.id));
+      if (
+        current?.provider === 'hyze' &&
+        !['active', 'action_required', 'uncertain'].includes(current.stage)
+      )
+        await this.process(current, settings);
     } finally {
       await botTransaction(this.store, async (tx) => {
         if ((await tx.get('platform_hosting/activation_lease'))?.lease === lease)

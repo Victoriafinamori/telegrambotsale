@@ -114,6 +114,31 @@ async function fixture() {
     },
   };
 }
+test('Idle activation scans do not write leases and still reach jobs beyond completed pages', async () => {
+  const f = await fixture();
+  const job = (await f.store.get('bot_activation_jobs/' + f.account.id))!;
+  await f.store.transaction(async (tx) => {
+    tx.delete('bot_activation_jobs/' + f.account.id);
+    for (let i = 0; i < 26; i++) {
+      const id = 'a' + String(i).padStart(3, '0');
+      tx.set('bot_activation_jobs/' + id, { id, provider: 'hyze', stage: 'active' });
+    }
+    tx.set('bot_activation_jobs/z-pending', { ...job, id: 'z-pending', stage: 'action_required' });
+  });
+  let writes = 0;
+  const original = f.store.transaction.bind(f.store);
+  f.store.transaction = async (work) => {
+    writes++;
+    return original(work);
+  };
+  await f.activation.tick();
+  await f.activation.tick();
+  assert.equal(writes, 0);
+  // A new pending job on a later page must be reached, without a persisted cursor.
+  await original(async (tx) => tx.set('bot_activation_jobs/' + f.account.id, job));
+  for (let i = 0; i < 3; i++) await f.activation.tick();
+  assert.equal(f.uploads(), 1);
+});
 test('Automatic activation provisions one isolated app, waits for verified owner and starts the contracted period once', async () => {
   const f = await fixture();
   await Promise.all([f.activation.tick(), f.activation.tick()]);

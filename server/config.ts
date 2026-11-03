@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isAbsolute } from 'node:path';
 import webProject from '../config/firebase.web.json' with { type: 'json' };
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -10,7 +11,17 @@ const schema = z.object({
   FIREBASE_WEB_API_KEY: z.string().min(1),
   FIREBASE_AUTH_DOMAIN: z.string().min(1),
   FIREBASE_APP_ID: z.string().min(1).optional(),
-  PLATFORM_DATABASE: z.enum(['postgres', 'firestore']).default('postgres'),
+  PLATFORM_DATABASE: z.enum(['postgres', 'firestore', 'sqlite']).default('postgres'),
+  PLATFORM_MAINTENANCE: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  PLATFORM_SQLITE_PATH: z.string().optional(),
+  PLATFORM_SQLITE_ENCRYPTION_KEY: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{43}$/)
+    .optional(),
+  SQLITE_DURABLE_STORAGE_CONFIRMED: z.enum(['true', 'false']).default('false'),
   API_AUTH_MODE: z.enum(['cookie', 'bearer']).default('cookie'),
   FIRESTORE_EMULATOR_HOST: z.string().optional(),
   ADMIN_MFA_REQUIRED: z
@@ -44,6 +55,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     (env.FIREBASE_PROJECT_ID ?? webProject.projectId) === webProject.projectId;
   const v = schema.parse({
       ...env,
+      PLATFORM_MAINTENANCE: env.BLACKOUT_MAINTENANCE ?? env.PLATFORM_MAINTENANCE,
       FIREBASE_PROJECT_ID: env.FIREBASE_PROJECT_ID ?? webProject.projectId,
       FIREBASE_WEB_API_KEY:
         env.FIREBASE_WEB_API_KEY ?? (useRegisteredProject ? webProject.apiKey : undefined),
@@ -65,6 +77,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       );
   }
   const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(origin.hostname);
+  if (v.PLATFORM_DATABASE === 'sqlite') {
+    if (!v.PLATFORM_SQLITE_PATH || !v.PLATFORM_SQLITE_ENCRYPTION_KEY)
+      throw Error('SQLite exige caminho do banco e chave privada de armazenamento.');
+    if (
+      v.PLATFORM_SQLITE_ENCRYPTION_KEY === v.BOT_TOKEN_ENCRYPTION_KEY ||
+      v.PLATFORM_SQLITE_ENCRYPTION_KEY === v.ADMIN_MFA_ENCRYPTION_KEY
+    )
+      throw Error('Use uma chave de armazenamento diferente das chaves de tokens e MFA.');
+    if (
+      v.NODE_ENV === 'production' &&
+      (!isAbsolute(v.PLATFORM_SQLITE_PATH) || v.SQLITE_DURABLE_STORAGE_CONFIRMED !== 'true')
+    )
+      throw Error('SQLite em produção exige volume persistente confirmado e caminho absoluto.');
+  }
   if (v.API_PUBLIC_ORIGIN) {
     const apiOrigin = new URL(v.API_PUBLIC_ORIGIN);
     if (

@@ -1,3 +1,4 @@
+import { globalCatalogScreen } from './global-catalog-screen.js';
 import {
   refreshSharedCatalog,
   reserveShared,
@@ -91,6 +92,49 @@ const isOpen = (order: Order) =>
   ['awaiting_payment', 'precheckout', 'awaiting_review'].includes(order.status);
 
 export class BotStore {
+  localNavigationPilotAccountId?: string;
+  async navigationSnapshot(auth: RuntimeAccess) {
+    if (auth.accountId !== this.localNavigationPilotAccountId) return null;
+    return buffered(this.store, async (tx) => {
+      const { account, setup, shop } = await this.access(tx, auth);
+      if (
+        account.access_status !== 'approved' ||
+        setup.activation_status !== 'active' ||
+        !(account.paid_through instanceof Date) ||
+        account.paid_through <= this.now()
+      )
+        return null;
+      return {
+        accountId: auth.accountId,
+        expiresAt: Math.min(this.now().getTime() + 60000, account.paid_through.getTime()),
+        ownerId: shop.owner_id,
+        shop: {
+          title: shop.title,
+          welcome: shop.welcome,
+          banner: shop.banner,
+          support: shop.support,
+          support_name: shop.support_name ?? '',
+          support_phone: shop.support_phone ?? '',
+          support_url: shop.support_url ?? '',
+          payment_mode: shop.payment_mode,
+          category_emojis: shop.category_emojis ?? {},
+          products: shop.products
+            .filter((p) => p.enabled)
+            .map((p) => ({
+              id: p.id,
+              title: p.title,
+              description: p.description,
+              category: p.category,
+              price: p.price,
+              enabled: p.enabled,
+              stock: p.stock,
+              banner: p.banner ?? '',
+              stock_mode: p.stock_mode ?? 'individual',
+            })),
+        },
+      };
+    });
+  }
   wallet?: PurinWallet;
   checkoutOrigin?: string;
   private vault: SecretVault;
@@ -489,6 +533,7 @@ export class BotStore {
             ['📣 Avisos', 'admin:notices'],
             ['🏪 Abrir loja', 'catalog'],
           ],
+          [['📦 Estoque global Blackout', 'admin:globalcategories:0']],
           [['Categorias e emojis', 'admin:categories']],
           [['🧩 Novo combo automático', 'admin:combo-new']],
           [['Carteira', 'admin:wallet']],
@@ -1205,49 +1250,47 @@ export class BotStore {
             say(
               '➕ ADICIONAR PRODUTO\n\nEstoque global Blackout: escolha um produto pronto, defina seu preço e venda usando o estoque do fornecedor.\n\nProduto próprio: você cadastra e abastece seu próprio estoque.',
               buttons([
-                [['Estoque global Blackout', 'admin:globalproducts:0']],
+                [['📦 Estoque global Blackout', 'admin:globalcategories:0']],
                 [['Produto próprio', 'admin:newown']],
                 [['Voltar', 'admin']],
               ]),
             );
-          } else if (action.startsWith('globalproducts:')) {
+          } else if (/^(globalproducts|globalcategories|globalcat):/.test(action)) {
             customer.session = null;
-            const offers = (await sharedCatalog(tx, id)).map((o) => o.product);
-            const page = Math.min(
-                Math.max(0, Math.floor(Number(action.slice(15)) || 0)),
-                Math.max(0, Math.ceil(offers.length / 8) - 1),
-              ),
-              shown = offers.slice(page * 8, page * 8 + 8);
-            say(
-              offers.length
-                ? `🛍 ESTOQUE GLOBAL BLACKOUT\nEtapa 1 de 2 · Escolha um produto\n\nVocê não precisa enviar códigos nem repor estoque. A entrega sai do fornecedor.\n\nToque no produto abaixo para ver o custo e definir seu preço.\nPágina ${page + 1} de ${Math.ceil(offers.length / 8)}.`
-                : '📦 CATÁLOGO INDISPONÍVEL\n\nNenhum produto foi liberado para sua loja neste momento. Se você já foi aprovado, toque em Atualizar catálogo. Se continuar vazio, peça à Blackout para conferir sua autorização. Você não precisa cadastrar estoque próprio para revender.',
-              buttons([
-                ...shown.map((p) => [[p.title, 'admin:globalpick:' + p.id]] as [string, string][]),
-                ...(page > 0
-                  ? ([[['Anterior', 'admin:globalproducts:' + (page - 1)]]] as [string, string][][])
-                  : []),
-                ...(offers.length > (page + 1) * 8
-                  ? ([[['Próxima', 'admin:globalproducts:' + (page + 1)]]] as [string, string][][])
-                  : []),
-                [['↻ Atualizar catálogo', 'admin:globalproducts:' + page]],
-                [['‹ Voltar', 'admin:new']],
-              ]),
-            );
+            const offers = await sharedCatalog(tx, id);
+            const screen = globalCatalogScreen(offers, shop, action);
+            say(screen.text, screen.markup);
           } else if (action.startsWith('globalpick:')) {
             try {
               const offer = await sharedOffer(tx, id, action.slice(11));
+              const platform = await tx.get('platform_payments/purincash');
+              if (shop.pix_mode !== 'purincash' || shop.payment_mode !== 'manual')
+                throw new HttpError(
+                  409,
+                  'PURIN_REQUIRED',
+                  'O Pix integrado ainda não está ativo. Peça à Blackout para concluir a conexão da sua carteira antes de publicar produtos globais.',
+                );
+              await resaleRecipient(tx, id, 'product', platform?.generation, offer.baseCents);
               customer.session = { step: 'resale_price', product: offer.product.id };
               say(
-                `🏷 DEFINA SEU PREÇO\nEtapa 2 de 2 · ${offer.product.title}\n\nCusto do fornecedor: ${money(offer.baseCents, 'BRL')}\nEstoque disponível: ${offer.product.stock_mode === 'infinite' ? 'sem limite' : offer.product.stock}\n\nDigite o valor que o comprador vai pagar, maior que ${money(offer.baseCents, 'BRL')}. Exemplo: ${((offer.baseCents + 500) / 100).toFixed(2).replace('.', ',')}.\n\nO custo fica com o fornecedor. A diferença, descontada a tarifa Purin, vai para sua carteira. Sem os 12% adicionais.\n\nAo enviar o preço, o produto será publicado. Depois você poderá trocar a descrição e o banner.`,
+                `🏷 Seu preço de revenda\n${offer.product.title}\n\nFornecedor: ${money(offer.baseCents, 'BRL')}\nDisponíveis: ${offer.product.stock_mode === 'infinite' ? 'sem limite' : offer.product.stock}\n\nEnvie seu preço, maior que ${money(offer.baseCents, 'BRL')}.\nExemplo: ${((offer.baseCents + 500) / 100).toFixed(2).replace('.', ',')}.\n\nVocê recebe a diferença, descontada a tarifa Purin. O fornecedor recebe o custo acima, sem comissão adicional Blackout.\n\nAo enviar, você publica ou atualiza este produto na sua loja. Depois pode editar a descrição e o banner.`,
                 buttons([
-                  [['‹ Escolher outro produto', 'admin:globalproducts:0']],
+                  [['‹ Escolher outro produto', 'admin:globalcategories:0']],
                   [['Cancelar', 'admin']],
                 ]),
               );
             } catch (e) {
               if (!(e instanceof HttpError)) throw e;
-              say(e.message, adminMenu());
+              customer.session = null;
+              say(
+                e.code === 'RESELLER_WALLET_REQUIRED'
+                  ? 'Carteira da revenda pendente\n\nPeça à Blackout para conferir a subconta Purin e a confirmação do responsável. Após a liberação, volte ao estoque global. Nenhum produto foi publicado.'
+                  : e.message,
+                buttons([
+                  [['↻ Voltar ao catálogo', 'admin:globalcategories:0']],
+                  [['‹ Administração', 'admin']],
+                ]),
+              );
             }
           } else if (action === 'combo-new') {
             customer.session = { step: 'product_title', bundle_new: true };
@@ -1823,14 +1866,22 @@ export class BotStore {
                   buttons([
                     [['Editar descrição', 'admin:field:description:' + linked.id]],
                     [['Banner do produto', 'admin:productbanner:' + linked.id]],
-                    [['＋ Adicionar outro produto', 'admin:globalproducts:0']],
+                    [['＋ Adicionar outro produto', 'admin:globalcategories:0']],
                     [['Voltar', 'admin']],
                   ]),
                 );
               }
             } catch (e) {
               if (!(e instanceof HttpError)) throw e;
-              say(e.message, adminMenu());
+              customer.session = null;
+              say(
+                e.message +
+                  '\n\nNenhuma alteração foi publicada. Volte ao catálogo para tentar novamente.',
+                buttons([
+                  [['‹ Estoque global', 'admin:globalcategories:0']],
+                  [['Administração', 'admin']],
+                ]),
+              );
             }
           } else if (session.step === 'bundle_quantity') {
             if (!/^\d{1,2}$/.test(text) || Number(text) > 10)

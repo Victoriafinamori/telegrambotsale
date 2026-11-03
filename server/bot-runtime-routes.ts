@@ -36,6 +36,9 @@ export function botRuntimeRouter(
   });
   router.use(json({ limit: '48kb', strict: true }));
   router.get('/config', async (req, res) => res.json(await bots.configuration(accesses.get(req)!)));
+  router.get('/navigation', async (req, res) =>
+    res.json(await bots.navigationSnapshot(accesses.get(req)!)),
+  );
   router.post('/updates', async (req, res) => {
     const access = accesses.get(req)!;
     const callback = req.body?.callback_query;

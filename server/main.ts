@@ -11,6 +11,7 @@ import { FirestorePlatform } from './firestore-platform.js';
 import { AdminMfa } from './admin-mfa.js';
 import { BotStore } from './bot-store.js';
 import { AutomaticActivation } from './automatic-activation.js';
+import { SqliteDocumentStore } from './sqlite-document-store.js';
 const config = loadConfig();
 if (config.PLATFORM_DATABASE === 'postgres' && !config.DATABASE_URL)
   throw new Error('Configure DATABASE_URL ou use npm run local para o ambiente de testes.');
@@ -18,10 +19,31 @@ const db =
   config.PLATFORM_DATABASE === 'postgres'
     ? postgres(config.DATABASE_URL!, config.DATABASE_SSL === 'true')
     : null;
+const sqlite =
+  config.PLATFORM_DATABASE === 'sqlite'
+    ? new SqliteDocumentStore(
+        config.PLATFORM_SQLITE_PATH!,
+        'platform:' + config.FIREBASE_PROJECT_ID,
+        config.PLATFORM_SQLITE_ENCRYPTION_KEY!,
+      )
+    : null;
+if (sqlite && config.NODE_ENV === 'production') {
+  const migration = await sqlite.get('central_metadata/migration');
+  if (
+    migration?.verified !== true ||
+    migration.projectId !== config.FIREBASE_PROJECT_ID ||
+    !Number.isSafeInteger(migration.total) ||
+    migration.total < 1 ||
+    !/^[a-f0-9]{64}$/.test(migration.digest ?? '')
+  ) {
+    await sqlite.close();
+    throw Error('Banco SQLite ainda não foi migrado e verificado. Não inicie uma central vazia.');
+  }
+}
 const firestore =
-  config.PLATFORM_DATABASE === 'firestore'
+  config.PLATFORM_DATABASE === 'firestore' || sqlite
     ? new FirestorePlatform(
-        new FirestoreDocumentStore(getFirestore(firebaseApp(config))),
+        sqlite ?? new FirestoreDocumentStore(getFirestore(firebaseApp(config))),
         config.BOT_TOKEN_ENCRYPTION_KEY,
         undefined,
         config.inviteMs,
@@ -31,6 +53,7 @@ const bots =
   firestore && config.BOT_TOKEN_ENCRYPTION_KEY
     ? new BotStore(firestore.store, config.BOT_TOKEN_ENCRYPTION_KEY)
     : undefined;
+if (bots) bots.localNavigationPilotAccountId = process.env.LOCAL_NAVIGATION_PILOT_ACCOUNT_ID;
 const activation =
   firestore && bots && config.BOT_TOKEN_ENCRYPTION_KEY && config.API_PUBLIC_ORIGIN
     ? new AutomaticActivation(
@@ -71,7 +94,14 @@ cleanup.unref();
 let resaleBusy = false;
 let resaleCursor = '';
 const resaleTick = setInterval(() => {
-  if (!firestore || resaleBusy || !app.locals.subscriptions || !app.locals.purin) return;
+  if (
+    config.PLATFORM_MAINTENANCE ||
+    !firestore ||
+    resaleBusy ||
+    !app.locals.subscriptions ||
+    !app.locals.purin
+  )
+    return;
   resaleBusy = true;
   void (async () => {
     const jobs = await firestore.store.list('resale_reconciliation', {
@@ -101,7 +131,7 @@ const resaleTick = setInterval(() => {
 resaleTick.unref();
 let activationBusy = false;
 const activationTick = setInterval(() => {
-  if (!activation || activationBusy) return;
+  if (config.PLATFORM_MAINTENANCE || !activation || activationBusy) return;
   activationBusy = true;
   void activation
     .tick()
@@ -116,5 +146,8 @@ for (const signal of ['SIGTERM', 'SIGINT'])
     clearInterval(cleanup);
     clearInterval(resaleTick);
     clearInterval(activationTick);
-    server.close(() => void db?.close());
+    server.close(() => {
+      void db?.close();
+      void sqlite?.close();
+    });
   });

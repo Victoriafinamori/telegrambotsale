@@ -3,6 +3,7 @@ import { resolve, join } from 'node:path';
 import { runtimeZip } from '../server/square-hosting.js';
 import { buildHyzeRuntimeArchive } from '../server/hyze-hosting.js';
 import { spawnSync } from 'node:child_process';
+import { isDeepStrictEqual } from 'node:util';
 
 // Deployment artifacts contain compiled code and manifests, never production envs.
 const files: Record<string, Uint8Array | string> = {};
@@ -23,12 +24,24 @@ manifest.dependencies.node = '24.18.0';
 manifest.scripts = { start: './node_modules/node/bin/node hyze-start.mjs' };
 await writeFile(join(destination, 'package.json'), JSON.stringify(manifest, null, 2));
 // Generate a production-only lock. Hyze must not rebuild this compiled artifact.
-const result = spawnSync(
-  process.platform === 'win32' ? 'npm.cmd' : 'npm',
-  ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund'],
-  { cwd: destination, shell: process.platform === 'win32', stdio: 'inherit' },
-);
-if (result.status !== 0) throw Error('Unable to lock the Hyze production manifest');
+if (process.argv[2]) {
+  const previous = resolve(process.argv[2]);
+  const oldManifest = JSON.parse(await readFile(join(previous, 'package.json'), 'utf8'));
+  const lock = JSON.parse(await readFile(join(previous, 'package-lock.json'), 'utf8'));
+  if (
+    !isDeepStrictEqual(oldManifest, manifest) ||
+    !isDeepStrictEqual(lock.packages?.['']?.dependencies, manifest.dependencies)
+  )
+    throw Error('Reusable production lock does not match the current manifest');
+  await writeFile(join(destination, 'package-lock.json'), JSON.stringify(lock, null, 2));
+} else {
+  const result = spawnSync(
+    process.platform === 'win32' ? 'npm.cmd' : 'npm',
+    ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund'],
+    { cwd: destination, shell: process.platform === 'win32', stdio: 'inherit' },
+  );
+  if (result.status !== 0) throw Error('Unable to lock the Hyze production manifest');
+}
 for (const file of ['package.json', 'package-lock.json'])
   files[file] = await readFile(join(destination, file));
 files['hyze-start.mjs'] = `import {mkdir, writeFile} from 'node:fs/promises';
@@ -52,7 +65,7 @@ process.env.GOOGLE_APPLICATION_CREDENTIALS=resolve(folder,'firebase-admin.json')
 await writeFile(process.env.GOOGLE_APPLICATION_CREDENTIALS,raw,{mode:0o600});
 delete process.env.BLACKOUT_FIREBASE_ADMIN_JSON;
 process.env.NODE_ENV='production';
-process.env.PLATFORM_DATABASE='firestore';
+process.env.PLATFORM_DATABASE=process.env.BLACKOUT_DATABASE_BACKEND==='sqlite'?'sqlite':'firestore';
 process.env.HOST='0.0.0.0';
 process.env.PORT ||= '3000';
 await import('./dist-server/server/main.js');

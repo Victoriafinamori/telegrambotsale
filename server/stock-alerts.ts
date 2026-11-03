@@ -18,6 +18,8 @@ export async function queueStockAlerts(
     afterId: runtime.stock_watch_cursor ?? '',
     equals: ['active', true],
   });
+  // No subscribers and no cursor to reset: avoid a transaction on every heartbeat.
+  if (!rows.length && !runtime.stock_watch_cursor) return;
   await botTransaction(store, async (tx) => {
     const [current, rawShop, account, setup] = await Promise.all([
       tx.get('bot_runtimes/' + auth.accountId),
