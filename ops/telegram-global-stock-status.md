@@ -41,3 +41,31 @@ as chaves existentes. A API ainda usa Firestore em manutenção. Nenhum banco va
 ativado e nenhum estoque foi anunciado como migrado. O próximo passo depende de
 recuperar dados reais ou de um recadastro explicitamente conferido das duas lojas e
 dos vínculos financeiros. A prioridade de liberação segue `retomada-da-migracao.md`.
+
+## Atualização: estoque pode ser refeito e backup real validado
+
+A dona autorizou deixar seu estoque vazio para refazê-lo manualmente. Essa autorização
+não implica zerar saldos, descartar pedidos ou substituir vínculos das lojas/Purin.
+A leitura pontual de `resale_platform/settings` ainda retornou 429 nesta retomada.
+
+Foi criado um banco SQLite cifrado com dados exclusivamente fictícios e chave própria,
+adicionado ao mesmo pacote de código já validado da API. Deployment de ensaio Hyze:
+`a5983efe`, em 03/11/2026. A base operacional e as credenciais existentes não mudaram;
+`PLATFORM_MAINTENANCE` continuou bloqueando operações com 503.
+
+Foi criado o backup manual Hyze de 03/11/2026 às 18:01, baixado e copiado para a
+área privada local. A extração isolada do banco de ensaio e sua abertura com a chave
+correta confirmaram marcador, estoque fictício e data preservados. Resultado privado:
+`.local/deployment-private/hyze-sqlite-drill-result.json`. Evidência visual:
+`.local/hyze-backup-restore-validated.png`. Nenhuma restauração sobrescreveu a aplicação.
+
+Esse ensaio confirma que o backup da Hyze inclui o SQLite e pode ser restaurado em
+outro arquivo. Não cria uma rotina de backup consistente de um banco com escritas em
+andamento. Para produção, gerar cópia SQLite consistente antes de arquivar/copiar,
+conservar a chave em separado e manter cópia privada fora do disco do aplicativo.
+
+Ainda faltam as configurações reais de contas, tokens e pagamentos. Foi perguntado
+se a dona consegue reconectar os dois bots e a Purin pelos campos privados, para
+definir se a recuperação pode partir de configurações recadastradas. Tokens ou chaves
+não devem ser enviados pelo chat. Não foi criada uma base financeira fictícia ou
+marcada uma reconstrução parcial como migração verificada.
