@@ -42,8 +42,8 @@ Unset this flag or set it to false and restart only after the import and validat
    its key in separate private storage. Perform a restore rehearsal.
 8. Only then set private API variables:
    - BLACKOUT_DATABASE_BACKEND=sqlite (Hyze bootstrap selection)
-   - PLATFORM_SQLITE_PATH=<absolute durable-volume path>
-   - PLATFORM_SQLITE_ENCRYPTION_KEY=<private dedicated key>
+   - BLACKOUT_SQLITE_PATH=<absolute durable-volume path>
+   - BLACKOUT_SQLITE_ENCRYPTION_KEY=<private dedicated key>
    - SQLITE_DURABLE_STORAGE_CONFIRMED=true
    For direct Node startup use PLATFORM_DATABASE=sqlite. The old Firestore startup
    remains the default. An incomplete or empty imported database is refused.
@@ -67,5 +67,14 @@ adapter removes Firestore quotas, but it is not a claim of unlimited scale. Add
 purpose-built indexes/projections after measuring production query sizes, without
 putting credentials or stock contents into plaintext indexes.
 
-The .verified-backup emitted by the export is a consistent encrypted file. It is
-not an offsite or recurring backup service. Those remain required deployment work.
+The .verified-backup emitted by the export is a consistent encrypted file. The
+exporter reopens it and verifies counts and a deterministic logical content digest.
+Use `npm run migration:verify -- <existing-import-or-backup>` for offline verification;
+add `--rehearsal` only for a non-final rehearsal. This check is for the original import
+before new live writes: its manifest is not a rolling checksum of an operating store.
+It is not an offsite or recurring backup service. Those remain required deployment work.
+
+The Hyze package now includes the complete allowlisted runtime dependency graph,
+including the SQLite/editor modules and a locked Zod dependency. No server identity,
+merchant data, payment secrets or account service implementation enters the bot ZIP.
+See [retomada-da-migracao.md](retomada-da-migracao.md) for the execution order.

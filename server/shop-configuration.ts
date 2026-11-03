@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { Product, Shop } from './bot-types.js';
 import type { NavigationSnapshot } from './local-navigation.js';
 import { HttpError } from './types.js';
-import { tokenHash } from './accounts.js';
+import { tokenHash } from './token-hash.js';
 
 const media = z
   .string()

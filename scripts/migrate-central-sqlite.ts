@@ -4,7 +4,11 @@ import { getFirestore, type CollectionReference } from 'firebase-admin/firestore
 import { resolve, dirname } from 'node:path';
 import { mkdir, open } from 'node:fs/promises';
 import { SqliteDocumentStore } from '../server/sqlite-document-store.js';
-import { migrateCentral, type MigrationRow } from '../server/central-migration.js';
+import {
+  migrateCentral,
+  verifyCentralImport,
+  type MigrationRow,
+} from '../server/central-migration.js';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const key = process.env.PLATFORM_SQLITE_ENCRYPTION_KEY;
@@ -54,6 +58,16 @@ try {
     process.argv.includes('--source-quiesced'),
   );
   await target.backupTo(filename + '.verified-backup');
+  const restored = new SqliteDocumentStore(
+    filename + '.verified-backup',
+    'platform:' + projectId,
+    key,
+  );
+  try {
+    await verifyCentralImport(restored, projectId, result.verified);
+  } finally {
+    await restored.close();
+  }
   console.log(
     JSON.stringify({
       documents: result.total,
@@ -61,6 +75,7 @@ try {
       verified: result.verified,
       digest: result.digest,
       backupCreated: true,
+      backupRestoreVerified: true,
     }),
   );
 } catch (error) {

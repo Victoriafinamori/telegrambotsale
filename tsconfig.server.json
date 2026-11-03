@@ -14,6 +14,7 @@
     "scripts/grant-admin.ts",
     "scripts/reset-admin-mfa.ts",
     "scripts/bot-runtime-credential.ts",
-    "scripts/migrate-central-sqlite.ts"
+    "scripts/migrate-central-sqlite.ts",
+    "scripts/verify-central-sqlite.ts"
   ]
 }

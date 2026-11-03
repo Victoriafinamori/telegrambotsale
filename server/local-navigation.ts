@@ -1,5 +1,5 @@
 import type { BotEffect, Product, Shop, TelegramUpdate } from './bot-types.js';
-import { tokenHash } from './accounts.js';
+import { tokenHash } from './token-hash.js';
 import { money, productText, supportDetails } from './bot-appearance.js';
 import { reuseNavigationMessage } from './bot-navigation.js';
 

@@ -19,6 +19,8 @@
     "test:emulator": "node --import tsx scripts/emulator.ts --test",
     "emulators": "node --import tsx scripts/emulator.ts",
     "db:migrate": "node dist-server/scripts/migrate.js",
+    "migration:export": "node --import tsx scripts/migrate-central-sqlite.ts",
+    "migration:verify": "node --import tsx scripts/verify-central-sqlite.ts",
     "admin:grant": "node dist-server/scripts/grant-admin.js",
     "local": "node --import tsx scripts/local.ts",
     "test:browser": "node --import tsx tests/browser.ts",

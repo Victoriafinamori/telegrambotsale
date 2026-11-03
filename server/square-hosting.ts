@@ -1,6 +1,5 @@
-import { readFile } from 'node:fs/promises';
 import hyzeBotLock from '../config/hyze-bot.package-lock.json' with { type: 'json' };
-import { resolve } from 'node:path';
+import { runtimeSources } from './runtime-package.js';
 
 export class HostingError extends Error {
   constructor(
@@ -127,15 +126,8 @@ export function runtimeZip(files: Record<string, string | Uint8Array>) {
 }
 export async function buildRuntimeArchive(name: string, provider = 'squarecloud') {
   if (!/^Blackout-[0-9a-f-]{36}$/.test(name)) throw Error('Invalid deployment name');
-  const runner = await readFile(resolve('dist-server/server/bot-runner.js'), 'utf8');
-  const telegram = await readFile(resolve('dist-server/server/telegram-client.js'), 'utf8');
   return runtimeZip({
-    'dist-server/server/bot-runner.js': runner.replace("import 'dotenv/config';", ''),
-    'dist-server/server/telegram-client.js': telegram,
-    'dist-server/server/bot-navigation.js': await readFile(
-      resolve('dist-server/server/bot-navigation.js'),
-      'utf8',
-    ),
+    ...(await runtimeSources()),
     'package.json': JSON.stringify({
       name: 'blackout-merchant-bot',
       version: '1.0.0',
@@ -148,7 +140,10 @@ export async function buildRuntimeArchive(name: string, provider = 'squarecloud'
             ? './node_modules/node/bin/node hyze-bot-start.mjs'
             : 'node dist-server/server/bot-runner.js',
       },
-      ...(provider === 'hyze' ? { dependencies: { node: '24.18.0' } } : {}),
+      dependencies: {
+        zod: hyzeBotLock.packages['node_modules/zod'].version,
+        ...(provider === 'hyze' ? { node: '24.18.0' } : {}),
+      },
     }),
     ...(provider === 'hyze' ? { 'package-lock.json': JSON.stringify(hyzeBotLock) } : {}),
     ...(provider === 'hyze'

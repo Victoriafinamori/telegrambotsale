@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { SqliteDocumentStore } from '../server/sqlite-document-store.js';
-import { migrateCentral } from '../server/central-migration.js';
+import { migrateCentral, verifyCentralImport } from '../server/central-migration.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { loadConfig } from '../server/config.js';
 
 const key = () => randomBytes(32).toString('base64url');
@@ -104,4 +107,50 @@ test('Production SQLite requires its own encryption key and confirmed absolute p
   assert.throws(() =>
     loadConfig({ ...env, BOT_TOKEN_ENCRYPTION_KEY: env.PLATFORM_SQLITE_ENCRYPTION_KEY }),
   );
+  const aliases = loadConfig({
+    ...env,
+    PLATFORM_DATABASE: undefined,
+    PLATFORM_SQLITE_PATH: undefined,
+    PLATFORM_SQLITE_ENCRYPTION_KEY: undefined,
+    BLACKOUT_DATABASE_BACKEND: 'sqlite',
+    BLACKOUT_SQLITE_PATH: env.PLATFORM_SQLITE_PATH,
+    BLACKOUT_SQLITE_ENCRYPTION_KEY: env.PLATFORM_SQLITE_ENCRYPTION_KEY,
+  });
+  assert.equal(aliases.PLATFORM_DATABASE, 'sqlite');
+  assert.equal(aliases.PLATFORM_SQLITE_PATH, env.PLATFORM_SQLITE_PATH);
+  assert.equal(aliases.PLATFORM_SQLITE_ENCRYPTION_KEY, env.PLATFORM_SQLITE_ENCRYPTION_KEY);
+});
+
+test('Offline import verification detects changed stock and a reopened encrypted backup matches the manifest', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'blackout-restore-'));
+  const secret = key(),
+    target = new SqliteDocumentStore(join(directory, 'source.sqlite'), 'platform:test', secret);
+  async function* source() {
+    yield {
+      path: 'orders/z',
+      value: { paid_at: new Date('2026-11-03T12:00:00Z'), ciphertext: 'original' },
+    };
+    yield { path: 'stock/a', value: { available: 5 } };
+  }
+  try {
+    await migrateCentral(source(), target, 'test', true);
+    assert.equal((await verifyCentralImport(target, 'test')).total, 2);
+    await target.backupTo(join(directory, 'backup.sqlite'));
+    const restored = new SqliteDocumentStore(
+      join(directory, 'backup.sqlite'),
+      'platform:test',
+      secret,
+    );
+    try {
+      assert.equal((await verifyCentralImport(restored, 'test')).total, 2);
+    } finally {
+      await restored.close();
+    }
+    await assert.rejects(verifyCentralImport(target, 'other'));
+    await target.transaction(async (tx) => tx.set('stock/a', { available: 4 }));
+    await assert.rejects(verifyCentralImport(target, 'test'), /do not match/);
+  } finally {
+    await target.close();
+    await rm(directory, { recursive: true, force: true });
+  }
 });

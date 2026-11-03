@@ -87,7 +87,12 @@ FIRESTORE_PREFER_REST=true
 BOT_TOKEN_ENCRYPTION_KEY=KEEP_THE_EXISTING_PRIVATE_KEY
 ADMIN_MFA_ENCRYPTION_KEY=KEEP_THE_EXISTING_DIFFERENT_PRIVATE_KEY
 BLACKOUT_FIREBASE_ADMIN_JSON=INSTALL_PRIVATE_RUNTIME_SERVICE_ACCOUNT_JSON
-# Hyze reserves PLATFORM_*, NODE_ENV and PORT. The initializer sets Firestore/production/HOST internally.
+# Migration stays disabled until export, restore and persistent volume are verified.
+BLACKOUT_MAINTENANCE=true
+BLACKOUT_DATABASE_BACKEND=firestore
+# For the future SQLite cutover, use BLACKOUT_SQLITE_PATH and BLACKOUT_SQLITE_ENCRYPTION_KEY.
+# Do not reuse the token/MFA keys. Set SQLITE_DURABLE_STORAGE_CONFIRMED=true only after the storage test.
+# Hyze reserves PLATFORM_*, NODE_ENV and PORT. Use BLACKOUT_* aliases for the database settings.
 # Start command: ./node_modules/node/bin/node hyze-start.mjs; exposed port: 3000; API memory: 512 MB.
 `,
 );

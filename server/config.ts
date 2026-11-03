@@ -56,6 +56,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   const v = schema.parse({
       ...env,
       PLATFORM_MAINTENANCE: env.BLACKOUT_MAINTENANCE ?? env.PLATFORM_MAINTENANCE,
+      PLATFORM_DATABASE: env.BLACKOUT_DATABASE_BACKEND ?? env.PLATFORM_DATABASE,
+      PLATFORM_SQLITE_PATH: env.BLACKOUT_SQLITE_PATH ?? env.PLATFORM_SQLITE_PATH,
+      PLATFORM_SQLITE_ENCRYPTION_KEY:
+        env.BLACKOUT_SQLITE_ENCRYPTION_KEY ?? env.PLATFORM_SQLITE_ENCRYPTION_KEY,
       FIREBASE_PROJECT_ID: env.FIREBASE_PROJECT_ID ?? webProject.projectId,
       FIREBASE_WEB_API_KEY:
         env.FIREBASE_WEB_API_KEY ?? (useRegisteredProject ? webProject.apiKey : undefined),
