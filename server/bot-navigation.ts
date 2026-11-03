@@ -14,6 +14,10 @@ export function reuseNavigationMessage(update: TelegramUpdate, effects: BotEffec
     message.chat.type !== 'private' ||
     !/^(home|catalog|cart|clear|support|orders|cat:.*|p:.*|add:.*|remove:.*|order:.*|watch.*|wallet:(history|new|type:.*|status:.*)|admin|admin:(wallet|subscription|categories|category:.*|edit|editfor:.*|stock|stockfor:.*|notices|payment|support|welcome|banner|stats|orders|pending|buyers:.*|coupon|new|newown|globalproducts:\d+|globalpick:[a-f0-9]{12}|combo-new|bundle:[a-f0-9]{12}|bundlepick:[a-f0-9]{12}:[a-f0-9]{12}|bundle(back|save):[a-f0-9]{12}|bundlepage:[a-f0-9]{12}:\d+))$/.test(
       (callback?.data ?? '')
+        .replace(
+          /^admin:supplier(?:$|categories:\d+$|low:\d+$|cat:[a-f0-9]{16}:\d+$)/,
+          'admin:stock',
+        )
         .replace(/^admin:globalcategories:\d+$/, 'admin:globalproducts:0')
         .replace(/^admin:globalcat:[a-f0-9]{16}:\d+$/, 'admin:globalproducts:0'),
     )

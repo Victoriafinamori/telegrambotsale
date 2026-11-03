@@ -2018,6 +2018,41 @@ async function fixture(
   };
 }
 
+test('Supplier owner manages the existing global inventory in Telegram on SQLite; reseller and buyer cannot open that hub', async () => {
+  const db = new SqliteDocumentStore(
+    ':memory:',
+    'supplier-test',
+    randomBytes(32).toString('base64url'),
+  );
+  try {
+    const f = await fixture(true, db, 'supplier', '123456789', 'manual');
+    const pid = await f.product(['EXISTING-UNIT']);
+    await db.transaction(async (tx) =>
+      tx.set('resale_platform/settings', { supplier_id: f.a.id, owner_uid: 'supplier' }),
+    );
+    const menu = await f.send(111111111, '/admin');
+    assert.match(JSON.stringify(menu), /admin:supplier/);
+    const hub = await f.click(111111111, 'admin:supplier');
+    assert.match(JSON.stringify(hub), /Seu estoque global/);
+    await f.click(111111111, 'admin:stockadd:' + pid);
+    await f.send(111111111, 'NEW-UNIT-ONE\nNEW-UNIT-TWO');
+    assert.equal((await db.get('bot_shops/' + f.a.id))?.products[0].stock, 3);
+    const buyer = await f.click(222222222, 'admin:supplier');
+    assert.doesNotMatch(JSON.stringify(buyer), /Seu estoque global|NEW-UNIT/);
+    const partner = await fixture(true, db, 'partner', '223456789', 'manual');
+    await db.transaction(async (tx) =>
+      tx.set('resale_profiles/' + partner.a.id, { products: 'approved' }),
+    );
+    const partnerMenu = await partner.send(111111111, '/admin');
+    assert.doesNotMatch(JSON.stringify(partnerMenu), /admin:supplier/);
+    const denied = await partner.click(111111111, 'admin:supplier');
+    assert.match(JSON.stringify(denied), /exclusiva da dona/);
+    assert.equal((await db.get('bot_shops/' + f.a.id))?.products[0].stock, 3);
+  } finally {
+    await db.close();
+  }
+});
+
 test('Bot binds Telegram owner through the authenticated merchant, once, and scopes runtime credentials to one store', async () => {
   const f = await fixture(false),
     other = await fixture(false, f.store, 'other', '223456789');

@@ -9,6 +9,25 @@
 - Estoque próprio, criação de produtos e demais rotinas ainda usam o serviço central.
   Não remover essas funções do painel antes de completar e validar os equivalentes no bot.
 
+## Prioridade de liberação dos bots
+
+1. Recuperar estoque e vínculos reais; não exigir recadastro item a item se a origem voltar.
+2. Instalar o banco central SQLite validado para retirar pagamentos e estoque global
+   da dependência do Firestore. Os workers atuais podem usar essa central antes da
+   migração completa dos estoques próprios para cada bot.
+3. No bot da fornecedora confirmada: `/admin` → `Meu estoque global`. A tela usa o
+   catálogo já vinculado a `resale_platform/settings`, com categorias, paginação e
+   reposição prioritária para itens sem estoque ou com até cinco unidades.
+4. Revendedores usam `Produtos do fornecedor`; a administração global não é exibida
+   a eles e callbacks forjados são recusados. Compradores não recebem esses controles.
+5. Confirmar reserva e entrega, cancelamento, margem e carteira antes de liberar as lojas.
+   A separação completa por worker e o painel do site ficam para a etapa seguinte.
+
+O exportador agora prioriza documentos principais de catálogo, contas, tokens cifrados,
+vínculos e pagamentos antes de históricos de autenticação/limites. Descendentes de pais
+ausentes continuam preservados; leituras bloqueadas têm tempo limitado. Uma exportação
+interrompida permanece **incompleta e não verificada**, nunca pronta para produção.
+
 ## Quando as leituras do Firebase voltarem
 
 1. Confirmar a leitura com a identidade administrativa já autorizada, sem habilitar cobrança.

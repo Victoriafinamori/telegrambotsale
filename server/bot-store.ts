@@ -1,4 +1,5 @@
 import { globalCatalogScreen } from './global-catalog-screen.js';
+import { supplierStockScreen } from './supplier-stock-screen.js';
 import {
   configurationCommit,
   applyShopConfiguration,
@@ -558,6 +559,11 @@ export class BotStore {
         shop.owner_id === userId &&
         shop.owner_id === setup.telegram_user_id &&
         shop.owner_bot_id === setup.bot_id;
+      const supplierSettings = owner ? await tx.get('resale_platform/settings') : null;
+      const managesGlobal =
+        !!supplierSettings &&
+        supplierSettings.supplier_id === id &&
+        supplierSettings.owner_uid === account.firebase_uid;
       const saveShop = () =>
         tx.set(root(id), { ...shop, portal_revision: (shop.portal_revision ?? 0) + 1 });
       const productDoc = (pid: string) => path(id, 'products', pid);
@@ -618,7 +624,12 @@ export class BotStore {
             ['📣 Avisos', 'admin:notices'],
             ['🏪 Abrir loja', 'catalog'],
           ],
-          [['📦 Estoque global Blackout', 'admin:globalcategories:0']],
+          [
+            [
+              managesGlobal ? '📦 Meu estoque global' : '📦 Produtos do fornecedor',
+              managesGlobal ? 'admin:supplier' : 'admin:globalcategories:0',
+            ],
+          ],
           [['Categorias e emojis', 'admin:categories']],
           [['🧩 Novo combo automático', 'admin:combo-new']],
           [['Carteira', 'admin:wallet']],
@@ -1233,6 +1244,17 @@ export class BotStore {
           };
           if (await this.notices.action(noticeContext, action)) {
             // Announcement prompts and drafts are managed independently of orders.
+          } else if (/^supplier(?:$|categories:\d+$|low:\d+$|cat:[a-f0-9]{16}:\d+$)/.test(action)) {
+            customer.session = null;
+            if (!managesGlobal)
+              say(
+                'A reposição do estoque global é exclusiva da dona. Use Produtos do fornecedor para escolher o que revender.',
+                adminMenu(),
+              );
+            else {
+              const screen = supplierStockScreen(shop, action);
+              say(screen.text, screen.markup);
+            }
           } else if (action === 'categories') {
             const categories = [
               ...new Set([...(shop.categories ?? []), ...shop.products.map((p) => p.category)]),
