@@ -69,3 +69,14 @@ se a dona consegue reconectar os dois bots e a Purin pelos campos privados, para
 definir se a recuperação pode partir de configurações recadastradas. Tokens ou chaves
 não devem ser enviados pelo chat. Não foi criada uma base financeira fictícia ou
 marcada uma reconstrução parcial como migração verificada.
+
+## Decisão da dona: recuperar as configurações antigas
+
+A dona escolheu recuperar os vínculos existentes, em vez de reconectar os bots e a
+Purin em uma reconstrução nova. Preservar contas, contratos, credenciais, identidades
+Telegram, vínculos Purin e estados financeiros. Não criar contas substitutas nem
+solicitar novamente tokens enquanto essa escolha estiver mantida.
+A permissão anterior para refazer o estoque continua limitada ao estoque.
+Na verificação após essa escolha, `resale_platform/settings` ainda retornou
+429 `RESOURCE_EXHAUSTED`. A recuperação permanece dependente da leitura da origem;
+nenhuma configuração antiga foi zerada e nenhum serviço financeiro foi reativado.
