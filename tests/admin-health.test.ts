@@ -174,7 +174,7 @@ test('Health pagination is bounded and reports incomplete samples instead of cla
   assert.equal(sample.rows.find((row) => row.id === f.id)!.limited, true);
   await assert.rejects(() => f.service.read({ after: '../../secrets' }));
 });
-test('Health HTTP requires platform admin and confirmed second factor; endpoint performs no provider actions', async () => {
+test('Retired health endpoint does not query the database; account details still require admin MFA', async () => {
   const f = await fixture(),
     key = randomBytes(32).toString('base64url');
   await f.write({ [adminPath('admin')]: { firebase_uid: 'admin' } });
@@ -211,13 +211,41 @@ test('Health HTTP requires platform admin and confirmed second factor; endpoint 
       headers: user ? { Authorization: 'Bearer ' + user, Origin: config.APP_ORIGIN } : {},
     });
   try {
-    assert.equal((await request()).status, 401);
-    assert.equal((await request('merchant')).status, 403);
-    assert.equal((await request('admin')).status, 403);
+    const originalGet = f.store.get.bind(f.store),
+      originalTx = f.store.transaction.bind(f.store),
+      originalList = f.store.list.bind(f.store);
+    let calls = 0;
+    f.store.get = async (...args) => {
+      calls++;
+      return originalGet(...args);
+    };
+    f.store.transaction = async (...args) => {
+      calls++;
+      return originalTx(...args);
+    };
+    f.store.list = async (...args) => {
+      calls++;
+      return originalList(...args);
+    };
+    assert.equal((await request()).status, 410);
+    assert.equal((await request('merchant')).status, 410);
+    assert.equal((await request('admin')).status, 410);
     const result = await request('admin-mfa');
-    assert.equal(result.status, 200);
-    assert.equal((await result.json()).rows.length, 1);
-    const details = await fetch(origin + '/api/admin/health/stores/' + f.id, {
+    assert.equal(result.status, 410);
+    assert.equal((await result.json()).code, 'ADMIN_HEALTH_REMOVED');
+    assert.equal(calls, 0);
+    const accountPath = origin + '/api/admin/accounts/' + f.id;
+    assert.equal((await fetch(accountPath)).status, 401);
+    for (const user of ['merchant', 'admin'])
+      assert.equal(
+        (
+          await fetch(accountPath, {
+            headers: { Authorization: 'Bearer ' + user, Origin: config.APP_ORIGIN },
+          })
+        ).status,
+        403,
+      );
+    const details = await fetch(accountPath, {
       headers: { Authorization: 'Bearer admin-mfa', Origin: config.APP_ORIGIN },
     });
     assert.equal(details.status, 200);

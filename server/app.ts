@@ -237,6 +237,13 @@ export function createApp(
   if (subscriptions) app.locals.subscriptions = subscriptions;
   if (purin) app.locals.purin = purin;
   if (services?.bots) app.use('/internal/bot', botRuntimeRouter(services.bots, accounts, gateway));
+  // Retired dashboard: old tabs must not trigger database scans or rate writes.
+  app.use('/api/admin/health', (_req, res) =>
+    res.status(410).json({
+      code: 'ADMIN_HEALTH_REMOVED',
+      message: 'A checagem de saúde dos bots foi removida. Use o painel de lojistas.',
+    }),
+  );
   const apiRate = rate('api', 300, 60000);
   app.use('/api', (req, res, next) => {
     // Host health probes and public static config must never write to Firestore.
@@ -817,12 +824,7 @@ export function createApp(
       ),
     );
   });
-  app.get('/api/admin/health', rate('admin-health', 12, 60000), async (req, res) => {
-    if (!services?.bots)
-      throw new HttpError(503, 'HEALTH_UNAVAILABLE', 'Monitoramento indisponível.');
-    res.json(await new AdminHealth(services.bots.store).read(req.query));
-  });
-  app.get('/api/admin/health/stores/:id', async (req, res) => {
+  app.get('/api/admin/accounts/:id', async (req, res) => {
     if (!services?.bots)
       throw new HttpError(503, 'HEALTH_UNAVAILABLE', 'Monitoramento indisponível.');
     res.json({
