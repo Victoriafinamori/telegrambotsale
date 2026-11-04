@@ -3530,8 +3530,9 @@ test('Approved reseller publishes customized global product and cannot lower its
     tx.set('resale_profiles/' + f.a.id, { products: 'revoked' });
   });
   const empty = await f.click(111111111, 'admin:globalproducts:0');
-  assert(JSON.stringify(empty).includes('CATÁLOGO INDISPONÍVEL'));
-  assert(JSON.stringify(empty).includes('Atualizar catálogo'));
+  assert(JSON.stringify(empty).includes('admin:resale'));
+  assert(!JSON.stringify(empty).includes('admin:globalpick:'));
+  assert(JSON.stringify(empty).includes('Ver revenda integrada'));
   assert(!JSON.stringify(empty).includes('admin:globalpick:'));
   await f.store.transaction(async (tx) => {
     const shop = (await tx.get('bot_shops/' + f.a.id))!;
@@ -3948,4 +3949,91 @@ test('An incomplete mixed combo cart creates no order and leaves both component 
   assert.equal((await f.store.get('bot_shops/' + f.a.id))!.recent_orders.length, 0);
   for (const id of [a, b])
     assert.equal((await f.store.get(`bot_shops/${f.a.id}/products/${id}`))!.units.length, 1);
+});
+
+test('Telegram guided setup resumes from saved shop data, previews buyer layout and manages categories without deleting products', async () => {
+  const f = await fixture();
+  const owner = 111111111;
+  const home = await f.send(owner, '/admin');
+  assert(JSON.stringify(home).includes('admin:setup'));
+  assert(!JSON.stringify(home).includes('admin:stats'));
+  const reused = f.callback(owner, 'admin:setup');
+  reused.callback_query!.message = { message_id: 321, chat: { id: owner, type: 'private' } };
+  const guidedEffects = await f.effects((await f.bots.process(f.auth, reused)).effectIds);
+  assert(guidedEffects.some((e) => e.method === 'editMessageText' && e.payload.message_id === 321));
+  assert(!guidedEffects.some((e) => e.method === 'sendMessage'));
+  const guide = await f.click(owner, 'admin:setup');
+  const copy = guide.map((e) => e.payload.text ?? '').join('');
+  assert(copy.indexOf('Boas-vindas') < copy.indexOf('Suporte'));
+  await f.click(owner, 'admin:welcome');
+  await f.send(owner, 'Bem-vindo à minha loja!');
+  await f.click(owner, 'admin:support-phone');
+  await f.send(owner, '11987654321');
+  await f.click(owner, 'admin:category-new');
+  await f.send(owner, 'Jogos');
+  let shop = (await f.store.get('bot_shops/' + f.a.id)) as Shop;
+  assert(shop.categories?.includes('Jogos'));
+  await f.click(owner, 'admin:category:' + tokenHash('Jogos').slice(0, 16));
+  await f.send(owner, '🎮');
+  await f.click(owner, 'admin:category-rename:' + tokenHash('Jogos').slice(0, 16));
+  await f.send(owner, 'Games');
+  shop = (await f.store.get('bot_shops/' + f.a.id)) as Shop;
+  assert.equal(shop.category_emojis?.Games, '🎮');
+  const resumed = JSON.stringify(await f.click(owner, 'admin:setup'));
+  assert(resumed.includes('✓ 1. Boas-vindas'));
+  assert(resumed.includes('✓ 2. Suporte'));
+  assert(resumed.includes('✓ 3. Categorias'));
+  const preview = await f.click(owner, 'admin:preview');
+  assert(preview.some((e) => String(e.payload.text).includes('Bem-vindo à minha loja!')));
+  assert(!JSON.stringify(preview).includes('admin:wallet'));
+  const customer = await f.send(222222222, '/start');
+  assert(!JSON.stringify(customer).includes('admin:setup'));
+  await f.click(owner, 'admin:category-remove:' + tokenHash('Games').slice(0, 16));
+  assert(((await f.store.get('bot_shops/' + f.a.id)) as Shop).categories?.includes('Games'));
+  await f.click(owner, 'admin:category-delete:' + tokenHash('Games').slice(0, 16));
+  assert(!((await f.store.get('bot_shops/' + f.a.id)) as Shop).categories?.includes('Games'));
+  const pid = await f.product();
+  await f.click(owner, 'admin:category-delete:' + tokenHash('Arquivos').slice(0, 16));
+  assert(((await f.store.get('bot_shops/' + f.a.id)) as Shop).products.some((p) => p.id === pid));
+  const photo = f.message(owner, '');
+  photo.message!.photo = [{ file_id: 'preview_banner' }];
+  await f.click(owner, 'admin:banner');
+  await f.effects((await f.bots.process(f.auth, photo)).effectIds);
+  const withPhoto = await f.click(owner, 'admin:preview');
+  assert(
+    withPhoto.some(
+      (e) =>
+        e.method === 'sendPhoto' &&
+        e.payload.photo === 'preview_banner' &&
+        String(e.payload.caption).includes('Bem-vindo'),
+    ),
+  );
+});
+
+test('Telegram reseller opt-in uses the shared approval queue, is idempotent and never allows buyers to request for a store', async () => {
+  const f = await fixture();
+  const owner = 111111111;
+  const denied = await f.click(222222222, 'admin:resale-request:products');
+  assert(JSON.stringify(denied).includes('somente ao responsável'));
+  assert.equal(await f.store.get('resale_profiles/' + f.a.id), null);
+  const empty = await f.click(owner, 'admin:globalcategories:0');
+  assert(JSON.stringify(empty).includes('admin:resale'));
+  await f.click(owner, 'admin:resale-request:products');
+  let profile = (await f.store.get('resale_profiles/' + f.a.id))!;
+  assert.equal(profile.products, 'requested');
+  assert.equal(profile.plans, 'none');
+  await f.click(owner, 'admin:resale-request:products');
+  assert.equal((await f.store.get('resale_profiles/' + f.a.id))!.revision, profile.revision);
+  const { ResaleProgram } = await import('../server/resale-program.js');
+  const resale = new ResaleProgram(
+    f.store,
+    async (uid) => uid === 'admin',
+    new MerchantConsole(f.store, f.key, f.bots),
+  );
+  await resale.decide('admin', f.a.id, {
+    capability: 'products',
+    status: 'approved',
+    revision: profile.revision,
+  });
+  assert(JSON.stringify(await f.click(owner, 'admin:resale')).includes('admin:globalcategories:0'));
 });

@@ -1,3 +1,5 @@
+import { adminHome, telegramSetup } from './telegram-admin.js';
+import { requestResale } from './resale-request.js';
 import { globalCatalogScreen } from './global-catalog-screen.js';
 import { supplierStockScreen } from './supplier-stock-screen.js';
 import {
@@ -576,7 +578,7 @@ export class BotStore {
         session: null,
       };
       const saveCustomer = () => tx.set(cartPath, customer);
-      const menu = () => ({
+      const menu = (adminOptions = owner && !customer.preview_mode) => ({
         inline_keyboard: [
           ...buttons([
             [
@@ -587,54 +589,19 @@ export class BotStore {
               ['🧾 Meus pedidos', 'orders'],
               ['💬 Suporte', 'support'],
             ],
-            ...(owner ? [[['⚙️ Gerenciar loja', 'admin']] as [string, string][]] : []),
-            ...(owner ? [[['Carteira', 'admin:wallet']] as [string, string][]] : []),
-            ...(owner ? [[['Minha assinatura', 'admin:subscription']] as [string, string][]] : []),
+            ...(adminOptions ? [[['⚙️ Gerenciar loja', 'admin']] as [string, string][]] : []),
+            ...(adminOptions ? [[['Carteira', 'admin:wallet']] as [string, string][]] : []),
+            ...(adminOptions
+              ? [[['Minha assinatura', 'admin:subscription']] as [string, string][]]
+              : []),
           ]).inline_keyboard,
+          ...(owner && customer.preview_mode
+            ? [[{ text: '‹ Sair da prévia', callback_data: 'admin' }]]
+            : []),
           [{ text: '🚀 Quero um bot igual · Blackout', url: 'https://blackout-create.web.app/' }],
         ],
       });
-      const adminMenu = () =>
-        buttons([
-          [
-            ['➕ Novo produto', 'admin:new'],
-            ['📦 Estoque', 'admin:stock'],
-          ],
-          [
-            ['✏️ Editar produto', 'admin:edit'],
-            ['🎟️ Cupons', 'admin:coupon'],
-          ],
-          [
-            ['🖼️ Banner da loja', 'admin:banner'],
-            ['👋 Boas-vindas', 'admin:welcome'],
-          ],
-          [
-            ['💬 Suporte', 'admin:support'],
-            ['📋 Pedidos', 'admin:orders'],
-          ],
-          [
-            ['🧾 Pagamentos pendentes', 'admin:pending'],
-            ['📊 Estatísticas', 'admin:stats'],
-          ],
-          [
-            ['💳 Pagamentos', 'admin:payment'],
-            ['👥 Compradores', 'admin:buyers:'],
-          ],
-          [
-            ['📣 Avisos', 'admin:notices'],
-            ['🏪 Abrir loja', 'catalog'],
-          ],
-          [
-            [
-              managesGlobal ? '📦 Meu estoque global' : '📦 Produtos do fornecedor',
-              managesGlobal ? 'admin:supplier' : 'admin:globalcategories:0',
-            ],
-          ],
-          [['Categorias e emojis', 'admin:categories']],
-          [['🧩 Novo combo automático', 'admin:combo-new']],
-          [['Carteira', 'admin:wallet']],
-          [['Minha assinatura', 'admin:subscription']],
-        ]);
+      const adminMenu = () => adminHome(shop, managesGlobal).markup;
       const bundleBuilder = (pid: string) => {
         const p = shop.products.find((p) => p.id === pid),
           session = customer.session;
@@ -1223,10 +1190,13 @@ export class BotStore {
           say('A administração está disponível somente ao responsável confirmado pelo site.');
         } else if (owner && (cmd === '/admin' || cmd === 'admin')) {
           customer.session = null;
+          customer.preview_mode = false;
           saveCustomer();
-          say('Administração da loja', adminMenu());
+          const home = adminHome(shop, managesGlobal);
+          say(home.text, home.markup);
         } else if (owner && cmd.startsWith('admin:')) {
           const action = cmd.slice(6);
+          if (action !== 'preview') customer.preview_mode = false;
           const noticeContext = {
             tx,
             accountId: id,
@@ -1242,7 +1212,311 @@ export class BotStore {
               effect(method, payload),
             audit: (action: string) => this.audit(tx, id, action, userId),
           };
-          if (await this.notices.action(noticeContext, action)) {
+          if (action === 'preview') {
+            customer.session = null;
+            customer.preview_mode = true;
+            const markup = menu(false);
+
+            const text = shop.title + '\n\n' + shop.welcome;
+            if (shop.banner)
+              effect('sendPhoto', {
+                chat_id: chatId,
+                photo: shop.banner,
+                caption: text,
+                reply_markup: markup,
+              });
+            else say(text, markup);
+          } else if (action === 'setup' || /^setup:[0-4]$/.test(action)) {
+            customer.session = null;
+            const progress = telegramSetup(shop);
+            if (action === 'setup')
+              say(
+                '✨ PREPARE SUA LOJA\n\n' +
+                  progress.steps
+                    .map((step, i) => (step.done ? '✓' : '○') + ' ' + (i + 1) + '. ' + step.title)
+                    .join('\n') +
+                  '\n\nToque em uma etapa. Você pode sair e continuar depois. O banner é opcional.',
+                buttons([
+                  [['Continuar de onde parei', progress.next]],
+                  ...progress.steps.map(
+                    (step, i) =>
+                      [[String(i + 1) + '. ' + step.title, step.action]] as [string, string][],
+                  ),
+                  [['👁 Conferir prévia', 'admin:preview']],
+                  [['Fechar guia', 'admin:setup-close']],
+                ]),
+              );
+            else {
+              const index = Number(action.slice(6));
+              const copy = [
+                'Personalize a primeira mensagem que seu comprador recebe. O nome do bot é definido no BotFather. O banner é opcional: sem ele, sua loja abre só com texto.',
+                'Cadastre ao menos um canal para o cliente pedir ajuda: @usuário, telefone ou link. O nome do atendimento é opcional.',
+                'Crie as categorias antes de cadastrar os produtos. Você escolhe os nomes e os emojis.',
+                'Adicione seus produtos e prepare a entrega. Para revender produtos da Blackout, solicite primeiro a revenda integrada. Os itens do fornecedor usam o estoque global.',
+                'Confira a forma de pagamento e faça a prévia antes de divulgar. A carteira e os saques ficam no menu Financeiro.',
+              ];
+              const rows: [string, string][][] = [
+                [
+                  ['👋 Editar boas-vindas', 'admin:welcome'],
+                  ['🖼 Banner opcional', 'admin:banner'],
+                ],
+                [['💬 Configurar suporte', 'admin:support']],
+                [['🗂 Criar ou editar categorias', 'admin:categories']],
+                [
+                  ['➕ Adicionar produto', 'admin:new'],
+                  ['📦 Ver estoque', 'admin:stock'],
+                ],
+                [['💳 Configurar pagamento', 'admin:payment']],
+              ];
+              say(
+                'ETAPA ' +
+                  (index + 1) +
+                  ' DE 5 · ' +
+                  progress.steps[index].title +
+                  '\n\n' +
+                  copy[index],
+                buttons([
+                  rows[index],
+                  [['👁 Ver como cliente', 'admin:preview']],
+                  ...(index === 0
+                    ? [
+                        [['Manter texto atual e continuar', 'admin:setup-welcome-done']] as [
+                          string,
+                          string,
+                        ][],
+                      ]
+                    : []),
+                  ...(index < 4
+                    ? [[['Próxima etapa →', 'admin:setup:' + (index + 1)]] as [string, string][]]
+                    : []),
+                  [
+                    ['Ver todas as etapas', 'admin:setup'],
+                    ['Administração', 'admin'],
+                  ],
+                ]),
+              );
+            }
+          } else if (action === 'setup-close' || action === 'setup-welcome-done') {
+            customer.session = null;
+            shop.telegram_setup = {
+              ...shop.telegram_setup,
+              ...(action === 'setup-close' ? { dismissed: true } : { welcome: true }),
+            };
+            say(
+              action === 'setup-close'
+                ? 'Guia fechado. Retome em Revisar configuração quando quiser.'
+                : 'Texto atual mantido. Continue em Suporte.',
+              buttons([[['Configurar suporte', 'admin:setup:1']], [['Administração', 'admin']]]),
+            );
+          } else if (['store', 'catalogue', 'sales', 'finance'].includes(action)) {
+            customer.session = null;
+            const screens: Record<string, { title: string; rows: [string, string][][] }> = {
+              store: {
+                title:
+                  '🏪 APARÊNCIA E SUPORTE\n\nEdite uma parte e confira a prévia. O banner é opcional.',
+                rows: [
+                  [
+                    ['👋 Boas-vindas', 'admin:welcome'],
+                    ['🖼 Banner', 'admin:banner'],
+                  ],
+                  [['💬 Atendimento', 'admin:support']],
+                ],
+              },
+              catalogue: {
+                title:
+                  '📦 CATÁLOGO E ESTOQUE\n\nOrganize categorias, cadastre produtos e prepare o conteúdo da entrega.',
+                rows: [
+                  [['🗂 Categorias', 'admin:categories']],
+                  [
+                    ['➕ Novo produto', 'admin:new'],
+                    ['✏️ Editar produtos', 'admin:edit'],
+                  ],
+                  [
+                    ['📦 Estoque', 'admin:stock'],
+                    ['🧩 Criar combo', 'admin:combo-new'],
+                  ],
+                  [
+                    [
+                      managesGlobal ? '📦 Meu estoque global' : '🤝 Produtos do fornecedor',
+                      managesGlobal ? 'admin:supplier' : 'admin:globalcategories:0',
+                    ],
+                  ],
+                ],
+              },
+              sales: {
+                title:
+                  '🧾 VENDAS E CLIENTES\n\nAcompanhe pedidos e pagamentos que precisam da sua atenção.',
+                rows: [
+                  [
+                    ['Pedidos', 'admin:orders'],
+                    ['Aprovações pendentes', 'admin:pending'],
+                  ],
+                  [
+                    ['Estatísticas', 'admin:stats'],
+                    ['Compradores', 'admin:buyers:'],
+                  ],
+                  [
+                    ['Cupons', 'admin:coupon'],
+                    ['Avisos', 'admin:notices'],
+                  ],
+                ],
+              },
+              finance: {
+                title:
+                  '💰 FINANCEIRO\n\nConsulte o saldo da loja, saques e as configurações de pagamento.',
+                rows: [
+                  [['Carteira e saques', 'admin:wallet']],
+                  [
+                    ['Pagamentos da loja', 'admin:payment'],
+                    ['Minha assinatura', 'admin:subscription'],
+                  ],
+                ],
+              },
+            };
+            const screen = screens[action];
+            say(
+              screen.title,
+              buttons([
+                ...screen.rows,
+                [['👁 Ver como cliente', 'admin:preview']],
+                [['‹ Administração', 'admin']],
+              ]),
+            );
+          } else if (action === 'resale' || /^resale-request:(products|plans)$/.test(action)) {
+            customer.session = null;
+            if (managesGlobal)
+              say(
+                'Você é a fornecedora deste estoque. Gerencie seus produtos e acompanhe as solicitações na Central da dona.',
+                buttons([
+                  [['📦 Meu estoque global', 'admin:supplier']],
+                  [['‹ Administração', 'admin']],
+                ]),
+              );
+            else {
+              let profile = await tx.get('resale_profiles/' + id);
+              if (action.startsWith('resale-request:')) {
+                const capability = action.slice(15) as 'products' | 'plans';
+                if (!['requested', 'approved'].includes(profile?.[capability] ?? 'none')) {
+                  await requestResale(
+                    tx,
+                    id,
+                    account.firebase_uid,
+                    { capability, enabled: true, revision: profile?.revision ?? 0 },
+                    this.now(),
+                  );
+                  profile = await tx.get('resale_profiles/' + id);
+                }
+              }
+              const labels: Record<string, string> = {
+                none: 'Não participa',
+                revoked: 'Sem acesso',
+                requested: 'Aguardando aprovação da Blackout',
+                approved: 'Aprovado',
+              };
+              say(
+                '🤝 REVENDA INTEGRADA\n\nVenda produtos do estoque Blackout sem cadastrar as unidades na sua loja. Você define o preço acima do custo do fornecedor. A Blackout recebe esse custo; sua carteira recebe a diferença após a tarifa Purin, sem comissão Blackout adicional nesses itens.\n\nProdutos: ' +
+                  labels[profile?.products ?? 'none'] +
+                  '\nPlanos Blackout: ' +
+                  labels[profile?.plans ?? 'none'] +
+                  '\n\nA participação é opcional e depende de aprovação. Produtos liberados e a carteira devem estar configurados para publicar.' +
+                  (profile?.plans === 'approved'
+                    ? '\n\nPreços e link dos planos Blackout: https://blackout-create.web.app/#/revenda'
+                    : ''),
+                buttons([
+                  ...(profile?.products === 'approved'
+                    ? [
+                        [['📦 Escolher produtos do fornecedor', 'admin:globalcategories:0']] as [
+                          string,
+                          string,
+                        ][],
+                      ]
+                    : profile?.products === 'requested'
+                      ? []
+                      : [
+                          [['Solicitar revenda de produtos', 'admin:resale-request:products']] as [
+                            string,
+                            string,
+                          ][],
+                        ]),
+                  ...(['requested', 'approved'].includes(profile?.plans ?? 'none')
+                    ? []
+                    : [
+                        [
+                          ['Solicitar revenda de planos Blackout', 'admin:resale-request:plans'],
+                        ] as [string, string][],
+                      ]),
+                  [['Atualizar situação', 'admin:resale']],
+                  [['‹ Administração', 'admin']],
+                ]),
+              );
+            }
+          } else if (action === 'category-new') {
+            customer.session = { step: 'category_new' };
+            say(
+              'Envie o nome da nova categoria (até 40 caracteres). Depois você poderá escolher o emoji.',
+              buttons([[['Cancelar', 'admin:categories']]]),
+            );
+          } else if (/^category-(menu|rename|remove|delete):[a-f0-9]{16}$/.test(action)) {
+            const [operation, hash] = action.split(':');
+            const name = [
+              ...new Set([...(shop.categories ?? []), ...shop.products.map((p) => p.category)]),
+            ].find((name) => tokenHash(name).slice(0, 16) === hash);
+            if (!name)
+              say(
+                'Categoria não encontrada. Atualize a lista.',
+                buttons([[['Categorias', 'admin:categories']]]),
+              );
+            else if (operation === 'category-rename') {
+              customer.session = { step: 'category_rename', category: name };
+              say(
+                'Envie o novo nome de ' +
+                  name +
+                  ' (até 40 caracteres). Os produtos serão mantidos.',
+                buttons([[['Cancelar', 'admin:categories']]]),
+              );
+            } else if (operation === 'category-remove' || operation === 'category-delete') {
+              if (shop.products.some((p) => p.category === name))
+                say(
+                  'Esta categoria tem produtos. Mova-os para outra categoria antes de excluir.',
+                  buttons([
+                    [['Editar produtos', 'admin:edit']],
+                    [['Categorias', 'admin:categories']],
+                  ]),
+                );
+              else if (operation === 'category-remove')
+                say(
+                  'Excluir a categoria vazia ' + name + '?',
+                  buttons([
+                    [['Confirmar exclusão', 'admin:category-delete:' + hash]],
+                    [['Cancelar', 'admin:categories']],
+                  ]),
+                );
+              else {
+                shop.categories = (shop.categories ?? []).filter((n) => n !== name);
+                if (shop.category_emojis) delete shop.category_emojis[name];
+                customer.session = null;
+                say(
+                  'Categoria vazia removida. Nenhum produto foi apagado.',
+                  buttons([[['Categorias', 'admin:categories']]]),
+                );
+              }
+            } else
+              say(
+                '🗂 ' +
+                  name +
+                  '\n\n' +
+                  shop.products.filter((p) => p.category === name).length +
+                  ' produto(s). Escolha o que alterar.',
+                buttons([
+                  [
+                    ['Nome', 'admin:category-rename:' + hash],
+                    ['Emoji', 'admin:category:' + hash],
+                  ],
+                  [['Excluir categoria vazia', 'admin:category-remove:' + hash]],
+                  [['Categorias', 'admin:categories']],
+                ]),
+              );
+          } else if (await this.notices.action(noticeContext, action)) {
             // Announcement prompts and drafts are managed independently of orders.
           } else if (/^supplier(?:$|categories:\d+$|low:\d+$|cat:[a-f0-9]{16}:\d+$)/.test(action)) {
             customer.session = null;
@@ -1256,18 +1530,20 @@ export class BotStore {
               say(screen.text, screen.markup);
             }
           } else if (action === 'categories') {
+            customer.session = null;
             const categories = [
               ...new Set([...(shop.categories ?? []), ...shop.products.map((p) => p.category)]),
             ];
             say(
-              'Escolha uma categoria para alterar seu emoji.',
+              '🗂 CATEGORIAS\n\nCrie e organize as seções da loja. Selecione uma categoria para alterar o nome ou escolher seu emoji.',
               buttons([
+                [['＋ Nova categoria', 'admin:category-new']],
                 ...categories.map(
                   (name) =>
                     [
                       [
                         `${shop.category_emojis?.[name] ?? ''} ${name}`.trim(),
-                        'admin:category:' + tokenHash(name).slice(0, 16),
+                        'admin:category-menu:' + tokenHash(name).slice(0, 16),
                       ],
                     ] as [string, string][],
                 ),
@@ -1286,7 +1562,7 @@ export class BotStore {
           } else if (action === 'payment') {
             customer.session = null;
             say(
-              `Modo atual: ${shop.payment_mode === 'manual' ? (shop.pix_mode === 'purincash' ? 'Pix automático · Blackout' : shop.pix_mode === 'mercadopago' ? 'Pix automático · Mercado Pago' : 'Pix/transferência com aprovação manual') : 'Telegram Stars'}.\n${['mercadopago', 'purincash'].includes(shop.pix_mode ?? '') ? 'Gerencie o Pix automático na aba Pagamentos do site.' : manualPixText(shop) || 'Dados de pagamento ainda não configurados.'}`,
+              `Modo atual: ${shop.payment_mode === 'manual' ? (shop.pix_mode === 'purincash' ? 'Pix automático · Blackout' : shop.pix_mode === 'mercadopago' ? 'Pix automático · Mercado Pago' : 'Pix/transferência com aprovação manual') : 'Telegram Stars'}.\n${['mercadopago', 'purincash'].includes(shop.pix_mode ?? '') ? 'A conexão do Pix automático é validada pela Blackout. Para ajustar a vinculação, fale com a equipe.' : manualPixText(shop) || 'Dados de pagamento ainda não configurados.'}`,
               buttons([
                 [['Dados Pix/transferência', 'admin:payment-details']],
                 [
@@ -1364,9 +1640,18 @@ export class BotStore {
             );
           } else if (/^(globalproducts|globalcategories|globalcat):/.test(action)) {
             customer.session = null;
+            const profile = await tx.get('resale_profiles/' + id);
             const offers = await sharedCatalog(tx, id);
             const screen = globalCatalogScreen(offers, shop, action);
-            say(screen.text, screen.markup);
+            if (profile?.products !== 'approved')
+              say(
+                '🤝 REVENDA INTEGRADA\n\nPara adicionar produtos do fornecedor, solicite sua participação. Depois da aprovação, o catálogo ficará disponível aqui.',
+                buttons([
+                  [['Ver revenda integrada', 'admin:resale']],
+                  [['Administração', 'admin']],
+                ]),
+              );
+            else say(screen.text, screen.markup);
           } else if (action.startsWith('globalpick:')) {
             try {
               const offer = await sharedOffer(tx, id, action.slice(11));
@@ -1956,6 +2241,44 @@ export class BotStore {
           } else if (!owner) {
             customer.session = null;
             say('Operação indisponível.');
+          } else if (session.step === 'category_new' || session.step === 'category_rename') {
+            const name = text.trim(),
+              all = [
+                ...new Set([...(shop.categories ?? []), ...shop.products.map((p) => p.category)]),
+              ];
+            if (!name || name.length > 40) say('Use de 1 a 40 caracteres.');
+            else if (
+              all.some(
+                (n) => n.toLocaleLowerCase() === name.toLocaleLowerCase() && n !== session.category,
+              )
+            )
+              say('Já existe uma categoria com esse nome. Envie outro nome.');
+            else if (session.step === 'category_new' && all.length >= 40)
+              say('Limite de 40 categorias atingido. Edite uma categoria existente.', adminMenu());
+            else if (session.step === 'category_rename' && !all.includes(session.category)) {
+              customer.session = null;
+              say('Categoria removida. Atualize a lista.', adminMenu());
+            } else {
+              if (session.step === 'category_rename') {
+                shop.categories = [...new Set(all.map((n) => (n === session.category ? name : n)))];
+                shop.products.forEach((p) => {
+                  if (p.category === session.category) p.category = name;
+                });
+                if (name !== session.category && shop.category_emojis?.[session.category]) {
+                  shop.category_emojis[name] = shop.category_emojis[session.category];
+                  delete shop.category_emojis[session.category];
+                }
+              } else shop.categories = [...all, name];
+              customer.session = null;
+              say(
+                '✓ Categoria salva: ' + name,
+                buttons([
+                  [['Escolher emoji', 'admin:category:' + tokenHash(name).slice(0, 16)]],
+                  [['Continuar: produtos', 'admin:setup:3']],
+                  [['Ver categorias', 'admin:categories']],
+                ]),
+              );
+            }
           } else if (session.step === 'resale_price') {
             const price = parsePrice(text, true);
             try {
@@ -2176,8 +2499,16 @@ export class BotStore {
             if (!text || text.length > 600) say('Use de 1 a 600 caracteres.');
             else {
               shop.welcome = text;
+              shop.telegram_setup = { ...shop.telegram_setup, welcome: true };
               customer.session = null;
-              say('Mensagem atualizada.', adminMenu());
+              say(
+                '✓ Boas-vindas salvas. Confira como o cliente vai ver ou continue para o suporte.',
+                buttons([
+                  [['👁 Ver prévia', 'admin:preview']],
+                  [['Próxima: suporte', 'admin:setup:1']],
+                  [['Administração', 'admin']],
+                ]),
+              );
             }
           } else if (session.step === 'support') {
             if (!/^@[A-Za-z0-9_]{5,32}$/.test(text) && text.toLowerCase() !== 'remover')
@@ -2185,7 +2516,14 @@ export class BotStore {
             else {
               shop.support = text.toLowerCase() === 'remover' ? '' : text;
               customer.session = null;
-              say('Atendimento atualizado.', adminMenu());
+              say(
+                '✓ Atendimento salvo.',
+                buttons([
+                  [['Revisar suporte', 'admin:support']],
+                  [['Próxima: categorias', 'admin:setup:2']],
+                  [['Administração', 'admin']],
+                ]),
+              );
             }
           } else if (['support_name', 'support_phone', 'support_url'].includes(session.step)) {
             const remove = text.toLowerCase() === 'remover';
@@ -2211,7 +2549,14 @@ export class BotStore {
               if (session.step === 'support_url' && !remove) value = supportUrl(text)!;
               (shop as unknown as Doc)[session.step] = value;
               customer.session = null;
-              say('Suporte atualizado.', adminMenu());
+              say(
+                '✓ Suporte salvo.',
+                buttons([
+                  [['Revisar suporte', 'admin:support']],
+                  [['Próxima: categorias', 'admin:setup:2']],
+                  [['Administração', 'admin']],
+                ]),
+              );
             }
           } else if (session.step === 'product_banner') {
             const product = shop.products.find((p) => p.id === session.product),
@@ -2232,7 +2577,14 @@ export class BotStore {
             if (photo || text === 'remover') {
               shop.banner = photo?.file_id ?? '';
               customer.session = null;
-              say('Banner atualizado.', adminMenu());
+              say(
+                '✓ Banner salvo. Confira a imagem junto da mensagem de boas-vindas.',
+                buttons([
+                  [['👁 Ver prévia', 'admin:preview']],
+                  [['Próxima: suporte', 'admin:setup:1']],
+                  [['Administração', 'admin']],
+                ]),
+              );
             } else say('Envie uma foto ou a palavra remover.');
           } else if (session.step === 'admin_coupon') {
             const match = /^([A-Z0-9_-]{3,20})\s+(\d{1,2})\s+(\d{1,5})$/.exec(text.toUpperCase());

@@ -109,6 +109,7 @@ export interface Product {
   pix_qr_price?: number;
 }
 export interface Shop {
+  telegram_setup?: { welcome?: boolean; dismissed?: boolean };
   portal_revision?: number;
   title: string;
   welcome: string;

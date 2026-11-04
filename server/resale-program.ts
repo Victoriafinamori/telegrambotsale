@@ -1,3 +1,4 @@
+import { requestResale } from './resale-request.js';
 import { tokenHash } from './accounts.js';
 import { resaleRecipient } from './resale-finance.js';
 import { randomUUID } from 'node:crypto';
@@ -126,32 +127,7 @@ export class ResaleProgram {
     });
   }
   async request(accountId: string, uid: string, raw: unknown) {
-    const input = z
-      .object({ capability, enabled: z.boolean(), revision: z.number().int().nonnegative() })
-      .strict()
-      .parse(raw);
-    return botTransaction(this.store, async (tx) => {
-      const account = await this.merchant(tx, accountId, uid),
-        target = profilePath(accountId),
-        p = await tx.get(target);
-      if ((p?.revision ?? 0) !== input.revision)
-        throw new HttpError(409, 'RESALE_CHANGED', 'Atualize as opções de revenda.');
-      const next = input.enabled
-        ? p?.[input.capability] === 'approved'
-          ? 'approved'
-          : 'requested'
-        : 'none';
-      tx.set(target, {
-        id: accountId,
-        ...permissions(p),
-        [input.capability]: next,
-        store_name: account.store_name,
-        revision: input.revision + 1,
-        updated_at: this.now(),
-      });
-      this.audit(tx, uid, accountId, 'resale.' + input.capability + '.' + next);
-      return { ok: true };
-    });
+    return botTransaction(this.store, (tx) => requestResale(tx, accountId, uid, raw, this.now()));
   }
   async partners(uid: string) {
     const settings = await this.authority(uid);
