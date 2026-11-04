@@ -2,9 +2,9 @@
 
 Scope: public landing page (`web/landing.ts`, `web/landing.css`). Authenticated owner controls and checkout keep their existing behavior and styles.
 
-The landing page persuades digital-product merchants to purchase a Telegram shop. Preserve the Blackout eclipse logo, Manrope font, real customer-facing /start screenshot, and persistent light/dark preference.
+The landing page persuades digital-product merchants to purchase a Telegram shop. Preserve the Blackout eclipse logo, Manrope font, real customer-facing /start screenshot (available by link), and persistent light/dark preference.
 
-Use graphite surfaces in dark mode, off-white in light mode, and restrained blue accents. The hero pairs a clear headline and purchase action with a compact real bot preview. Follow with a capability strip, editorial resource rows, a Pix sequence, setup steps and FAQs. Avoid duplicated screenshots, oversized previews, repeated Telegram slogans, decorative dashboard mockups and unverified financial claims.
+Use graphite surfaces in dark mode, off-white in light mode, and restrained blue accents. The hero pairs a clear headline and purchase action with a compact, explicitly illustrative conversation preview with a link to the original real /start screenshot. Follow with a capability strip, editorial resource rows, a Pix sequence, setup steps and FAQs. Avoid duplicated screenshots, oversized previews, repeated Telegram slogans, decorative dashboard mockups and unverified financial claims.
 
 Current headline: “Uma loja completa. Dentro do Telegram.”
 
