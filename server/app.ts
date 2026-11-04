@@ -799,6 +799,16 @@ export function createApp(
     if (!resale) throw new HttpError(503, 'RESALE_UNAVAILABLE', 'Revenda indisponível.');
     res.json(await resale.grant((req as unknown as AuthedRequest).identity.uid, req.body));
   });
+  app.post('/api/admin/resale/partners/:id/products', async (req, res) => {
+    if (!resale) throw new HttpError(503, 'RESALE_UNAVAILABLE', 'Revenda indisponível.');
+    res.json(
+      await resale.publishForPartner(
+        (req as unknown as AuthedRequest).identity.uid,
+        idSchema.parse(req.params.id),
+        req.body,
+      ),
+    );
+  });
   app.get('/api/admin/resale/stock', async (req, res) => {
     if (!resale) throw new HttpError(503, 'RESALE_UNAVAILABLE', 'Revenda indisponível.');
     res.set('Cache-Control', 'no-store');

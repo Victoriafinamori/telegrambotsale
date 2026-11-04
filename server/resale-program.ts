@@ -299,6 +299,57 @@ export class ResaleProgram {
       })),
     };
   }
+  async publishForPartner(uid: string, accountId: string, raw: unknown) {
+    id.parse(accountId);
+    const input = z
+      .object({
+        products: z
+          .array(
+            z
+              .object({
+                productId: z.string().regex(/^[a-f0-9]{12}$/),
+                priceCents: z.number().int().positive().max(10000000),
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(40),
+      })
+      .strict()
+      .parse(raw);
+    if (new Set(input.products.map((p) => p.productId)).size !== input.products.length)
+      throw new HttpError(400, 'DUPLICATE_PRODUCTS', 'Selecione cada produto uma única vez.');
+    await this.authority(uid);
+    return botTransaction(this.store, async (tx) => {
+      await this.authority(uid, tx);
+      const account = await tx.get('merchant_accounts/' + accountId);
+      const shop = await tx.get('bot_shops/' + accountId);
+      if (!account || account.access_status !== 'approved' || !shop)
+        throw new HttpError(409, 'SUPPLIER_UNAVAILABLE', 'Loja não está liberada.');
+      const products = [];
+      for (const item of input.products) {
+        const product = await publishSharedProduct(
+          tx,
+          accountId,
+          shop as Shop,
+          item.productId,
+          item.priceCents,
+        );
+        products.push({
+          id: product.id,
+          title: product.title,
+          priceCents: product.price,
+          source: product.resale_source,
+        });
+      }
+      tx.set('bot_shops/' + accountId, {
+        ...shop,
+        portal_revision: (shop.portal_revision ?? 0) + 1,
+      });
+      this.audit(tx, uid, accountId, 'resale.products_published_by_owner');
+      return { accountId, storeName: account.store_name, products };
+    });
+  }
   async grants(uid: string) {
     const settings = await this.authority(uid);
     return {

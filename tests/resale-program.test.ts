@@ -267,3 +267,61 @@ test('Only the platform owner can preapprove a confirmed unaccepted invitation; 
   assert.equal((await store.get('merchant_accounts/' + partner))!.access_status, 'pending');
   await assert.rejects(() => service.own(partner, 'partner'), { code: 'RESELLER_OWNER_REQUIRED' });
 });
+
+test('Owner publishes linked catalog with partner prices without copying stock or changing fees; repeats update instead of duplicating', async () => {
+  const { store, service } = await fixture();
+  await service.initialize('owner', supplier);
+  await store.transaction(async (tx) => {
+    tx.set('resale_profiles/' + partner, { products: 'approved' });
+    tx.set('platform_payments/purincash', { generation: 'generation' });
+    tx.set('merchant_bot_setup/' + partner, { telegram_user_id: '42', bot_id: '7' });
+    tx.set('purin_subaccount_claims/sub', { account_id: partner });
+    tx.set('bot_shops/' + partner, {
+      products: [{ id: 'old', title: 'Existing item' }],
+      payment_mode: 'manual',
+      pix_mode: 'purincash',
+      purin_connection: 'generation',
+      purin_subaccount: 'sub',
+      owner_id: '42',
+      owner_bot_id: '7',
+      purin_sale_fee_percent: 2,
+    });
+  });
+  const input = { products: [{ productId: pid, priceCents: 1490 }] };
+  await assert.rejects(() => service.publishForPartner('partner', partner, input), {
+    code: 'PLATFORM_OWNER_REQUIRED',
+  });
+  await assert.rejects(() => service.publishForPartner('other-admin', partner, input), {
+    code: 'PLATFORM_OWNER_REQUIRED',
+  });
+  await assert.rejects(() =>
+    service.publishForPartner('owner', partner, {
+      products: [...input.products, { productId: 'deadbeef1234', priceCents: 1990 }],
+    }),
+  );
+  assert.equal((await store.get('bot_shops/' + partner))!.products.length, 1);
+  await service.publishForPartner('owner', partner, input);
+  await service.publishForPartner('owner', partner, {
+    products: [{ productId: pid, priceCents: 1590 }],
+  });
+  const shop = (await store.get('bot_shops/' + partner))!;
+  assert.equal(shop.products.length, 2);
+  assert.equal(shop.products[1].price, 1590);
+  assert.deepEqual(shop.products[1].resale_source, { supplierId: supplier, productId: pid });
+  assert.equal(shop.purin_sale_fee_percent, 2);
+  assert.equal((await store.get('bot_shops/' + supplier))!.products[0].price, 999);
+  assert.equal(
+    (await store.get('bot_shops/' + supplier + '/products/' + pid))!.units[0].ciphertext,
+    'PRIVATE-CODE',
+  );
+  assert.deepEqual(
+    (await store.get('bot_shops/' + partner + '/products/' + shop.products[1].id))!.units,
+    [],
+  );
+  await assert.rejects(() =>
+    service.publishForPartner('owner', partner, {
+      products: [{ productId: pid, priceCents: 900 }],
+    }),
+  );
+  assert.equal((await store.get('bot_shops/' + partner))!.products[1].price, 1590);
+});
