@@ -192,6 +192,16 @@ html.dark .landing-page {
   overflow: hidden;
   background: var(--lp-surface);
 }
+.lp-dashboard-proof:has(.lp-bot-image) {
+  width: min(100%, 390px);
+}
+.lp-dashboard-proof > .lp-bot-image img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 460px;
+  object-fit: contain;
+}
 .lp-proof-bar {
   display: flex;
   align-items: center;

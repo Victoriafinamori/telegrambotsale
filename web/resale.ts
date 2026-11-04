@@ -25,9 +25,7 @@ export async function mountResale(host: HTMLElement, api: Api, admin = false) {
   const stockFilters = { query: '', category: '', availability: 'all' };
   let data: any,
     own: any,
-    offers: any,
     plans: any,
-    commissions: any[] = [],
     filter = 'all';
   const feedback = (message: string) => {
     const node = host.querySelector('[data-resale-feedback]');
@@ -35,13 +33,10 @@ export async function mountResale(host: HTMLElement, api: Api, admin = false) {
   };
   const refresh = async () => {
     if (admin) data = await api('/admin/resale');
-    else
-      [own, offers, plans, { commissions }] = await Promise.all([
-        api('/store/resale'),
-        api('/store/resale/products'),
-        api('/store/resale/plans'),
-        api('/store/resale/commissions'),
-      ]);
+    else {
+      own = await api('/store/resale');
+      plans = own.permissions.plans === 'approved' ? await api('/store/resale/plans') : null;
+    }
     render();
   };
   const run = async (action: () => Promise<void>) => {
@@ -62,10 +57,7 @@ export async function mountResale(host: HTMLElement, api: Api, admin = false) {
     host.innerHTML =
       title(admin) +
       '<p role="status" data-resale-feedback></p>' +
-      (admin
-        ? renderAdmin()
-        : renderMerchant() +
-          `<section class="rs-card"><h2>Extrato de revenda</h2><p>Créditos confirmados no extrato da sua subconta Purin. O saldo disponível e o saque continuam na carteira.</p>${commissions.map((c) => `<article class="rs-permission"><div><b>${c.kind === 'plan' ? 'Plano Blackout' : 'Produto do fornecedor'}</b><small>Venda ${money(c.grossCents)} · Base ${money(c.baseCents)} · Purin ${money(c.gatewayFeeCents)}</small></div><strong>${money(c.partnerCents)}</strong><span class="rs-badge">${c.status === 'credited' ? 'Creditado' : 'Em conferência'}</span></article>`).join('') || '<p>Nenhuma comissão confirmada ainda.</p>'}<a class="button-link quiet" href="#/minha-loja?wallet=1">Abrir carteira</a></section>`);
+      (admin ? renderAdmin() : renderMerchant());
     const stockHost = host.querySelector<HTMLElement>('[data-global-stock-browser]');
     if (stockHost)
       mountStockBrowser(
@@ -90,22 +82,44 @@ export async function mountResale(host: HTMLElement, api: Api, admin = false) {
     if (selector) selector.value = filter;
   };
   const renderMerchant = () =>
-    `<div class="rs-grid">${kinds.map(([key, label, description]) => `<section class="rs-card"><span class="rs-icon">${key === 'products' ? '↗' : 'B'}</span><span class="rs-badge" data-status="${own.permissions[key]}">${esc(labels[own.permissions[key]])}</span><h2>${label}</h2><p>${description}</p><p class="rs-muted">${key === 'products' ? 'Você recebe acesso somente aos produtos liberados pela dona.' : 'A Blackout recebe o valor base; a tarifa Purin sai da sua margem. Sem comissão adicional de 12% nos planos.'}</p><button class="${own.permissions[key] === 'none' || own.permissions[key] === 'revoked' ? '' : 'quiet'}" data-opt="${key}" data-enable="${own.permissions[key] === 'none' || own.permissions[key] === 'revoked'}">${own.permissions[key] === 'none' || own.permissions[key] === 'revoked' ? 'Quero participar' : own.permissions[key] === 'requested' ? 'Cancelar solicitação' : 'Desativar participação'}</button></section>`).join('')}</div>${own.permissions.products === 'approved' ? `<section class="rs-card"><h2>Catálogo liberado para você</h2><div class="rs-catalog">${offers.products.map((p: any) => `<article><span class="rs-badge">${p.stockMode === 'infinite' ? 'Sem limite' : p.stock + ' disponíveis'}</span><h3>${esc(p.title)}</h3><p>${esc(p.description)}</p><b>Fornecedor: ${money(p.baseCents)}</b><form data-publish="${p.productId}"><label>Seu preço · R$<input name="price" type="number" min="${(p.baseCents + 1) / 100}" step="0.01" required></label><button type="submit">Publicar na minha loja</button></form></article>`).join('') || '<p>A dona ainda não liberou produtos para sua loja.</p>'}</div><p class="rs-muted">As unidades são reservadas no estoque global. O valor do fornecedor fica com a Blackout; você recebe a diferença após a tarifa Purin, sem os 12% adicionais. Use um carrinho separado para estes produtos.</p></section>` : ''}${
-      own.permissions.plans === 'approved'
-        ? `<section class="rs-card"><h2>Seus preços de planos</h2>${plans.enabled ? `<label>Seu link de revenda<input readonly value="${esc(location.origin + '/#/comprar?partner=' + own.accountId)}"></label>` : ''}<p>Primeira contratação e renovações pelo parceiro. O preço precisa cobrir o valor base e a tarifa Purin.</p><form data-plan-prices><div class="rs-grid">${[
-            ['monthly', 'Mensal'],
-            ['quarterly', 'Trimestral'],
-            ['annual', 'Anual'],
-          ]
-            .map(
-              ([key, label]) =>
-                `<label>${label}<small>Base Blackout: ${money(plans.basePrices[key] || 0)}</small><input name="${key}" inputmode="decimal" type="number" step="0.01" min="${((plans.basePrices[key] || 0) + 1) / 100}" value="${(plans.prices[key] || 0) / 100}" required></label>`,
-            )
-            .join(
-              '',
-            )}</div><button type="submit">Salvar preços</button></form><p class="rs-muted">Sua margem é creditada pela Purin na carteira da loja. O extrato abaixo confirma cada crédito.</p></section>`
-        : ''
-    }`;
+    '<p class="rs-operational-summary">Solicite sua participação aqui. Depois da aprovação, configure a revenda pelo menu de administração do seu bot no Telegram.</p><div class="rs-grid">' +
+    kinds
+      .map(
+        ([key, label, description]) =>
+          '<section class="rs-card"><span class="rs-badge" data-status="' +
+          esc(own.permissions[key]) +
+          '">' +
+          esc(labels[own.permissions[key]]) +
+          '</span><h2>' +
+          label +
+          '</h2><p>' +
+          description +
+          '</p>' +
+          (own.permissions[key] === 'none' || own.permissions[key] === 'revoked'
+            ? '<button data-opt="' + key + '" data-enable="true">Solicitar participação</button>'
+            : own.permissions[key] === 'requested'
+              ? '<p>A Blackout está avaliando sua solicitação.</p><button class="quiet" data-opt="' +
+                key +
+                '" data-enable="false">Cancelar solicitação</button>'
+              : '<p>Acesso liberado. Abra seu bot e envie <code>/admin</code> para continuar.</p>') +
+          '</section>',
+      )
+      .join('') +
+    '</div>' +
+    (own.permissions.plans === 'approved'
+      ? `<section class="rs-card"><h2>Seus preços de planos</h2>${plans.enabled ? `<label>Seu link de revenda<input readonly value="${esc(location.origin + '/#/comprar?partner=' + own.accountId)}"></label>` : ''}<p>Primeira contratação e renovações pelo parceiro. O preço precisa cobrir o valor base e a tarifa Purin.</p><form data-plan-prices><div class="rs-grid">${[
+          ['monthly', 'Mensal'],
+          ['quarterly', 'Trimestral'],
+          ['annual', 'Anual'],
+        ]
+          .map(
+            ([key, label]) =>
+              `<label>${label}<small>Base Blackout: ${money(plans.basePrices[key] || 0)}</small><input name="${key}" inputmode="decimal" type="number" step="0.01" min="${((plans.basePrices[key] || 0) + 1) / 100}" value="${(plans.prices[key] || 0) / 100}" required></label>`,
+          )
+          .join(
+            '',
+          )}</div><button type="submit">Salvar preços</button></form><p class="rs-muted">Sua margem é creditada pela Purin na carteira da loja. Consulte os créditos e saques na carteira do seu bot no Telegram.</p></section>`
+      : '');
   const renderAdmin = () => {
     const products = data.global.configured ? data.global.catalog.products : [];
     const shown = data.partners.filter(
@@ -115,7 +129,7 @@ export async function mountResale(host: HTMLElement, api: Api, admin = false) {
         (filter === 'reseller' && p.kind === 'reseller') ||
         (filter === 'pending' && Object.values(p.permissions).includes('requested')),
     );
-    return `<p class="rs-operational-summary">${products.length} produtos no estoque global · ${data.partners.filter((p: any) => p.kind === 'reseller').length} revendedores · ${data.partners.filter((p: any) => Object.values(p.permissions).includes('requested')).length} solicitações pendentes</p><section class="rs-card"><div class="rs-card-heading"><div><h2>Estoque global</h2><p>${data.global.configured ? 'Os produtos e unidades são os mesmos da sua loja, sem duplicar o estoque.' : 'Vincule a sua loja para usá-la como fonte central de produtos.'}</p></div>${data.global.configured ? '<a class="button-link" href="#/minha-loja?section=stock">Configurar modos de estoque</a>' : '<button data-initialize>Usar minha loja como estoque global</button>'}</div>${data.global.configured ? `<div data-global-stock-browser></div><details><summary>Cadastrar produto no catálogo global</summary><form data-global-product><div class="rs-grid"><label>Nome<input name="title" maxlength="70" required></label><label>Categoria<input name="category" maxlength="40" required></label><label>Preço na sua loja · R$<input name="price" type="number" step="0.01" min="0.01" required></label></div><label>Descrição<textarea name="description" maxlength="400" required></textarea></label><button type="submit">Cadastrar produto</button></form></details>` : ''}</section><section class="rs-card"><div class="rs-card-heading"><div><h2>Lojistas e revendedores</h2><p>Participação em cada modalidade, independente do acesso à loja.</p></div><label>Mostrar<select data-filter><option value="all">Todos</option><option value="merchant">Lojistas comuns</option><option value="reseller">Revendedores</option><option value="pending">Solicitações pendentes</option></select></label></div>${data.truncated ? '<p>Exibindo os primeiros 200 lojistas.</p>' : ''}<div class="rs-partners">${
+    return `<p class="rs-operational-summary">${products.length} produtos no estoque global · ${data.partners.filter((p: any) => p.kind === 'reseller').length} revendedores · ${data.partners.filter((p: any) => Object.values(p.permissions).includes('requested')).length} solicitações pendentes</p><section class="rs-card"><div class="rs-card-heading"><div><h2>Estoque global</h2><p>${data.global.configured ? 'Os produtos e unidades são os mesmos da sua loja, sem duplicar o estoque.' : 'Vincule a sua loja para usá-la como fonte central de produtos.'}</p></div>${data.global.configured ? '<a class="button-link quiet" href="#/minha-loja">Abrir meu bot no Telegram</a>' : '<button data-initialize>Usar minha loja como estoque global</button>'}</div>${data.global.configured ? `<div data-global-stock-browser></div><details><summary>Cadastrar produto no catálogo global</summary><form data-global-product><div class="rs-grid"><label>Nome<input name="title" maxlength="70" required></label><label>Categoria<input name="category" maxlength="40" required></label><label>Preço na sua loja · R$<input name="price" type="number" step="0.01" min="0.01" required></label></div><label>Descrição<textarea name="description" maxlength="400" required></textarea></label><button type="submit">Cadastrar produto</button></form></details>` : ''}</section><section class="rs-card"><div class="rs-card-heading"><div><h2>Lojistas e revendedores</h2><p>Participação em cada modalidade, independente do acesso à loja.</p></div><label>Mostrar<select data-filter><option value="all">Todos</option><option value="merchant">Lojistas comuns</option><option value="reseller">Revendedores</option><option value="pending">Solicitações pendentes</option></select></label></div>${data.truncated ? '<p>Exibindo os primeiros 200 lojistas.</p>' : ''}<div class="rs-partners">${
       shown
         .map(
           (p: any) =>
@@ -306,12 +320,7 @@ export async function mountResale(host: HTMLElement, api: Api, admin = false) {
     e.stopPropagation();
     const fields = new FormData(form);
     void run(async () => {
-      if (form.dataset.publish)
-        await api('/store/resale/products/publish', {
-          productId: form.dataset.publish,
-          priceCents: Math.round(Number(fields.get('price')) * 100),
-        });
-      else if (form.hasAttribute('data-plan-prices'))
+      if (form.hasAttribute('data-plan-prices'))
         await api('/store/resale/plans', {
           revision: plans.revision,
           enabled: true,
@@ -322,7 +331,7 @@ export async function mountResale(host: HTMLElement, api: Api, admin = false) {
             ]),
           ),
         });
-      else if (form.hasAttribute('data-global-product'))
+      else if (admin && form.hasAttribute('data-global-product'))
         await api('/admin/resale/global/product', {
           title: fields.get('title'),
           category: fields.get('category'),

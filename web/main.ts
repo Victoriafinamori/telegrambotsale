@@ -25,10 +25,11 @@ import type { BotSetup } from '../server/bot-onboarding.js';
 import { botGuide, attachBotGuide, ownerConfirmationContent } from './onboarding.js';
 import { adminBotCard, activationLabels } from './admin-bot.js';
 import { mountPurinAdmin } from './purin-admin.js';
-import { mountSubscriptionAdmin } from './subscription.js';
+import { mountSubscription, mountSubscriptionAdmin } from './subscription.js';
 import { mountHostingAdmin, type ActivationStatus } from './hosting-admin.js';
 import { mountPurchaseCheckout } from './purchase-checkout.js';
-import { mountMerchantConsole } from './merchant-console.js';
+import { telegramWorkspace, storeTelegramUrl } from './telegram-workspace.js';
+import './telegram-workspace.css';
 import { mountPixCheckout } from './pix-checkout.js';
 import './mobile-workspace.css';
 const app = document.querySelector<HTMLDivElement>('#app')!;
@@ -285,7 +286,7 @@ function adminView() {
       .querySelector('.workspace .page-heading')
       ?.insertAdjacentHTML(
         'beforeend',
-        '<a class="button-link" href="#/minha-loja">Abrir minha loja</a>',
+        '<a class="button-link" href="#/minha-loja">Meu bot no Telegram</a>',
       );
 }
 function merchantView() {
@@ -301,7 +302,7 @@ function merchantView() {
   const setupQuery = new URLSearchParams(location.hash.split('?')[1] ?? '');
   const reviewSetup = setupQuery.has('review') || setupQuery.has('step');
   shell(
-    `<main class="merchant-shell"><div class="page-heading"><div><span class="eyebrow">${esc(a.store_name)}</span><h1>${botSetup?.activation_status === 'active' ? 'Sua loja' : 'Primeiros passos'}</h1></div><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div>${approved ? `<p class="welcome-note">${botSetup?.activation_status === 'active' ? 'Acompanhe sua ativação e os dados da contratação.' : 'Seu acesso foi liberado. Siga as etapas para preparar seu bot.'}</p>${setupProgress ? renderSetupProgress(setupProgress, 'connection', setupScope, reviewSetup) : ''}${!botRuntime?.provisioned ? `<div data-setup-aux ${isSetupDismissed(setupScope) && !reviewSetup ? 'hidden' : ''}>${botGuide(botSetup, guideStep, Boolean(config?.emulatorHost), automaticActivation)}</div>` : ''}` : `<section class="card"><h2>${a.access_status === 'suspended' ? 'Acesso suspenso' : 'Sua loja está em análise'}</h2><p>${a.access_status === 'suspended' ? esc(a.suspension_reason || 'Fale com a Blackout Create pelo canal da contratação.') : 'Sua conta já está vinculada. Após a aprovação, você terá um assistente para criar o bot, informar seu token e ID do Telegram e solicitar a ativação na Hyze Cloud.'}</p><p class="note">A mensalidade começa somente após a ativação efetiva do bot.</p><button class="quiet" id="refresh">Atualizar situação</button></section>`}<details class="card contract-details" ${new URLSearchParams(location.hash.split('?')[1] ?? '').has('contract') ? 'open' : ''}><summary>Sua contratação · ${a.reference === 'PILOTO INTERNO BLACKOUT / SEM COBRANCA REAL' ? 'Piloto interno sem cobrança' : money(a.price_cents)}</summary><dl><div><dt>Período contratado</dt><dd>${a.billing_months ?? 1} mês(es)</dd></div><div><dt>Início do ciclo</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div><div><dt>Contato da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Conta</dt><dd>${esc(me!.user.email)}</dd></div></dl></details></main>`,
+    `<main class="merchant-shell"><div class="page-heading"><div><span class="eyebrow">${esc(a.store_name)}</span><h1>${botSetup?.activation_status === 'active' ? 'Sua loja' : 'Primeiros passos'}</h1></div><span class="badge ${a.access_status}">${labels[a.access_status]}</span></div>${approved ? `<p class="welcome-note">${botSetup?.activation_status === 'active' ? 'Acompanhe sua ativação e os dados da contratação.' : 'Seu acesso foi liberado. Siga as etapas para preparar seu bot.'}</p>${setupProgress ? renderSetupProgress(setupProgress, 'connection', setupScope, reviewSetup, storeTelegramUrl(botSetup?.bot_username)) : ''}${!botRuntime?.provisioned ? `<div data-setup-aux ${isSetupDismissed(setupScope) && !reviewSetup ? 'hidden' : ''}>${botGuide(botSetup, guideStep, Boolean(config?.emulatorHost), automaticActivation)}</div>` : ''}` : `<section class="card"><h2>${a.access_status === 'suspended' ? 'Acesso suspenso' : 'Sua loja está em análise'}</h2><p>${a.access_status === 'suspended' ? esc(a.suspension_reason || 'Fale com a Blackout Create pelo canal da contratação.') : 'Sua conta já está vinculada. Após a aprovação, você terá um assistente para criar o bot, informar seu token e ID do Telegram e solicitar a ativação na Hyze Cloud.'}</p><p class="note">A mensalidade começa somente após a ativação efetiva do bot.</p><button class="quiet" id="refresh">Atualizar situação</button></section>`}<details class="card contract-details" ${new URLSearchParams(location.hash.split('?')[1] ?? '').has('contract') ? 'open' : ''}><summary>Sua contratação · ${a.reference === 'PILOTO INTERNO BLACKOUT / SEM COBRANCA REAL' ? 'Piloto interno sem cobrança' : money(a.price_cents)}</summary><dl><div><dt>Período contratado</dt><dd>${a.billing_months ?? 1} mês(es)</dd></div><div><dt>Início do ciclo</dt><dd>${date(a.billing_started_at)}</dd></div><div><dt>Vencimento</dt><dd>${date(a.paid_through)}</dd></div><div><dt>Contato da contratação</dt><dd>${esc(a.channel)}</dd></div><div><dt>Conta</dt><dd>${esc(me!.user.email)}</dd></div></dl></details></main>`,
   );
   if (setupProgress)
     attachBotGuide(
@@ -320,7 +321,7 @@ function merchantView() {
       .querySelector('main.merchant-shell .page-heading')
       ?.insertAdjacentHTML(
         'beforeend',
-        '<a class="button-link quiet" href="#/minha-loja">Voltar à loja</a>',
+        '<a class="button-link quiet" href="#/minha-loja">Voltar ao meu bot</a>',
       );
   if (me?.role === 'platform')
     document
@@ -329,19 +330,44 @@ function merchantView() {
         'afterbegin',
         '<a class="button-link quiet" href="#/conta">Administração</a>',
       );
-  if (approved && botRuntime?.provisioned && !setupProgress) {
+  if (approved) {
     document
-      .querySelector('main.merchant-shell .page-heading')
+      .querySelector('main.merchant-shell .welcome-note')
       ?.insertAdjacentHTML(
-        'beforeend',
-        '<a class="button-link" href="#/gestao">Gerenciar minha loja</a>',
+        'afterend',
+        telegramWorkspace(botSetup?.bot_username, Boolean(botRuntime?.ownerVerified)),
       );
     document
       .querySelector('main.merchant-shell')
       ?.insertAdjacentHTML(
         'beforeend',
-        `<section class="card"><span class="eyebrow">Conexão com o Telegram</span><h2>${botRuntime.ownerVerified ? 'Responsável confirmado' : 'Confirme que este bot é seu'}</h2><p>Aplicativo do bot: <b>${botRuntime.online ? 'conectado' : 'aguardando conexão'}</b>.</p>${botRuntime.ownerVerified ? '<p>Abra seu bot e envie <code>/admin</code> para configurar produtos, estoque, fotos, cupons, suporte, pagamentos e avisos. No bot, você também acompanha pedidos, comprovantes e estatísticas.</p>' : '<p>Confirme sua conta pessoal no bot para liberar o menu administrativo da sua loja.</p><button id="connect-telegram-owner">Confirmar minha conta no Telegram</button>'}</section>`,
+        '<details class="card tw-renewal"><summary>Renovar minha assinatura</summary><div data-renewal-host><p>Abra esta seção para consultar os planos e continuar sua renovação por Pix.</p></div></details>',
       );
+    const renewal = document.querySelector<HTMLDetailsElement>('.tw-renewal');
+    let renewalLoaded = false;
+    renewal?.addEventListener('toggle', async () => {
+      if (!renewal.open || renewalLoaded) return;
+      renewalLoaded = true;
+      const host = renewal.querySelector<HTMLElement>('[data-renewal-host]')!;
+      host.innerHTML = '<p role="status">Consultando sua assinatura…</p>';
+      try {
+        await mountSubscription(host, api);
+      } catch (error) {
+        renewalLoaded = false;
+        host.textContent =
+          error instanceof Error
+            ? error.message
+            : 'Não foi possível consultar. Feche esta seção e abra novamente para tentar.';
+      }
+    });
+    if (setupQuery.has('subscription') && renewal) renewal.open = true;
+    if (botRuntime?.provisioned && !botRuntime.ownerVerified && !setupProgress)
+      document
+        .querySelector('.telegram-workspace')
+        ?.insertAdjacentHTML(
+          'beforeend',
+          '<button id="connect-telegram-owner">Confirmar minha conta no Telegram</button>',
+        );
   }
 }
 async function load() {
@@ -481,43 +507,9 @@ async function load() {
     await mountResale(document.querySelector<HTMLElement>('#resale-host')!, api);
     return;
   }
-  const openManagement =
-    route === '#/gestao' ||
-    (route === '#/minha-loja' &&
-      me.account?.access_status === 'approved' &&
-      (await api<{ runtime: RuntimeStatus | null }>('/store/runtime')).runtime?.provisioned);
-  if (openManagement) {
-    if (me.account?.access_status !== 'approved') {
-      merchantView();
-      return;
-    }
-    shell(
-      '<main id="merchant-console-host"><p class="welcome-note">Carregando sua loja…</p></main>',
-    );
-    try {
-      await mountMerchantConsole(
-        document.querySelector<HTMLElement>('#merchant-console-host')!,
-        api,
-        async (path) => {
-          const user = auth.currentUser,
-            token = config?.authMode === 'bearer' && user ? await user.getIdToken() : '';
-          const response = await fetch(serviceUrl('/api' + path), {
-            cache: 'no-store',
-            credentials: config?.authMode === 'bearer' ? 'omit' : 'same-origin',
-            headers: token ? { Authorization: 'Bearer ' + token } : {},
-          });
-          if (!response.ok)
-            throw new Error(
-              'Não foi possível abrir o arquivo. Confira sua sessão e tente novamente.',
-            );
-          return response.blob();
-        },
-      );
-    } catch (error) {
-      shell(
-        `<main class="auth-shell"><section class="card"><h1>Não foi possível abrir sua loja</h1><p>${esc(error instanceof Error ? error.message : 'Confira sua conexão e tente novamente.')}</p><div class="inline-actions"><button id="retry-services">Tentar novamente</button><a class="button-link quiet" href="#/configuracao">Ver ativação e conexão</a></div></section></main>`,
-      );
-    }
+  // Legacy editor links resolve here without loading operational store data.
+  if (route === '#/gestao') {
+    location.replace('#/minha-loja');
     return;
   }
   if (me.role === 'platform' && route !== '#/minha-loja' && route !== '#/configuracao') {
