@@ -1,5 +1,10 @@
 # Retomada da migração Blackout
 
+**Atualização de 04/11/2026:** a migração central foi concluída e os três bots foram
+religados com SQLite na Hyze. O catálogo e os vínculos antigos foram recuperados.
+As etapas abaixo são o roteiro histórico; não repetir a importação do Firestore
+sobre a produção. Estado e limites atuais: `sqlite-cutover-2026-11-04.md`.
+
 ## Situação desta preparação
 
 - Código e testes preparados; esta etapa não altera a produção nem desliga a manutenção.

@@ -66,6 +66,10 @@ await writeFile(process.env.GOOGLE_APPLICATION_CREDENTIALS,raw,{mode:0o600});
 delete process.env.BLACKOUT_FIREBASE_ADMIN_JSON;
 process.env.NODE_ENV='production';
 process.env.PLATFORM_DATABASE=process.env.BLACKOUT_DATABASE_BACKEND==='sqlite'?'sqlite':'firestore';
+if(process.env.PLATFORM_DATABASE==='sqlite'){
+  const {hyzeSqlitePath}=await import('./dist-server/server/hyze-sqlite-path.js');
+  process.env.BLACKOUT_SQLITE_PATH=hyzeSqlitePath(process.env.BLACKOUT_SQLITE_PATH);
+}
 process.env.HOST='0.0.0.0';
 process.env.PORT ||= '3000';
 await import('./dist-server/server/main.js');

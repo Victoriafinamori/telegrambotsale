@@ -1,5 +1,10 @@
 # Estoque global pelo Telegram — execução em 03/11/2026
 
+**Atualização de 04/11/2026:** o bloqueio foi superado, os dados reais foram
+recuperados e os três bots foram religados usando SQLite central na Hyze. O estoque
+global da dona foi validado no Telegram. Consulte `sqlite-cutover-2026-11-04.md`;
+o relato abaixo preserva o histórico das tentativas anteriores.
+
 ## Implementado e validado
 
 - Dona vinculada ao fornecedor: `/admin` → `Meu estoque global`.

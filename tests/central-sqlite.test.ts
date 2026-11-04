@@ -7,8 +7,24 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../server/config.js';
+import { hyzeSqlitePath } from '../server/hyze-sqlite-path.js';
+import { resolve } from 'node:path';
 
 const key = () => randomBytes(32).toString('base64url');
+test('Hyze bootstrap resolves its private app directory without allowing a path escape', () => {
+  const root = resolve('.local/path-test');
+  assert.equal(
+    hyzeSqlitePath('.blackout-data/central.sqlite', root),
+    resolve(root, '.blackout-data/central.sqlite'),
+  );
+  assert.equal(
+    hyzeSqlitePath(resolve(root, 'central.sqlite'), root),
+    resolve(root, 'central.sqlite'),
+  );
+  assert.throws(() => hyzeSqlitePath('../other.sqlite', root));
+  assert.throws(() => hyzeSqlitePath(undefined, root));
+  assert.throws(() => hyzeSqlitePath('central.json', root));
+});
 test('Transaction queries share their snapshot while unrelated reads wait for commit', async () => {
   const store = new SqliteDocumentStore(':memory:', 'platform:test', key());
   let unblock!: () => void, entered!: () => void;

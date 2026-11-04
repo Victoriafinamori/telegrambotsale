@@ -1,9 +1,12 @@
-# Central SQLite migration (not deployed)
+# Central SQLite migration (deployed 2026-11-04)
 
 The API now accepts an encrypted SQLite DocumentStore in addition to Firestore.
 It runs the existing account/permission, Purin wallet, payment, shared-stock,
 reservation and commission domain services. Firebase Authentication and Hosting
-stay in place. No production setting has been changed by this implementation.
+stay in place. Production now uses the encrypted central SQLite store on Hyze.
+The old Firestore source is archived. See `sqlite-cutover-2026-11-04.md` for the
+completed cutover and verification. The instructions below document the original
+procedure; do not replay that import over an operating database.
 
 ## Deployment gates
 
