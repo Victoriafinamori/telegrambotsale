@@ -8,6 +8,7 @@ import { pixKey, pixTypes } from './pix.js';
 import { HttpError } from './types.js';
 import { tokenHash } from './accounts.js';
 import { saleBreakdown, payoutBreakdown } from './wallet-breakdown.js';
+import { withdrawalLabels, withdrawalReason } from './withdrawal-status.js';
 
 type Actor = { uid: string } | { telegram: string; auth: RuntimeAccess };
 export type WalletScreen = {
@@ -30,6 +31,7 @@ class ProviderFailure extends Error {
   constructor(
     readonly status: number,
     readonly minimum?: number,
+    readonly reason?: string | null,
   ) {
     super('Purin wallet request failed');
   }
@@ -146,6 +148,7 @@ export class PurinWallet {
       throw new ProviderFailure(
         response.status,
         Number.isFinite(value.minAmount) ? value.minAmount : undefined,
+        withdrawalReason(value.failureReason ?? value.message ?? value.error),
       );
     return value;
   }
@@ -181,6 +184,11 @@ export class PurinWallet {
       updatedAt: row.updated_at ?? row.created_at,
       code: row.code ?? '',
       message: row.message ?? (row.status === 'cancelled' ? 'Saque cancelado.' : ''),
+      failureReason: row.failure_reason ?? null,
+      canRetry:
+        ['failed', 'reversed', 'expired', 'cancelled'].includes(row.status) ||
+        (['prepared', 'awaiting_confirmation'].includes(row.status) &&
+          row.expires_at <= this.now()),
       estimatedBlackoutFeeCents:
         Math.floor((row.amount_cents * (row.markup_percent ?? 0)) / 100) + (row.markup_fixed ?? 0),
     };
@@ -266,7 +274,10 @@ export class PurinWallet {
       limit: 20,
       orderBy: 'created_at',
     });
-    for (const row of withdrawals.filter((r) => r.status === 'processing').slice(0, 1))
+    await this.refreshActiveWithdrawal();
+    for (const row of withdrawals
+      .filter((r) => ['processing', 'failed_pending_reversal'].includes(r.status))
+      .slice(0, 1))
       await this.sync(id, actor, row.id);
     const [sub, movements] = await Promise.all([
       this.sub(ctx),
@@ -478,7 +489,8 @@ export class PurinWallet {
     const ctx = await this.context(id, actor),
       row = await this.store.get(rowPath(id, wid));
     if (!row) throw new HttpError(404, 'WITHDRAWAL_NOT_FOUND', 'Saque não encontrado.');
-    if (row.status === 'processing') return this.sync(id, actor, wid);
+    if (['processing', 'failed_pending_reversal'].includes(row.status))
+      return this.sync(id, actor, wid);
     if (!['prepared', 'awaiting_confirmation'].includes(row.status)) return this.safe(row);
     const channel = 'uid' in actor ? 'web' : 'telegram';
     if ((row.channel ?? 'web') !== channel)
@@ -513,6 +525,7 @@ export class PurinWallet {
         'WALLET_FEES_CHANGED',
         'As taxas mudaram. Prepare outra solicitação antes de confirmar.',
       );
+    await this.refreshActiveWithdrawal();
     const acquired = await botTransaction(this.store, async (tx) => {
       const [current, settings, shop, account, setup, runtime] = await Promise.all([
         tx.get(rowPath(id, wid)),
@@ -542,7 +555,7 @@ export class PurinWallet {
         throw new HttpError(
           409,
           'WITHDRAWAL_BUSY',
-          'Existe outro saque em processamento. Aguarde e tente mais tarde.',
+          'Esta solicitação ainda não foi enviada. A conta de pagamentos da Blackout está conferindo outro saque. Atualize a carteira e tente novamente após a liberação. Nenhum valor deste pedido foi enviado.',
         );
       tx.set(platform, { ...settings, active_withdrawal: id + ':' + wid });
       tx.set(rowPath(id, wid), { ...current, status: 'processing', submitted_at: this.now() });
@@ -561,7 +574,16 @@ export class PurinWallet {
             : error.minimum
               ? `O mínimo de saque informado pelo provedor é ${money(Math.round(error.minimum * 100))}.`
               : 'A PurinCash recusou este saque. Confira saldo, chave Pix e os limites da conta.';
-        await this.finish(id, wid, { status: 'failed', message });
+        await this.finish(id, wid, {
+          status: 'failed',
+          failure_reason: error.reason ?? null,
+          message:
+            message +
+            (error.reason
+              ? '\nMotivo informado pela Purin: ' + error.reason
+              : '\nA Purin não informou um motivo detalhado.') +
+            '\nVocê pode preparar uma nova solicitação; confira os dados antes de confirmar.',
+        });
         return this.safe((await this.store.get(rowPath(id, wid)))!);
       }
       // Network failures, 202, 409, 429 and ambiguous responses never trigger another POST.
@@ -572,6 +594,14 @@ export class PurinWallet {
     await botTransaction(this.store, async (tx) => {
       const [row, settings] = await Promise.all([tx.get(rowPath(id, wid)), tx.get(platform)]);
       if (!row) return;
+      // A slow, older lookup cannot undo a confirmed terminal outcome.
+      if (
+        row.status === 'reversed' ||
+        (row.status === 'completed' &&
+          fields.status !== 'completed' &&
+          fields.status !== 'reversed')
+      )
+        return;
       tx.set(rowPath(id, wid), { ...row, ...fields, updated_at: this.now() });
       if (
         settings?.active_withdrawal === id + ':' + wid &&
@@ -585,9 +615,34 @@ export class PurinWallet {
   async sync(id: string, actor: Actor, wid: string) {
     await this.context(id, actor);
     z.uuid().parse(wid);
+    return this.reconcile(id, wid);
+  }
+  private async refreshActiveWithdrawal() {
+    const settings = await this.store.get(platform);
+    const pointer = settings?.active_withdrawal;
+    if (typeof pointer !== 'string' || !/^[a-f0-9-]{36}:[a-f0-9-]{36}$/.test(pointer)) return;
+    const [id, wid] = pointer.split(':');
+    const row = await this.store.get(rowPath(id, wid));
+    if (!row) return; // Missing evidence must never unlock an ambiguous payout.
+    if (['processing', 'failed_pending_reversal'].includes(row.status))
+      await this.reconcile(id, wid);
+    else if (['completed', 'failed', 'reversed'].includes(row.status)) {
+      await botTransaction(this.store, async (tx) => {
+        const current = await tx.get(platform),
+          withdrawal = await tx.get(rowPath(id, wid));
+        if (
+          current?.active_withdrawal === pointer &&
+          ['completed', 'failed', 'reversed'].includes(withdrawal?.status)
+        )
+          tx.set(platform, { ...current, active_withdrawal: null });
+      });
+    }
+  }
+  private async reconcile(id: string, wid: string) {
     const row = await this.store.get(rowPath(id, wid));
     if (!row) throw new HttpError(404, 'WITHDRAWAL_NOT_FOUND', 'Saque não encontrado.');
-    if (!['processing', 'completed'].includes(row.status)) return this.safe(row);
+    if (!['processing', 'completed', 'failed_pending_reversal'].includes(row.status))
+      return this.safe(row);
     const body = JSON.parse(this.vault.open(row.request_ciphertext, `wallet:${id}:${wid}`));
     let result: Doc;
     try {
@@ -600,7 +655,12 @@ export class PurinWallet {
       return {
         ...this.safe(row),
         message:
-          'Saque em conferência. Atualize o andamento; não solicite outro saque deste valor.',
+          row.status === 'failed_pending_reversal'
+            ? (row.message || 'O saque falhou e a devolução ainda precisa de confirmação.') +
+              '\nNão foi possível atualizar a consulta agora. Tente novamente mais tarde.'
+            : row.status === 'completed'
+              ? row.message || 'Pix já confirmado pelo banco.'
+              : 'Saque em conferência. Atualize o andamento; não solicite outro saque deste valor.',
       };
     }
     if (
@@ -617,7 +677,7 @@ export class PurinWallet {
       result.status === 'failed'
         ? result.reversed === true
           ? 'reversed'
-          : 'processing'
+          : 'failed_pending_reversal'
         : result.status;
     for (const field of ['feeCents', 'platformFeeCents', 'netAmountCents'])
       if (result[field] != null) cents.parse(result[field]);
@@ -645,12 +705,21 @@ export class PurinWallet {
           : null,
       updated_at: this.now(),
       code: typeof result.code === 'string' ? result.code.slice(0, 80) : '',
+      failure_reason: withdrawalReason(result.failureReason),
       message:
         status === 'completed'
           ? 'Pix enviado e confirmado pelo banco.'
           : status === 'reversed'
-            ? 'Saque recusado e saldo devolvido à carteira.'
-            : 'Saque em processamento ou conferência. Atualize o andamento.',
+            ? 'Saque recusado e saldo devolvido à carteira. Você pode solicitar um novo saque.' +
+              '\nMotivo: ' +
+              (withdrawalReason(result.failureReason) ??
+                'A Purin não informou um motivo detalhado.')
+            : status === 'failed_pending_reversal'
+              ? 'O saque falhou. A Purin ainda não confirmou a devolução do saldo. Fale com o suporte da Blackout e informe o código do saque. Não faça outra tentativa deste valor.' +
+                '\nMotivo: ' +
+                (withdrawalReason(result.failureReason) ??
+                  'A Purin não informou um motivo detalhado.')
+              : 'Saque em processamento ou conferência. Atualize o andamento.',
     });
     return this.safe((await this.store.get(rowPath(id, wid)))!);
   }
@@ -698,7 +767,11 @@ export class PurinWallet {
       tx.set(receipt, { started_at: this.now() });
       return true;
     });
-    if (!acquired) return screen('Esta ação está em processamento. Abra a carteira para conferir.');
+    if (!acquired)
+      return screen(
+        'A atualização desta tela foi interrompida ou já está sendo conferida. Abra Carteira para consultar o andamento real do saque. Esta mensagem não confirma envio de dinheiro.',
+        botButtons([[['Atualizar carteira', 'admin:wallet']]]),
+      );
     let output: WalletScreen;
     try {
       await this.context(id, actor);
@@ -714,7 +787,7 @@ export class PurinWallet {
                   .slice(0, 8)
                   .map(
                     (r) =>
-                      `${money(r.amountCents)} · ${r.status}${r.code ? ' · ' + r.code : ''}\nPurin: ${r.gatewayFeeCents == null ? 'não informada' : money(r.gatewayFeeCents)} · Blackout: ${r.blackoutFeeCents == null ? 'não informada' : money(r.blackoutFeeCents)} · Líquido: ${r.netAmountCents == null ? 'não informado' : money(r.netAmountCents)}`,
+                      `${money(r.amountCents)} · ${withdrawalLabels[r.status] ?? 'Em conferência'}${r.code ? ' · ' + r.code : ''}${r.message ? '\n' + r.message : ''}\nPurin: ${r.gatewayFeeCents == null ? 'não informada' : money(r.gatewayFeeCents)} · Blackout: ${r.blackoutFeeCents == null ? 'não informada' : money(r.blackoutFeeCents)} · Líquido: ${r.netAmountCents == null ? 'não informado' : money(r.netAmountCents)}`,
                   )
                   .join('\n') || 'Nenhum saque solicitado.'
               : 'Somente as vendas Pix Blackout entram nesta carteira.'
@@ -828,9 +901,12 @@ export class PurinWallet {
       } else if (cmd.startsWith('wallet:confirm:')) {
         const row = await this.execute(id, actor, cmd.slice(15));
         output = screen(
-          `${row.message || 'Saque solicitado.'}\nValor bruto: ${money(row.amountCents)}${row.netAmountCents !== null ? '\nValor líquido: ' + money(row.netAmountCents) : ''}`,
+          `${withdrawalLabels[row.status] ?? 'Saque em conferência'}\n${row.message || 'Consulte o andamento abaixo.'}${row.code ? '\nCódigo: ' + row.code : ''}\nValor bruto: ${money(row.amountCents)}${row.netAmountCents !== null ? '\nValor líquido: ' + money(row.netAmountCents) : ''}`,
           botButtons([
             [['Atualizar saque', 'wallet:status:' + row.id]],
+            ...(row.canRetry
+              ? [[['Preparar novo saque', 'wallet:new']] as [string, string][]]
+              : []),
             [['Carteira', 'admin:wallet']],
           ]),
         );
@@ -840,9 +916,10 @@ export class PurinWallet {
       } else if (cmd.startsWith('wallet:status:')) {
         const r = await this.sync(id, actor, cmd.slice(14));
         output = screen(
-          `${money(r.amountCents)} · ${r.status}\n${r.message}`,
+          `${money(r.amountCents)} · ${withdrawalLabels[r.status] ?? 'Em conferência'}${r.code ? '\nCódigo: ' + r.code : ''}\n${r.message}`,
           botButtons([
             [['Atualizar saque', 'wallet:status:' + r.id]],
+            ...(r.canRetry ? [[['Preparar novo saque', 'wallet:new']] as [string, string][]] : []),
             [['Carteira', 'admin:wallet']],
           ]),
         );

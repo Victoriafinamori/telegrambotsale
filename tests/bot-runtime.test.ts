@@ -4037,3 +4037,93 @@ test('Telegram reseller opt-in uses the shared approval queue, is idempotent and
   });
   assert(JSON.stringify(await f.click(owner, 'admin:resale')).includes('admin:globalcategories:0'));
 });
+
+test('Purin failed payout shows reason, keeps uncertain reversal locked and releases only after confirmed refund', async () => {
+  const p = await walletFixture(),
+    draft = await p.prepare();
+  p.setMode('timeout');
+  await p.wallet.execute(p.f.a.id, p.actor, draft.id);
+  const payment = [...p.payments.values()][0];
+  payment.status = 'failed';
+  payment.failureReason = 'A liquidação falhou no banco.';
+  const failed = await p.wallet.sync(p.f.a.id, p.actor, draft.id);
+  assert.equal(failed.status, 'failed_pending_reversal');
+  assert.equal(failed.canRetry, false);
+  assert.match(failed.message, /liquidação falhou/);
+  assert((await p.f.store.get('platform_payments/purincash'))!.active_withdrawal);
+  const history = await p.wallet.telegram(p.f.auth, p.f.callback(111111111, 'wallet:history'));
+  assert.match(history!.text, /Falhou · aguardando devolução/);
+  assert.match(history!.text, /liquidação falhou/);
+  payment.reversed = true;
+  const reversed = await p.wallet.sync(p.f.a.id, p.actor, draft.id);
+  assert.equal(reversed.status, 'reversed');
+  assert.equal(reversed.canRetry, true);
+  assert.match(reversed.message, /saldo devolvido/);
+  assert.equal((await p.f.store.get('platform_payments/purincash'))!.active_withdrawal, null);
+  assert.equal(p.posts.length, 1);
+});
+
+test('Reading another wallet reconciles the shared payout lock without making any payout POST or leaking the other store', async () => {
+  const p = await walletFixture(),
+    draft = await p.prepare();
+  p.setMode('timeout');
+  await p.wallet.execute(p.f.a.id, p.actor, draft.id);
+  const f = await fixture();
+  // Simulate the global lock pointing to a terminal row from another merchant.
+  const otherId = f.a.id,
+    otherWid = randomUUID();
+  await p.f.store.transaction(async (tx) => {
+    const settings = (await tx.get('platform_payments/purincash'))!;
+    tx.set('platform_payments/purincash', {
+      ...settings,
+      active_withdrawal: otherId + ':' + otherWid,
+    });
+    tx.set('merchant_wallets/' + otherId + '/withdrawals/' + otherWid, { status: 'reversed' });
+  });
+  const view = await p.wallet.read(p.f.a.id, p.actor);
+  assert.equal((await p.f.store.get('platform_payments/purincash'))!.active_withdrawal, null);
+  assert(!JSON.stringify(view).includes(otherId));
+  assert.equal(p.posts.length, 1);
+});
+
+test('Payout reasons filter provider secrets and report missing reasons explicitly', async () => {
+  const p = await walletFixture(),
+    draft = await p.prepare();
+  p.setMode('timeout');
+  await p.wallet.execute(p.f.a.id, p.actor, draft.id);
+  const payment = [...p.payments.values()][0];
+  payment.status = 'failed';
+  payment.reversed = true;
+  payment.failureReason = 'Bearer ps_live_' + 'SECRET'.repeat(8);
+  const row = await p.wallet.sync(p.f.a.id, p.actor, draft.id);
+  assert.equal(row.failureReason, null);
+  assert(!JSON.stringify(row).includes('SECRET'));
+  assert.match(row.message, /não informou um motivo/);
+});
+
+test('Stale provider processing cannot regress a completed payout or erase a confirmed failure reason on lookup outage', async () => {
+  const p = await walletFixture(),
+    draft = await p.prepare();
+  await p.wallet.execute(p.f.a.id, p.actor, draft.id);
+  const payment = [...p.payments.values()][0];
+  payment.status = 'processing';
+  assert.equal((await p.wallet.sync(p.f.a.id, p.actor, draft.id)).status, 'completed');
+  payment.status = 'failed';
+  payment.reversed = true;
+  payment.failureReason = 'A liquidação falhou no banco.';
+  assert.equal((await p.wallet.sync(p.f.a.id, p.actor, draft.id)).status, 'reversed');
+  assert.equal(p.posts.length, 1);
+  const q = await walletFixture(),
+    second = await q.prepare();
+  q.setMode('timeout');
+  await q.wallet.execute(q.f.a.id, q.actor, second.id);
+  const pending = [...q.payments.values()][0];
+  pending.status = 'failed';
+  pending.failureReason = 'Chave Pix não encontrada.';
+  await q.wallet.sync(q.f.a.id, q.actor, second.id);
+  q.payments.clear();
+  const failed = await q.wallet.sync(q.f.a.id, q.actor, second.id);
+  assert.equal(failed.status, 'failed_pending_reversal');
+  assert.match(failed.message, /Chave Pix não encontrada/);
+  assert((await q.f.store.get('platform_payments/purincash'))!.active_withdrawal);
+});
